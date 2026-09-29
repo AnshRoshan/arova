@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+
+# build output
+.next/
+out/
+build/
+dist/
+
+# environment secrets
+.env
+.env.*
+!.env.example
+
+# drizzle / db artifacts
+drizzle/meta/
+
+# logs
+*.log
+npm-debug.log*
+
+# os/editor
+.DS_Store
+.idea/
+.vscode/
+
+# misc
+*.tsbuildinfo
+.vercel
