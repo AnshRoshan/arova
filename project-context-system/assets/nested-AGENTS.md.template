@@ -1,0 +1,14 @@
+# AGENTS.md (nested — {{packages/storefront/}})
+
+Package-local instructions. The root AGENTS.md is still law; this file adds what is true only in this area. The agent loads it only when working inside {{packages/storefront/}}.
+
+## Facts
+
+- This package: {{what it is, entry command}}
+- {{e.g. Design system comes from @acme/ui — never duplicate a component locally}}
+- {{e.g. Checkout code: money math uses integer cents, never floats}}
+
+## Extra rules for this area
+
+- {{e.g. Any change here requires the pricing test suite to run: npm run test -w storefront}}
+- {{e.g. Never import from packages/admin — shared code goes in packages/core}}

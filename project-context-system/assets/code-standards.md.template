@@ -1,0 +1,32 @@
+# Code Standards
+
+## Language & types
+
+- {{TypeScript strict; no `any` without a written justification}}
+- {{Two-space indentation}}
+- {{Naming: components PascalCase, files kebab-case, hooks use-*}}
+
+## Framework conventions ({{Next.js 16}})
+
+- {{e.g. Server Components by default; "use client" only where interactivity requires}}
+- {{e.g. Server actions pattern for mutations; no separate API layer for form submits}}
+- {{e.g. Route protection lives in proxy/middleware — check library-docs.md, this moved between versions}}
+
+## Structure
+
+- {{Where API handlers live, where schemas live, where agents live, etc.}}
+- {{Component structure: one exported component per file unless trivial}}
+
+## Error handling
+
+- {{e.g. Never swallow errors; log with the project logger; user-facing errors carry an actionable message}}
+- {{e.g. Every try/catch either fixes, retries, or re-throws — no empty catches}}
+
+## Testing
+
+- {{e.g. Run npm test before finishing any task}}
+- {{e.g. Every bug fix ships a test that fails without the fix}}
+
+## Quality gates
+
+- {{lint + typecheck + build must pass before a unit is marked complete}}

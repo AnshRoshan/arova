@@ -1,0 +1,10 @@
+# CLAUDE.local.md — personal overrides (NEVER committed)
+
+Loaded by Claude Code after CLAUDE.md, per directory. Keep out of git (see gitignore.append).
+
+Per-developer facts that must not go into the shared AGENTS.md: local test accounts, sandbox/staging URLs, personal machine paths, scratch env names.
+
+{{Examples:
+- Local test login: tester@example.com / (password in my keychain, never in chat)
+- Sandbox Stripe keys live in .env.local as STRIPE_SANDBOX_*
+- I run the DB in Docker container "appdb" on port 5433}}

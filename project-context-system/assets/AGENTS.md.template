@@ -1,0 +1,47 @@
+# AGENTS.md
+
+Master instruction file. Every coding agent reads this first, in every session, in every tool (Claude Code reads CLAUDE.md, which points here).
+
+## Reading order (tiered — never load the whole folder blindly)
+
+ALWAYS read before any work:
+1. context/overview.md
+2. context/workflow-rules.md
+3. context/progress-tracker.md
+4. memory.md
+
+READ WHEN THE TASK TOUCHES IT:
+- context/feature-specs/NN-*.md — the unit being built
+- context/code-standards.md — before writing any code
+- context/architecture.md + context/library-docs.md — before touching that subsystem or library
+- context/ui-tokens.md, ui-rules.md, ui-registry.md — only for UI units
+- context/decisions.md — before making or repeating any decision
+- context/build-plan.md — when sequencing or adding features
+
+Then: update the progress tracker after every change.
+
+## Project facts
+
+- Package manager: {{pnpm|npm|bun}}
+- Run dev: `{{npm run dev}}`
+- Test: `{{npm test}}` — Typecheck: `{{npm run typecheck}}` — Build: `{{npm run build}}`
+- Database access: {{e.g. Drizzle only; schema lives in src/db/schema}}; never write raw SQL unless specifically requested
+- {{e.g. Never modify migration files manually}}
+- {{e.g. API handlers live in src/api/handlers}}
+- Design: {{e.g. editorial, product-focused, reuse the design system, no dashboard-style UI, no purple gradients}}
+
+## Invariant rules (true every session, never change mid-build)
+
+- No hard-coded hex values; every visual value comes from context/ui-tokens.md
+- Update context/progress-tracker.md when starting and when finishing every unit
+- Before touching any third-party library, load its skill/docs (see context/library-docs.md) and only then act
+- Work on one feature unit or subsystem at a time; never combine unrelated system boundaries in a single implementation step
+- Any decision that is hard, ambiguous, or changes an invariant: stop, write the options, and ask the human before proceeding
+
+## Skills
+
+{{List every installed skill/command and exactly when to use it, one line each}}
+
+## Verification
+
+Run lint + typecheck + build before declaring any unit done. Report the results. Show the important changes made and explain anything the human should review.

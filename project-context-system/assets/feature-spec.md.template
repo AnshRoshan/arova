@@ -1,0 +1,36 @@
+# Feature NN: {{Name}}
+
+Phase: {{n}} · Depends on: {{features}} · Boundary: {{one system boundary only — backend and UI are separate specs}}
+
+## Goal
+
+{{Concrete and measurable. Never "build a good canvas".}}
+
+## What to build
+
+{{Exact behavior, screens, data touched. For UI specs: reference context/designs/{{page}}.png and match it — do not invent.}}
+
+## Explicitly NOT in this spec
+
+{{"do NOT add real {{auth / canvas logic / sharing / AI chat}} yet" — hard boundaries, one per unrelated concern.}}
+
+## Clarifications (gate before planning — up to 5, asked one at a time, answers written here)
+
+- [ ] {{question}} → {{answer}}
+- [ ] {{terminology confirmed: e.g. "by RLS you mean per-org Postgres policies — yes?"}}
+
+## Value sources
+
+| Value shown/computed | Comes from |
+|---|---|
+| {{order total}} | {{price × qty, computed at checkout — D-12}} |
+
+Any row without a real source = a decision nobody made. Stop and ask before building it.
+
+## Verification checklist (acceptance log)
+
+- [ ] {{all components import without errors}}
+- [ ] {{no hardcoded colors; tokens only}}
+- [ ] {{{{route}} protected except public auth routes}}
+- [ ] {{build + lint + typecheck pass}}
+- [ ] {{the actual flow driven in the browser and it works}}

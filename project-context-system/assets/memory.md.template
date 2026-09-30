@@ -1,0 +1,17 @@
+# Memory
+
+Session handoff. Updated at the end of EVERY session. This file is how any agent or human picks up with zero re-explaining.
+
+_Last updated: {{date, end of session N}}_
+
+## Current state
+
+{{What works right now, concretely. E.g. "Homepage fully implemented and matches context/designs/landing-page.png. Build, lint, typecheck clean."}}
+
+## Next step
+
+{{The exact unit to start with. E.g. "Feature 02 of Phase 1: authentication — see context/feature-specs/02-auth.md. Begin in plan mode; DB schema change is involved."}}
+
+## Open questions
+
+{{Unresolved decisions carried across sessions. Never drop these. E.g. "- Rate limit for public search: 10/min or 30/min? (D-05 pending)"}}

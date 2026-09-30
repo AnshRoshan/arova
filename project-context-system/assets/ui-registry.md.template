@@ -1,0 +1,11 @@
+# UI Registry
+
+Living catalog of built components. Starts EMPTY on purpose — it reflects what actually exists.
+
+Rule before building ANY UI piece: check if a similar component exists here. If yes, match its exact classes. If no, build it following ui-rules.md + ui-tokens.md, then append it here.
+
+## Components
+
+| Component | File | Variants | Notes |
+|---|---|---|---|
+| {{Button}} | {{src/components/ui/button.tsx}} | {{primary, secondary, ghost, destructive}} | {{shadcn-based; size prop sm/md/lg}} |

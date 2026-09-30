@@ -1,0 +1,31 @@
+# Library Docs
+
+Rule: before using ANY library, check this file for its skill/MCP/docs entry, read that entry, and only then act. Framework versions outrun training data — verify against current docs, never from memory.
+
+## Installed agent skills / MCP servers
+
+| Library | Skill or MCP | When to load it |
+|---|---|---|
+| {{Clerk}} | {{npx skills add clerk-skill}} | {{any auth spec}} |
+| {{Prisma}} | {{...}} | {{any schema/migration work}} |
+| {{Liveblocks}} | {{...}} | {{realtime/presence work}} |
+
+## Per-library usage notes (project-specific)
+
+### {{Library name}}
+- Version: {{x.y.z}} — installed: {{date}}
+- Config location: {{e.g. prisma/ (not any other path)}}; DB URL read from {{.env var name}}
+- Project-specific pattern: {{how we use it, what we never do with it}}
+- Known version gotchas: {{e.g. Next.js 16: middleware.ts replaced by proxy.ts}}
+
+## Known operational gotchas
+
+{{The things that break silently — one line each, added when hit:
+- Long AI calls time out in serverless API routes (~60s cap) → run as background jobs
+- Local background worker must run alongside dev server or queued tasks never execute
+- Stale lockfile breaks the deploy install → delete, reinstall, commit
+- Vendor keys: dev → prod swap is a deploy step, never an agent decision}}
+
+## Docs sources
+
+{{URLs / local doc paths the agent should re-read before speccing an integration. Front-load research per integration: read the updated docs BEFORE writing the spec.}}

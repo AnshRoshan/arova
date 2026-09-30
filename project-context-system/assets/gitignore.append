@@ -1,0 +1,22 @@
+# --- project-context-system: merge these lines into the existing .gitignore ---
+
+# Secrets — values never enter git or chat
+.env
+.env.*
+!.env.example
+
+# Agent scratch files that can leak tokens/errors
+context/current-issues.md
+
+# Personal agent overrides (per-developer, never committed)
+CLAUDE.local.md
+
+# Dependencies & builds (adjust to stack)
+node_modules/
+dist/
+.next/
+build/
+
+# NOTE: context/designs/ and context/screenshots/ are deliberately NOT ignored —
+# they are shared context another agent or developer needs. If images are huge,
+# ignore screenshots/ only, never designs/.

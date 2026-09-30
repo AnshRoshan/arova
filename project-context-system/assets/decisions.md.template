@@ -1,0 +1,39 @@
+# Decisions Log
+
+One entry per hard technical decision, written the moment it is made. Not buried in code, not lost in chat — written down where the human can see it and overrule it.
+
+Defaults already assumed (no entry needed): monolith first, relational DB by default, paginate every list, rate-limit every public endpoint, no secrets in code.
+
+## Decision record format
+
+```markdown
+## D-NN: <title> — <date>
+Trigger: what forced this decision
+Options considered: A / B / C
+Chosen: <option>, because <reason>
+Lost alternative: <option>, honest reason it lost
+Cost paid: new moving part / per-request latency / tolerated incorrectness / money
+Reversibility: easy | painful (what a rollback costs)
+Correctness policy: what is now ALLOWED to be slightly wrong (and what never is)
+```
+
+---
+
+## FLAGGED assumptions (undecided shortcuts, visible until decided)
+
+```markdown
+## F-NN: <assumption> — <date> (attached to Feature NN)
+We built assuming <X>. Nobody has decided this. Needs a real call.
+```
+
+---
+
+## D-01: {{first real decision}} — {{date}}
+
+Trigger: {{...}}
+Options considered: {{...}}
+Chosen: {{...}}, because {{...}}
+Lost alternative: {{...}}, {{honest reason it lost}}
+Cost paid: {{...}}
+Reversibility: {{...}}
+Correctness policy: {{what may be slightly wrong; what never may be}}

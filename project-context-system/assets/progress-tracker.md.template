@@ -1,0 +1,21 @@
+# Progress Tracker
+
+The only file that updates constantly. It reflects the actual state of the project — nothing is built yet, so it starts empty. States are mutually exclusive: nothing is ever both current and completed.
+
+Current phase: {{1}} · Current goal: {{one line, or TBD}}
+
+## In progress
+
+- {{Feature NN: name — started {{date}}}}
+
+## Completed
+
+- {{Feature NN: name — {{date}} — key decisions: D-NN; concrete details: versions, config paths, env var names}}
+
+## Up next
+
+- {{Feature NN, NN}}
+
+## Session notes
+
+- {{date}}: {{details worth remembering for the next session — gotchas, versions, "prisma config uses prisma/ and not some other path", "database URL reads from .env"}}

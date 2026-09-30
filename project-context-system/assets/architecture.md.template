@@ -1,0 +1,37 @@
+# Architecture
+
+## Tech stack — tool and its role
+
+Naming the role in advance stops the agent inventing a custom solution when a library is already chosen.
+
+| Tool | Version | Role | Why this tool |
+|---|---|---|---|
+| {{Next.js}} | {{16}} | {{app + API routes}} | {{...}} |
+| {{Postgres}} | {{...}} | {{system of record}} | {{...}} |
+| {{Liveblocks}} | {{...}} | {{presence + realtime sync}} | {{...}} |
+
+Full decision rationale lives in decisions.md (D-NN refs), not here.
+
+## Folder structure
+
+{{Top-level layout and what belongs where}}
+
+## System boundaries & data flow
+
+{{Which layers exist, how a request travels through them, where state lives}}
+
+## Invariants — rules the system must never violate
+
+- {{e.g. API routes contain no UI logic}}
+- {{e.g. Components contain no DB logic}}
+- {{e.g. Agent code in /agents never imports from components or actions}}
+- {{e.g. Server actions never call agents}}
+- {{e.g. Anything behind the load balancer keeps zero per-user state in-process}}
+- {{e.g. Auth AND ownership are enforced at every mutation boundary, not just at the UI}}
+- {{e.g. Public routes are an explicit list; everything else is protected by default}}
+- {{e.g. Metadata lives in Postgres; large artifacts live in blob storage — never in DB columns}}
+- {{e.g. Reuse existing Clerk env variable names — never rename or invent parallel ones}}
+
+## External dependencies
+
+{{Services the app calls; which user-facing paths must NOT be coupled to their availability (queue the slow work instead)}}

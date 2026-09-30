@@ -1,0 +1,18 @@
+# Current Issues
+
+GITIGNORED — pasted errors leak tokens. Cleared/archived before merges.
+
+Protocol: analyze deeply → present analysis + planned fix → WAIT for the green light → fix one issue at a time.
+
+## Issue 01 — {{status: open | analyzing | approved | fixing | pending verification | resolved}}
+
+Symptom: {{exact observed behavior, copy the real error text}}
+Suspected file: {{path}}
+Fix direction: {{...}}
+Definition of success: {{what done looks like — not just what's broken}}
+
+---
+
+## Triage rule
+
+Not every finding gets fixed the moment it appears. Some get a note to keep and fix later. What never happens: silently ignoring one. Deferred findings stay listed here with status `open (deferred)` until closed.

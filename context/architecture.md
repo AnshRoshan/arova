@@ -1,0 +1,10 @@
+# Architecture
+Next.js App Router page `src/app/page.tsx` is the client workspace UI. `src/app/api/board/route.ts` initializes a cookie-scoped demo workspace, returns board data and handles validated mutations. Drizzle models live in `src/db/schema.ts`; PostgreSQL connection in `src/db/index.ts`. `src/lib/sandbox.ts` is an intentionally unconfigured contract.
+
+Chat goes through `src/lib/model-gateway.ts`, one OpenAI-compatible client for every vendor. A profile is `{name, base, model, maxContextTokens, configured}` built from env: built-in `xai`/`openai` plus any `PROVIDERS` entry with `<NAME>_BASE_URL` / `<NAME>_MODEL` / `<NAME>_API_KEY`. `src/lib/providers.ts` no longer exists — the gateway is deliberately dependency-free so `node --test` can load it without the bundler resolving `.ts` specifiers. Keys are read only by `apiKeyFor()` and never appear in a profile, so a profile is safe to send to the browser.
+
+`auto` resolves to the first configured vendor (xAI, OpenAI, then custom); an explicit choice is honoured even when unconfigured so the saved diagnostic can name it; unknown names degrade to local. History is budgeted by the endpoint's context window in whole newest turns (`trimToTokenBudget`), not a fixed count. Unary requests retry on 429/5xx/network with bounded backoff; streams are never retried once begun and persist as `incomplete`. `sendMessage` streams Server-Sent Events from `src/app/api/board/route.ts` and persists exactly one assistant row per exchange; `stream: false` keeps a plain JSON reply. `model_usage` counts calls and estimated tokens per workspace + provider + UTC day against `DAILY_MODEL_CALLS_LIMIT`. Failure produces a persisted diagnostic, never a fabricated answer. No browser or tools are provided to the model.
+
+Tests: `npm test` runs `node --test` over `src/lib/*.test.ts` (Node's built-in runner and TS type-stripping — no new dependency).
+
+Security boundary: cookie separation is not authentication. Public deployment requires real auth, CSRF protections, abuse controls and secret management.

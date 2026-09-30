@@ -1,0 +1,29 @@
+# UI Rules
+
+Design-system behavior. Generated from Figma via MCP when a source file exists; otherwise written from the planning conversation. The agent MATCHES context/designs/ references — it does not invent.
+
+## Typography
+
+{{Which tokens for headings/body/labels; weights; letter-spacing rules}}
+
+## Layout
+
+{{Page grid, max widths, section rhythm, container padding}}
+
+## Components behavior
+
+- Cards: {{...}}
+- Buttons: {{primary/secondary/ghost — sizes, states, when each}}
+- Badges: {{...}}
+- Forms: {{labels, error state, focus ring}}
+- Empty/loading/error states: {{each one defined — the agent never invents a state}}
+
+## Motion
+
+{{Where animation belongs, durations, easing; or "none"}}
+
+## Bans
+
+- {{No hard-coded hex — tokens only}}
+- {{e.g. no gradients, no oversized hero sections, no dashboard-style UI, no purple — anything that "seems AI-ish" for this product}}
+- {{default light styling must not leak into a dark-theme app}}

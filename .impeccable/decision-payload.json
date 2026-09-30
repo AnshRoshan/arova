@@ -1,0 +1,124 @@
+{
+  "title": "Choose the visual world",
+  "question": "The roll assigned The Bench Notebook. Keep it, take an alternate, or re-roll. All four are light, cool-neutral, single-azure, and can only show state the server actually returned.",
+  "options": [
+    {
+      "id": "assigned",
+      "label": "The Bench Notebook",
+      "kicker": "THE ROLL",
+      "lineage": "a researcher's bench notebook with printouts taped in",
+      "thesis": "The thread is a notebook page, and every agent output is a printout you taped in, dated and initialled.",
+      "palette": ["#f4f7fa", "#ffffff", "#1b2430", "#1d5dd0", "#dfe6ee"],
+      "materials": ["ruled paper", "ballpoint ink", "taped printout"],
+      "viewport": "Left rail of tabbed agents, a ruled thread down the middle, and dated evidence slips pinned to the right edge of the message you are reading.",
+      "risk": "Paper metaphor turns decorative if the evidence slips ever hold a number the server did not return.",
+      "raised": [
+        { "from": "The Dense Tiled Record", "raise": "Evidence slips are hairline-ruled modules with their own caption tab and tile edge-to-edge, with none of the whitespace inflation of a default SaaS card grid." },
+        { "from": "Fixed Notation, Live Overlay", "raise": "A printed key at the foot of the rail defines every state symbol once, and the streaming layer rides above the record without ever rewriting it." },
+        { "from": "The Parameter Readout", "raise": "Each slip carries a monospace provenance line: provider, model, latency, estimated tokens, hierarchy by type scale alone rather than by shadows." }
+      ],
+      "wireframe": { "cols": 12, "rows": 10, "regions": [
+        { "label": "agent tabs", "x": 0, "y": 0, "w": 3, "h": 10, "accent": true },
+        { "label": "ruled thread", "x": 3, "y": 0, "w": 6, "h": 8 },
+        { "label": "evidence slips", "x": 9, "y": 1, "w": 3, "h": 6 },
+        { "label": "ink-line composer", "x": 3, "y": 8, "w": 6, "h": 2, "accent": true }
+      ] },
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-nixie-laboratory-counter-hero.webp"
+    },
+    {
+      "id": "model-pick",
+      "label": "The Shift Log",
+      "kicker": "IMPECCABLE’S PICK",
+      "lineage": "a written shift-handover book, one ruled entry per action",
+      "thesis": "Every entry is timestamped, attributed to who did it, and carries its own state; a blank line means nothing happened.",
+      "palette": ["#f5f7f9", "#ffffff", "#182029", "#1d5dd0", "#e3e9f0"],
+      "materials": ["ruled ledger rows", "stamped time", "ink signature"],
+      "viewport": "One continuous log down the page; the agent you are talking to is the current entry, and older agents are earlier pages in the rail.",
+      "risk": "This is where most agent products land, an activity feed with a chat box; it works, and it will not look distinctive.",
+      "wireframe": { "cols": 12, "rows": 10, "regions": [
+        { "label": "agent rail", "x": 0, "y": 0, "w": 3, "h": 10 },
+        { "label": "log entries", "x": 3, "y": 0, "w": 9, "h": 8, "accent": true },
+        { "label": "composer", "x": 3, "y": 8, "w": 9, "h": 2 }
+      ] }
+    },
+    {
+      "id": "challenger-density",
+      "label": "The Dense Tiled Record",
+      "verdict": "competitive",
+      "kicker": "THE HAND",
+      "lineage": "Japanese high-density information sites",
+      "thesis": "Say more per screen with hairline-ruled modules and zero wasted pixel.",
+      "palette": ["#ffffff", "#111418", "#1d5dd0", "#e8edf3"],
+      "materials": ["hairline rules", "module caption tabs", "cool gray fills"],
+      "viewport": "A tight mosaic of ruled modules, each headed by a small azure tab naming its agent and state.",
+      "case": "Wins on audience identification for a technical operator who wants density; loses on clarity because a mosaic scatters the one thing that must stay linear, what happened in order.",
+      "risk": "Small type on a light ground fails contrast fast, and multi-module density buries the thread.",
+      "kept": "The hairline module system, caption tabs, and density courage.",
+      "hero": "https://impeccable.style/worlds/cards/japanese-high-density-web-hero.webp"
+    },
+    {
+      "id": "challenger-notation",
+      "label": "Fixed Notation, Live Overlay",
+      "verdict": "competitive",
+      "kicker": "THE HAND",
+      "lineage": "orienteering map and its ISO legend",
+      "thesis": "Colour is a fixed truth table defined once in a legend, and a live route layer rides above without editing the ground.",
+      "palette": ["#f6f8fa", "#1c2530", "#1d5dd0", "#c9d6e4"],
+      "materials": ["notation legend", "overlay line", "contour ground"],
+      "viewport": "The record sits on a fixed colour language; the streaming reply is a single azure route drawn over it, never repainting the record.",
+      "case": "Fuses strongly on clarity, since notation that cannot lie is this product's whole claim; loses narrowly on identification because nobody carries a topographic map in their head at work.",
+      "risk": "Its native palette is multi-hue, which breaks your single-accent rule the moment the legend grows past three symbols.",
+      "kept": "The legend as a contract, and the rule that the live layer never rewrites the record.",
+      "hero": "https://impeccable.style/worlds/cards/notation-diagram-systems-orienteering-map-hero.webp"
+    },
+    {
+      "id": "challenger-specimen",
+      "label": "The Parameter Readout",
+      "verdict": "competitive",
+      "kicker": "THE HAND",
+      "lineage": "interactive variable-font specimen pages",
+      "thesis": "Near-white paper, ink black, one accent, and hierarchy built from type scale alone with no ornament at all.",
+      "palette": ["#fafbfc", "#111213", "#1d5dd0", "#e6e9ed"],
+      "materials": ["flat paper", "monospace readout", "baseline grid"],
+      "viewport": "One enormous statement of what the agent just did, with a small monospace block beneath listing exactly which model produced it.",
+      "case": "The monospace parameter readout is the single best idea in the hand for honest evidence; as a whole world it is about letterforms, not about the operator's task.",
+      "risk": "Scale-contrast-only hierarchy collapses on dense operational screens where nothing is the headline.",
+      "kept": "The provenance readout, and hierarchy by scale rather than by boxes and shadows.",
+      "hero": "https://impeccable.style/worlds/cards/variable-font-specimen-hero.webp"
+    },
+    {
+      "id": "challenger-nixie",
+      "label": "The Nixie Counter",
+      "verdict": "declined",
+      "kicker": "THE HAND",
+      "lineage": "nixie-tube laboratory counters",
+      "thesis": "Counts are the interface, and a number changing is a visible physical event.",
+      "palette": ["#141210", "#2a2622", "#ff8c3a", "#6b6560"],
+      "materials": ["blackened steel chassis", "glass envelopes", "orange plasma"],
+      "viewport": "Banks of glowing digits for calls, tokens and runs, labels engraved in caps beneath.",
+      "case": "Declined on both axes: a dark chassis with orange glow contradicts your pinned light single-azure palette, and glowing digits read as instrumentation theatre where the product needs a record.",
+      "kept": "A count change animates as a transition, so a number never teleports.",
+      "hero": "https://impeccable.style/worlds/cards/signals-instruments-nixie-laboratory-counter-hero.webp"
+    }
+  ],
+  "reroll": { "registers": ["safer", "bolder"] },
+  "buildPath": { "value": "code", "toggle": true },
+  "canon": true,
+  "canonCard": {
+    "id": "canon",
+    "label": "The category standard",
+    "lineage": "the screenshot you pasted, built properly",
+    "thesis": "Conversation rail, message bubbles, evidence cards, composer with attach and mic, at full craft.",
+    "palette": ["#ffffff", "#f4f6f8", "#1f2937", "#1d5dd0", "#e5e9f0"],
+    "materials": ["soft panels", "avatar chips", "rounded bubbles"],
+    "viewport": "Exactly the arrangement you showed me, executed impeccably, with our real data in the cards.",
+    "risk": "Indistinguishable from every other agent product, which is precisely what you asked for.",
+    "wireframe": { "cols": 12, "rows": 10, "regions": [
+      { "label": "conversations", "x": 0, "y": 0, "w": 3, "h": 10 },
+      { "label": "thread", "x": 3, "y": 0, "w": 6, "h": 8, "accent": true },
+      { "label": "context", "x": 9, "y": 0, "w": 3, "h": 10 },
+      { "label": "composer", "x": 3, "y": 8, "w": 6, "h": 2 }
+    ] }
+  },
+  "steer": true
+}

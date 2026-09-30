@@ -1,0 +1,30 @@
+# UI Tokens
+
+Every visual value lives here as a CSS variable. Code contains NO hard-coded hex values — ever.
+
+```css
+:root {
+  /* color */
+  --bg: {{...}};        --surface: {{...}};    --ink: {{...}};
+  --ink-muted: {{...}}; --accent: {{...}};     --border: {{...}};
+  --success: {{...}};   --warning: {{...}};    --danger: {{...}};
+
+  /* spacing scale */
+  --space-1: {{4px}}; --space-2: {{8px}}; --space-3: {{12px}};
+  --space-4: {{16px}}; --space-6: {{24px}}; --space-8: {{32px}}; --space-12: {{48px}};
+
+  /* radius */
+  --radius-sm: {{...}}; --radius-md: {{...}}; --radius-lg: {{...}};
+
+  /* type scale */
+  --font-display: {{...}}; --font-body: {{...}};
+  --text-xs: {{...}}; --text-sm: {{...}}; --text-base: {{...}};
+  --text-lg: {{...}}; --text-xl: {{...}}; --text-2xl: {{...}}; --text-4xl: {{...}};
+
+  /* elevation */
+  --shadow-sm: {{...}}; --shadow-md: {{...}};
+}
+{{dark theme: duplicate block under [data-theme="dark"] or .dark}}
+```
+
+Theme: {{light only | dark only | both — state which is default}}.

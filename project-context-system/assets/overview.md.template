@@ -1,0 +1,28 @@
+# Project Overview
+
+## What this is
+
+{{One paragraph: what the product actually does}}
+
+## Who it's for
+
+{{Users, roles, their jobs-to-be-done}}
+
+## Core flows
+
+{{Every page/screen and the full user flow between them. Concrete and measurable goals only — never "build a good canvas".}}
+
+1. {{Flow 1: entry → steps → outcome}}
+2. {{Flow 2}}
+
+## Complex patterns / what could go wrong
+
+{{The parts that need real design thought: concurrency, external services, auth boundaries, expensive computations}}
+
+## In scope for version one
+
+{{The list the agent builds against}}
+
+## Deliberately out of scope
+
+{{"Don't even think about them." The anti-scope-creep list. Anything removed from v1 that a helpful agent might otherwise add.}}

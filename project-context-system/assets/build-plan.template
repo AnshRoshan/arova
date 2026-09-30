@@ -1,0 +1,24 @@
+# Build Plan
+
+{{N}} features across {{M}} phases. Every feature defined, scoped, and sequenced — the agent never has to decide what comes next.
+Scope (WHAT) is kept separate from tech (HOW) so this plan doesn't rot the day a tool changes.
+
+## Phase 1 — {{foundation: runs end to end, no real users yet}}
+
+- Phase 1 Feature 01: {{design system}} → spec: feature-specs/01-design-system.md
+- Phase 1 Feature 02: {{auth}} → spec: feature-specs/02-auth.md
+- Phase 1 Feature 03: {{...}}
+
+## Phase 2 — {{core product loop}}
+
+- Phase 2 Feature 04: {{...}}
+
+## Phase 3 — {{...}}
+
+...
+
+## Rules
+
+- One system boundary per spec. Backend and UI for the same feature are separate specs.
+- Big features split into 2–3 independent specs that together complete the experience.
+- New ideas discovered during the build get appended here as new features/phases — then specced — never silently implemented.
