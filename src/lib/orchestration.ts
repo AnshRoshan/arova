@@ -11,6 +11,7 @@
  */
 
 import { normaliseOrg } from "./org.ts";
+import { withProvenance } from "./provenance.ts";
 
 export type Consult = { agent: string; question: string };
 export type Turn = { consult: Consult | null; text: string };
@@ -29,6 +30,15 @@ const clean = (text: string) =>
     .replace(/[ \t]+$/gm, "")
     .trim()
     .replace(/\n{3,}/g, "\n\n");
+
+/**
+ * Remove a closed reasoning block before looking for a directive.
+ *
+ * A reasoning model enumerates the shapes below verbatim — "the options are {consult:null} or
+ * {approval:{…}}" — and the decision only appears after it stops thinking. An *unclosed* block is left
+ * alone: a stream cut off mid-thought holds no decision, and the visible text is the safe reading.
+ */
+const stripReasoning = (text: string) => text.replace(/<think>([\s\S]*?)<\/think>/gi, " ");
 
 /** Locate a balanced `{"consult": …}` object, tolerating prose and fences around it. */
 function locateDirective(text: string): { json: string; start: number; end: number } | null {
@@ -61,19 +71,20 @@ function locateDirective(text: string): { json: string; start: number; end: numb
  * directive would be a worse failure than not delegating.
  */
 export function parseTurn(raw: string): Turn {
-  const found = locateDirective(raw);
-  if (!found) return { consult: null, text: clean(raw) };
+  const source = stripReasoning(raw);
+  const found = locateDirective(source);
+  if (!found) return { consult: null, text: clean(source) };
   let parsed: unknown;
   try {
     parsed = JSON.parse(found.json);
   } catch {
-    return { consult: null, text: clean(raw) };
+    return { consult: null, text: clean(source) };
   }
   const consult = (parsed as { consult?: { agent?: unknown; question?: unknown } })?.consult;
   const agent = typeof consult?.agent === "string" ? consult.agent.trim() : "";
   const question = typeof consult?.question === "string" ? consult.question.trim() : "";
-  if (!agent || !question) return { consult: null, text: clean(raw) };
-  return { consult: { agent, question }, text: clean(raw.slice(0, found.start) + raw.slice(found.end)) };
+  if (!agent || !question) return { consult: null, text: clean(source) };
+  return { consult: { agent, question }, text: clean(source.slice(0, found.start) + source.slice(found.end)) };
 }
 
 /** "create a product agency" / "build me a team of agents" — a verb plus a collective noun. */
@@ -212,13 +223,13 @@ export function canConsult(consultedIds: string[], maxHops: number): boolean {
 
 /** The peer is a specialist answering one question, not a chatbot continuing the thread. */
 export function buildPeerPrompt(peer: RosterAgent & { name: string }, question: string, askerName: string): string {
-  return [
+  return withProvenance([
     `You are ${peer.name}, ${peer.role}, in the Arova workspace. ${peer.instructions}`,
     `${askerName} is consulting you on one question as part of a larger answer.`,
     "Answer only that question from your own expertise, in 160 words or fewer. Do not greet, do not ask for context you could assume.",
     "You have no browser, filesystem, connected apps, or tool execution. Never claim to have looked anything up or performed an action. Say plainly when something cannot be verified.",
     `Question: ${question}`,
-  ].join("\n");
+  ].join("\n"));
 }
 
 /** Find the first balanced JSON object in a reply that may wrap it in prose or fences. */
@@ -303,7 +314,8 @@ export function routingPrompt(question: string, roster: Peer[], allowed: { consu
 
 /** Read the router's decision. Anything unrecognisable means "no action", never a guess. */
 export function parseRouting(text: string): Routing {
-  const found = locateDirective(text)?.json ?? locateAnyObject(text);
+  const source = stripReasoning(text);
+  const found = locateDirective(source)?.json ?? locateAnyObject(source);
   if (!found) return { action: "none" };
   let parsed: Record<string, unknown>;
   try {

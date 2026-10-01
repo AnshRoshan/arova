@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_MEMBERS, decollideOrg, normaliseOrg, orgTemplate, orgTree, reachableFor, reportsOf, type OrgMember } from "./org.ts";
+import { MAX_MEMBERS, decollideOrg, normaliseOrg, orgTemplate, orgTree, reportsOf, type OrgMember } from "./org.ts";
 
 const m = (name: string, role: string, reportsTo: string | null = null): OrgMember => ({ name, role, instructions: `${name} does ${role}.`, reportsTo });
 
@@ -61,25 +61,6 @@ test("reports: only direct reports come back, and the tree counts the whole subt
   const tree = orgTree([{ name: "CEO", reportsTo: null }, { name: "PO", reportsTo: "CEO" }, { name: "Dev", reportsTo: "PO" }]);
   assert.deepEqual(tree[0].children.map(c => c.name), ["PO"]);
   assert.equal(tree[0].children[0].descendants, 1);
-});
-
-test("reachable: an agent may talk to its reports, its manager, and its teammates — nobody else", () => {
-  const rows = [
-    { id: "ceo", name: "CEO", managerId: null, teamId: "t1" },
-    { id: "po", name: "PO", managerId: "ceo", teamId: "t1" },
-    { id: "cto", name: "CTO", managerId: "ceo", teamId: "t1" },
-    { id: "dev", name: "Dev", managerId: "cto", teamId: "t1" },
-    { id: "far", name: "Other", managerId: null, teamId: "t2" },
-  ];
-  assert.deepEqual(reachableFor(rows, "cto").map(r => r.id).sort(), ["ceo", "dev", "po"]);
-  assert.deepEqual(reachableFor(rows, "dev").map(r => r.id).sort(), ["cto"]);
-  assert.deepEqual(reachableFor(rows, "far").map(r => r.id), [], "an agent in another org reaches nobody");
-  assert.deepEqual(reachableFor(rows, "ceo").map(r => r.id).sort(), ["po", "cto"].sort());
-});
-
-test("reachable: a lone agent with no org reaches nobody", () => {
-  assert.deepEqual(reachableFor([{ id: "x", name: "X", managerId: null }], "x"), []);
-  assert.deepEqual(reachableFor([], "x"), []);
 });
 
 test("decollide: a clashing seat is renamed and its reports follow the new name", () => {

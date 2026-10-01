@@ -112,9 +112,26 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   for (const f of ['desktop','desktop-top','desktop-reply','desktop-streaming','desktop-confirm','mobile','mobile-thread','mobile-activity','mobile-bench']) { try { require('fs').unlinkSync(OUT + '/' + f + '.png'); } catch {} }
   await setViewport(1440, 900);
   await cdp.send('Page.navigate', { url: APP_URL });
-  for (let i = 0; i < 60; i++) { await sleep(700); const ok = await evaluate(`!!document.querySelector('.composer textarea')`).catch(() => false); if (ok) break; }
+  for (let i = 0; i < 60; i++) { await sleep(700); const ok = await evaluate(`!!(document.querySelector('.composer textarea') || document.querySelector('.iconrail'))`).catch(() => false); if (ok) break; }
   await sleep(1500);
   await evaluate(`(() => { const st = document.createElement('style'); st.textContent = 'nextjs-\\003acategory-container, [id^="nextjs"], [data-nextjs-dev-tools-boundaries] { display: none !important; }'; document.head.appendChild(st); for (const el of document.querySelectorAll('body > *')) if (/^nextjs/i.test(el.tagName || '') || el.shadowRoot) el.remove(); return 'hidden'; })()`);
+
+  if (process.argv.includes('--shot-only')) {
+    console.log('SHELL:', await evaluate(`JSON.stringify({
+      iconRail: !!document.querySelector('.iconrail'),
+      sidePanel: !!document.querySelector('.sidepanel'),
+      board: !!document.querySelector('.board'),
+      composer: !!document.querySelector('.composer textarea'),
+      rootCount: (document.querySelector('style')||0, 0),
+      overflowX: document.documentElement.scrollWidth > window.innerWidth + 1
+    })`));
+    await shot(OUT + '/studio-desktop.png');
+    await setViewport(390, 844, 2); await sleep(900);
+    console.log('MOBILE:', await evaluate(`JSON.stringify({ overflowX: document.documentElement.scrollWidth > window.innerWidth + 1 })`));
+    await shot(OUT + '/studio-mobile.png');
+    cdp.close(); chrome.kill(); process.exit(0);
+  }
+
 
   console.log('AT REST:', await evaluate(`JSON.stringify({
     nodes: document.querySelectorAll('.bench .node').length,
@@ -132,8 +149,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   console.log('RELOADED:', await evaluate('JSON.stringify({sections: [...document.querySelectorAll(".board .group-label span")].map(s => s.textContent), attention: [...document.querySelectorAll(".board .board-sec")].map(x => x.querySelectorAll(".bd-row").length), upcomingRows: [...document.querySelectorAll(".bd-main b")].map(b => b.textContent).slice(0, 6)})'));
 
   // submit a real message against the configured dahl endpoint
+  // the app opens on Overview; a thread only exists once a seat is chosen
+  await evaluate(`(() => { if (document.querySelector('.composer textarea')) return 'already open'; const n = document.querySelector('.agent-card:not(.agent-card-add)') || document.querySelector('.sidepanel .node') || document.querySelector('.node'); if (n) n.click(); return n ? 'seat clicked' : 'no seat found'; })()`);
+  for (let i = 0; i < 30; i++) { const ok = await evaluate(`!!document.querySelector('.composer textarea')`).catch(() => false); if (ok) break; await sleep(400); }
+  await sleep(600);
+  await evaluate(`(() => { const st = document.createElement('style'); st.textContent = 'nextjs-\\003acategory-container, [id^="nextjs"], [data-nextjs-dev-tools-boundaries] { display: none !important; }'; document.head.appendChild(st); for (const el of document.querySelectorAll('body > *')) if (/^nextjs/i.test(el.tagName || '') || el.shadowRoot) el.remove(); return 'hidden'; })()`);
   const sent = await evaluate(`(() => {
     const ta = document.querySelector('.composer textarea');
+    if (!ta) return 'NO COMPOSER';
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
     const TOPICS = ['what a workspace of AI teammates is', 'why an agent needs a written role', 'how context carries between conversations', 'what makes a reply trustworthy'];
     setter.call(ta, 'Write about 120 friendly words explaining ' + TOPICS[Math.floor(Math.random() * TOPICS.length)] + '. Plain prose, no lists, no code.');
@@ -216,7 +239,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await setViewport(390, 844, 2); await sleep(800);
   console.log('MOBILE:', await evaluate(`JSON.stringify({
     overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
-    benchDrawer: getComputedStyle(document.querySelector('.bench')).position,
+    benchDrawer: getComputedStyle(document.querySelector('.sidepanel')).display,
     boardHidden: getComputedStyle(document.querySelector('.board')).display
   })`));
   await shot(OUT + '/mobile-thread.png');
@@ -227,9 +250,9 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   // close the activity overlay first, then open the bench drawer from a closed-overlay state
   await evaluate(`(() => { const x = document.querySelector('.board .board-head .icon-btn'); x.click(); return getComputedStyle(document.querySelector('.board')).display; })()`);
   await sleep(400);
-  await evaluate(`(() => { const b = [...document.querySelectorAll('.sheet-bar .icon-btn')].find(x => x.getAttribute('aria-label')?.includes('organisation')); b.click(); return 'drawer opened'; })()`);
+  await evaluate(`(() => { const b = [...document.querySelectorAll('.sheet-bar .icon-btn, .icon-btn.only-mobile')].find(x => (x.getAttribute('aria-label') || '').toLowerCase().includes('section menu')); if (b) b.click(); return b ? 'panel opened' : 'no toggle'; })()`);
   await sleep(700);
-  console.log('MOBILE BENCH:', await evaluate(`JSON.stringify({ board: getComputedStyle(document.querySelector('.board')).display, bench: getComputedStyle(document.querySelector('.bench')).transform, nodes: document.querySelectorAll('.bench .node').length })`));
+  console.log('MOBILE PANEL:', await evaluate(`JSON.stringify({ board: getComputedStyle(document.querySelector('.board')).display, panel: getComputedStyle(document.querySelector('.sidepanel')).display, seats: document.querySelectorAll('.sidepanel .node').length })`));
   await shot(OUT + '/mobile-bench.png');
 
   // collect console errors seen during the whole run

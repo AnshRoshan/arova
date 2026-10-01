@@ -8,7 +8,8 @@ test("registry: every tool is described, and the available set is exactly what c
   assert.ok(TOOL_REGISTRY.length >= 10, "the registry should also carry the things that do NOT work");
   assert.ok(TOOL_REGISTRY.every(t => t.id && t.label && t.description && t.kind));
   const live = TOOL_REGISTRY.filter(t => t.available).map(t => t.id).sort();
-  assert.deepEqual(live, ["build_org", "consult_teammate", "create_routine", "handoff", "request_approval"]);
+  // save_note joined the live set in Feature 12: a seat can now record org memory, and the registry says so.
+  assert.deepEqual(live, ["build_org", "consult_teammate", "create_routine", "handoff", "request_approval", "save_note"]);
 });
 
 test("registry: everything unavailable says why", () => {

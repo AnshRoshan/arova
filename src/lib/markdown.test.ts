@@ -110,8 +110,16 @@ test("a reasoning block the stream has not closed folds too, so the live row sta
   assert.equal(r.answer, "");
 });
 
+test("a reasoning block that arrives after other text still splits out of the answer", () => {
+  // The channel prints its own header line before the model answer, so the block is never leading.
+  const r = splitReasoning("Chief Executive reports: built on 1 teammate post.\n\n<think>\nweighed it\n</think>\n\nFix the onboarding step.");
+  assert.equal(r.reasoning, "weighed it");
+  assert.equal(r.answer, "Chief Executive reports: built on 1 teammate post.\n\nFix the onboarding step.");
+  assert.doesNotMatch(r.answer, /<\/?think>/, "no tag may leak into what the reader is shown as the answer");
+});
+
 test("only a leading block is reasoning; prose that mentions the tag stays intact", () => {
-  assert.deepEqual(splitReasoning("plain reply"), { reasoning: null, answer: "plain reply" });
+  assert.deepEqual(splitReasoning("plain reply"), { reasoning: null, answer: "plain reply", rest: "plain reply" });
   const mentioned = splitReasoning("Use <think> to wrap notes.\n\nDone.");
   assert.equal(mentioned.reasoning, null);
   assert.equal(mentioned.answer, "Use <think> to wrap notes.\n\nDone.");
@@ -121,6 +129,9 @@ test("a reasoning block the model never closed still folds: the tag leaks into c
   const leaked = splitReasoning("<think>keep weighing options\nmore thinking\nI cannot provide an estimate without scope.");
   assert.equal(leaked.reasoning, "keep weighing options\nmore thinking\nI cannot provide an estimate without scope.");
   assert.equal(leaked.answer, "");
+  // `rest` is the other question: what is left when only a *closed* block is removed. An unclosed one
+  // keeps its raw text, so a directive that follows it is still findable by the parsers that use it.
+  assert.ok(leaked.rest.includes("keep weighing options"));
   const closed = splitReasoning("<think>thought\n</think>\nThe answer.");
   assert.equal(closed.answer, "The answer.");
 });

@@ -1,347 +1,352 @@
 ---
-name: Arova — The Workbench
-description: A shift-board agent workspace where the organisation is the navigation, the thread gets real width, and the activity column only prints rows the server actually stored.
+name: Arova — The Graphite Edition
+description: An agent workbench where every surface is a real graphite step and one cool azure does all interactive work.
 colors:
-  paper: "#f4f7fa"
-  sheet: "#ffffff"
-  tint: "#eaf0f7"
-  ink: "#1b2430"
-  ink-2: "#5a6a7d"
-  ink-3: "#5c6e82"
-  rule: "#dfe6ee"
-  rule-2: "#c9d5e2"
-  azure: "#1d5dd0"
-  azure-deep: "#143f92"
-  azure-wash: "#e8f0fd"
-  identity-line: "#c6daf9"
-  ran: "#14684f"
-  ran-wash: "#e6f2ec"
-  ran-line: "#cfe4da"
-  waiting: "#8a5208"
-  waiting-wash: "#fbf0dd"
-  waiting-line: "#eddcbf"
-  fault: "#9b2720"
-  fault-wash: "#fbeceb"
-  fault-line: "#edcbc7"
-  danger-line: "#f0d3d0"
-  danger-line-hover: "#e4b9b4"
-  slate: "#16202c"
-  slate-2: "#202c3c"
-  code-bar: "#1c2836"
-  code-ink: "#e3ecf7"
-  code-lang: "#8fa4bd"
-  user-entry-wash: "rgba(234, 240, 247, .6)"
-  thread-rule-ink: "rgba(27, 36, 48, .05)"
-  margin-rule-azure: "rgba(29, 93, 208, .22)"
-  field-ring-azure: "rgba(29, 93, 208, .13)"
-  scrim-ink: "rgba(27, 36, 48, .34)"
-  scrim-rail-ink: "rgba(27, 36, 48, .3)"
+  void: "#131416"
+  sunken: "#17191c"
+  panel: "#191a1d"
+  sheet: "#1e2023"
+  card: "#24262a"
+  raised: "#2b2e33"
+  ink: "#eceef1"
+  ink-2: "#a9aeb5"
+  ink-3: "#949aa3"
+  rule: "#303439"
+  rule-2: "#414750"
+  azure: "#7ba6ef"
+  azure-bright: "#9dbdf5"
+  azure-wash: "#22304a"
+  azure-line: "#35507e"
+  on-azure: "#0e1a2b"
+  ran: "#5fce9b"
+  ran-wash: "#1d3227"
+  ran-line: "#2f5a44"
+  waiting: "#e8b25c"
+  waiting-wash: "#33291a"
+  waiting-line: "#5c4626"
+  fault: "#f48cab"
+  fault-wash: "#35202a"
+  fault-line: "#5f3243"
+  on-fault: "#2a0f16"
+  on-waiting: "#17140d"
+  ink-strong: "#f5f7f9"
+  fault-text: "#ffdbe4"
+  rule-3: "#575f6a"
+  scroll-thumb: "#3b4149"
+  code-bg: "#101215"
+  code-line: "#23272d"
+  code-text: "#dfe6ee"
+  code-lang: "#7f8b99"
+  hue-sage: "#a8d98a"
+  hue-aqua: "#70d2db"
+  hue-mauve: "#c4a3dd"
 typography:
   display:
-    fontFamily: "Manrope, 'DM Sans', sans-serif"
-    fontSize: "27px"
+    fontFamily: "Manrope, sans-serif"
+    fontSize: "26px"
     fontWeight: 800
     lineHeight: 1.2
-    letterSpacing: "-0.022em"
-  headline:
-    fontFamily: "Manrope, 'DM Sans', sans-serif"
-    fontSize: "18px"
-    fontWeight: 700
-    lineHeight: 1.2
-    letterSpacing: "-0.022em"
-  title:
-    fontFamily: "Manrope, 'DM Sans', sans-serif"
-    fontSize: "15px"
-    fontWeight: 700
-    lineHeight: 1.2
-    letterSpacing: "-0.022em"
+    letterSpacing: "-.022em"
   body:
-    fontFamily: "'DM Sans', ui-sans-serif, sans-serif"
+    fontFamily: "DM Sans, ui-sans-serif, sans-serif"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.6
-  thread-text:
-    fontFamily: "'DM Sans', ui-sans-serif, sans-serif"
+  reading:
+    fontFamily: "DM Sans, ui-sans-serif, sans-serif"
     fontSize: "15px"
-    fontWeight: 400
     lineHeight: 1.7
   label:
-    fontFamily: "'DM Sans', ui-sans-serif, sans-serif"
-    fontSize: "10.5px"
+    fontFamily: "DM Sans, ui-sans-serif, sans-serif"
+    fontSize: "11px"
     fontWeight: 700
-    letterSpacing: "0.08em"
-  micro-label:
-    fontFamily: "'DM Sans', ui-sans-serif, sans-serif"
-    fontSize: "9.5px"
-    fontWeight: 700
-    letterSpacing: "0.07em"
+    letterSpacing: ".08em"
   mono:
-    fontFamily: "'JetBrains Mono', ui-monospace, monospace"
-    fontWeight: 400
-    letterSpacing: "-0.01em"
-    fontFeature: "tabular-nums"
+    fontFamily: "JetBrains Mono, ui-monospace, monospace"
+    fontSize: "10.5px"
+    lineHeight: 1.62
+    letterSpacing: "-.01em"
+  # The enumerated ramp the built world actually uses. `chrome` is the half-stepped
+  # ladder a 276px panel and a 320px board are set in; the named roles above are prose.
+  scale:
+    chrome-9: "9px"
+    chrome-95: "9.5px"
+    chrome-10: "10px"
+    chrome-105: "10.5px"
+    chrome-11: "11px"
+    chrome-115: "11.5px"
+    chrome-12: "12px"
+    chrome-125: "12.5px"
+    chrome-13: "13px"
+    chrome-135: "13.5px"
+    body: "14px"
+    reading: "15px"
+    card-title: "16px"
+    dialog: "17px"
+    h2: "18px"
+    surface-bar: "19px"
+    bar: "20px"
+    identity-bar: "22px"
+    pane-head: "24px"
+    h1: "26px"
 rounded:
   sm: "6px"
   md: "8px"
   lg: "10px"
   pill: "99px"
+  # Two one-off shapes that are not surface radii: a scrollbar thumb that must read as a
+  # rounded slot, and the 3px edge of the rail's active tab.
+  thumb: "9px"
+  tab: "3px"
+spacing:
+  gutter: "40px"
 components:
   button-primary:
     backgroundColor: "{colors.azure}"
-    textColor: "#ffffff"
+    textColor: "{colors.on-azure}"
     rounded: "{rounded.sm}"
     padding: "7px 13px"
   button-primary-hover:
-    backgroundColor: "{colors.azure-deep}"
+    backgroundColor: "{colors.azure-bright}"
   button-ghost:
     backgroundColor: "{colors.sheet}"
     textColor: "{colors.ink}"
     rounded: "{rounded.sm}"
     padding: "7px 12px"
-  button-icon:
+  button-danger:
     backgroundColor: "{colors.sheet}"
-    textColor: "{colors.ink-2}"
+    textColor: "{colors.fault}"
     rounded: "{rounded.sm}"
-    size: "32px"
-  button-send:
-    backgroundColor: "{colors.azure}"
-    textColor: "#ffffff"
+    padding: "7px 12px"
+  button-danger-hover:
+    backgroundColor: "{colors.fault-wash}"
+    textColor: "{colors.fault}"
+  send-button:
+    backgroundColor: "{colors.hue-aqua}"
+    textColor: "{colors.on-azure}"
     rounded: "{rounded.sm}"
     size: "34px"
-  seat-node:
-    backgroundColor: "{colors.sheet}"
+  input:
+    backgroundColor: "{colors.sunken}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.sm}"
+    padding: "8px 10px"
+  card:
+    backgroundColor: "{colors.card}"
     textColor: "{colors.ink}"
     rounded: "{rounded.md}"
-    padding: "9px 10px"
-  seat-node-on:
-    backgroundColor: "{colors.azure-wash}"
-  pane-link:
-    backgroundColor: "{colors.sheet}"
-    textColor: "{colors.ink-2}"
-    rounded: "{rounded.sm}"
-    padding: "7px 8px"
-  chip-state:
+    padding: "12px 14px"
+  agent-card:
+    backgroundColor: "{colors.card}"
+    rounded: "{rounded.md}"
+    padding: "15px"
+    width: "216px"
+  chip-ran:
+    backgroundColor: "{colors.ran-wash}"
+    textColor: "{colors.ran}"
     rounded: "{rounded.pill}"
     padding: "2px 8px"
-  count-badge:
-    backgroundColor: "{colors.tint}"
-    textColor: "{colors.ink-2}"
+  chip-waiting:
+    backgroundColor: "{colors.waiting-wash}"
+    textColor: "{colors.waiting}"
     rounded: "{rounded.pill}"
-    padding: "1px 6px"
-  composer-box:
-    backgroundColor: "{colors.paper}"
-    rounded: "{rounded.lg}"
-    padding: "9px 10px 9px 13px"
-  provenance-pill:
-    textColor: "{colors.ink-2}"
+    padding: "2px 8px"
+  chip-fault:
+    backgroundColor: "{colors.fault-wash}"
+    textColor: "{colors.fault}"
     rounded: "{rounded.pill}"
-    padding: "1px 7px"
-  dialog:
-    backgroundColor: "{colors.sheet}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.lg}"
-    padding: "20px"
-    width: "468px"
-  dialog-wide:
-    backgroundColor: "{colors.sheet}"
-    width: "620px"
+    padding: "2px 8px"
+  chip-azure:
+    backgroundColor: "{colors.azure-wash}"
+    textColor: "{colors.azure-bright}"
+    rounded: "{rounded.pill}"
+    padding: "2px 8px"
+  code-block:
+    backgroundColor: "{colors.code-bg}"
+    textColor: "{colors.code-text}"
+    rounded: "{rounded.md}"
 ---
 
-# Design System: Arova — The Workbench
-
-<!-- Derived by scan from src/app/globals.css (:root + rules), src/app/page.tsx, src/app/layout.tsx and src/lib/identity.ts, against direction contract seed 14aada6d ("The Workbench", mode operate). This file replaces "The Bench Notebook" (seed fa31e43a) wholesale: the taped evidence slips (.slip), the printed State Key (.key), the margin slip scroll-tie, and the flat agent tab list are DELETED from the code, not hidden, and none of their devices may be carried forward. -->
+# Design System: Arova — The Graphite Edition
 
 ## Overview
 
-**Creative North Star: "The Workbench"**
+**Creative North Star: "The Instrument Panel"**
 
-The screen is a shift board, not a notebook. Three columns do three different jobs: the left rail *is* the organisation — teams rendered as reporting trees of seat nodes, each carrying who it reports to, what its stored rows say it is doing, its message count and its last touch — the centre gives the selected seat's thread real width at an 80ch measure on ruled paper with the reply's provenance printed inline directly beneath it, and the right column is an activity board that behaves like a printer: In flight, Needs attention, Upcoming, Record — every row is a run, delegation, audit event or approval the server actually stored, or a live fact this client itself received over SSE. The category-default arrangement of a chat list beside a chat window beside a decorative evidence panel is refused; nothing in the right column is decorative.
+Arova is not a dashboard wearing a dark theme; it is an instrument bench. A permanent icon rail owns navigation at the far left, a contextual section panel owns the list you are working through beside it, the fluid work surface carries the single title of whatever you opened — one seat's thread, or one organisation's channel — and the activity board on the right is a printer that only emits rows the server actually stored. The whole world is graphite: neutral surfaces step toward the reader, ink stays neutral, and colour is rationed to three jobs — azure for interaction, green/amber/red for a stored state, and a fixed set of identity tints for *which agent* you are looking at. Nothing implies work that did not happen.
 
-The material world is unchanged and deliberate: cool paper (`paper`) under white sheets, ink text, hairline rules, and one azure (`azure`) doing all interactive work. What the Workbench adds is *identity*: each agent carries one of six cool hues (`src/lib/identity.ts`, applied through `--h-ink` / `--h-tile` / `--h-wash` / `--h-line`) that answers "which agent" and never "what is happening". Status colors (green/amber/red) are reserved for states a stored row produced, and seeded sample rows are force-greyed. Monospace is reserved for measurement. Depth is minimal: paper lies flat; only lifted things (dialogs, toasts, overlays, the open drawer, the active segmented pill) carry a shadow.
+Density is the aesthetic. This is a working tool read every day by one operator who wants to continue, not tour. So the surfaces are dark and close together, hairlines and surface steps do the structural work that shadows would do elsewhere, and there is no hero, no decorative illustration, no repeated heading. The identity tints are led by the avatar glyph, not the hue — the hue is a secondary marker precisely because there are only three and they cannot carry the whole identity load.
 
 **Key Characteristics:**
-- Three named zones: organisation-as-navigation (left), the thread at an 80ch measure with inline provenance (centre), the activity printer that only prints recorded rows (right).
-- Identity hues mark *who*, semantics mark *state*, monospace marks *measurement* — three orthogonal systems that never bleed into each other.
-- Cool paper under white sheets, hairline rules, one azure for interactivity; the identity hue extends the "you are here" wash per agent.
-- The thread still sits on printed 28px rule lines with a faint azure margin spine; entries hang off it at 30px face tiles.
-- State is provenance: the last real reply carries one printed line — state pill, provider, model, chars, estimated tokens, saved-at — expandable into a plain-language note of exactly what happened.
-- Motion is one entrance settle (`rise`), one loop (the caret blink, shared by the streaming reply and the In-flight row), and 120ms press transitions, all clamped under `prefers-reduced-motion`.
-- Radii only 6/8/10px plus pills; the only dark surface in the app is the code block.
-- DM Sans body, Manrope headings, JetBrains Mono measurement — now self-hosted through `next/font/google`, not remotely imported.
+- Six graphite surfaces (void → sunken) that step toward the reader; elevation is carried by surface steps and hairlines, not shadows.
+- One cool azure does all interactive work; its dark-ground tint family (wash/line) and a dark glyph live alongside it.
+- Green/amber/red exist only where a stored row produced them; a sample row wears idle grey, never the green of a real run.
+- Exactly three identity tints (sage/aqua/mauve), each proven 30° clear of the accent and of every state colour.
+- DM Sans body, Manrope headings, JetBrains Mono reserved strictly for measurement.
+- Four fixed columns at wide (68 · 276 · fluid · 320), collapsing through two breakpoints; no section repeats the title of another.
+- Every row belongs to exactly one subject — a seat's thread or an organisation's channel — and a channel post always names the seat that wrote it, in that seat's tile and tint.
 
 ## Colors
 
-The palette is the `:root` custom properties of `globals.css` (normative): a cool monochrome paper stack, one azure for interactivity, three deep desaturated state inks with pale wash partners, a slate pair reserved for code, and an identity-hue family that lives in `src/lib/identity.ts` and arrives on elements as `--h-*` inline custom properties.
+The palette is graphite plus rationed colour. Surfaces are neutral, text is neutral, and chroma appears only for interaction, stored state, or agent identity — never for decoration.
 
-### Interactive
-- **Workbench Azure** (`azure`, `{colors.azure}`): the default identity hue and the system interactive color — links, primary fills, selected faces, focus, carets, list markers, the field focus border. If it responds to you, it is azure (or your agent's hue wearing azure's role).
-- **Deep Azure** (`azure-deep`, `{colors.azure-deep}`): hover/pressed partner; the fill of the routine dialog's mark tile; `.chip.azure` ink.
-- **Azure Wash** (`azure-wash`, `{colors.azure-wash}`): the quiet "you are here" background — selected seat node, assistant face, `.consult` wash, the composer's focus ring.
+### Surfaces (the graphite ramp, darkest → lightest)
+- **Void** (`#131416`): the permanent icon rail — the darkest thing on screen.
+- **Sunken** (`#17191c`): inputs and recessed wells; deliberately darker than the working ground.
+- **Panel** (`#191a1d`): the section panel and the activity board.
+- **Sheet** (`#1e2023`): the working ground behind a thread or pane.
+- **Card** (`#24262a`): raised content — thread rows, cards, lists, bars.
+- **Raised** (`#2b2e33`): hover, selected, the tab track — the lightest resting surface.
 
-### Identity hues (who, never status)
-Six cool, low-chroma families in `identity.ts` — azure `#1d5dd0`, teal `#0d6a68/#0d7171`, indigo `#3a44a4`, cyan `#0a66a3/#0a6ba8`, navy `#16386e`, steel `#3f4a58/#55606e` — each a quad of ink/tile/wash/line. `hueFor()` hashes the agent id (FNV-1a, stable across processes and renders) and `hueVars()` stamps the quad onto elements as `--h-ink`, `--h-tile`, `--h-wash`, `--h-line`; one stylesheet rule serves every seat. They color the selected seat node's wash and face, the identity tile, the streaming caret, the In-flight row and its caret dot, the live focus ring, `.consult` heads, `.jump`, `.stop-btn` hover, `.org-row.on` and roster role ink. `:root` defaults the quad to azure so unscoped surfaces stay calm.
+### Text
+- **Ink** (`#eceef1`): primary text.
+- **Ink-2** (`#a9aeb5`): secondary text.
+- **Ink-3** (`#949aa3`): tertiary/metadata, tuned specifically to clear 4.5:1 on **Raised** — the lightest surface any tertiary text is allowed to land on.
 
-### State (reserved; never decorative)
-Green/amber/red may only color a status a stored row produced, as computed by `toneOf(status, sample)` in `page.tsx` — where `sample === true` forces idle no matter what the row claims. Each state is an ink + wash + mid-tone line triple (`ran-line`, `waiting-line`, `fault-line`) so chips always border in the softened version of their ink.
-- **Ran Green** (`ran` / `ran-wash` / `{colors.ran-line}`): COMPLETED/APPROVED rows, the active-seat dot, the "Model ready" foot pulse, ready provider chips.
-- **Waiting Amber** (`waiting` / `waiting-wash` / `{colors.waiting-line}`): QUEUED/RUNNING/PENDING/WAITING_FOR_TOOL, due routines, partial/budget-reached entry tags, dormant-capability chips. Gated: seeded approvals produce no amber anything (`realPending`).
-- **Fault Red** (`fault` / `fault-wash` / `{colors.fault-line}`): FAILED/CANCELLED/TIMED_OUT/REJECTED, provider-error entries, the danger ghost (`{colors.danger-line}` / `{colors.danger-line-hover}`), the delete dialog's mark.
-- **Idle**: `rule-2` dots, `tint`/`ink-2` chips — the mandatory look for unconfigured things and for every seeded sample row, labelled "sample" in words.
+### Hairlines & borders
+- **Rule** (`#303439`): default 1px divider.
+- **Rule-2** (`#414750`): stronger border (icon buttons, chips, inputs at rest).
 
-### Neutral
-- **Cool Paper** (`paper`, `{colors.paper}`): app background, thread surface, activity board ground, composer field fill.
-- **Sheet White** (`sheet`, `{colors.sheet}`): raised surfaces — bench rail, bars, composer, dialogs, rows, provenance line.
-- **Pale Tint** (`tint`, `{colors.tint}`): hover fills, idle chips, tile faces, segmented track, team-card head band.
-- **Ink** (`ink`, `{colors.ink}`): body text. `ink-2` (`{colors.ink-2}`) is secondary text; `ink-3` (`{colors.ink-3}`) a near-identical third grade for labels, times and placeholders — treat `ink-2` as the workhorse.
-- **Rule** (`rule`, `{colors.rule}`): the ubiquitous 1px hairline. **Rule-2** (`rule-2`, `{colors.rule-2}`): the stronger hairline for borders that matter (composer box, dialog frame, dashed provisional edges, idle dots).
-- **Thread fabrics**: `thread-rule-ink` (the 1px line every 28px that rules the thread), `margin-rule-azure` (the vertical spine 26px into the sheet body), `user-entry-wash` (the soft band behind user entries).
-- **Scrims**: `scrim-ink` behind dialogs, `scrim-rail-ink` behind the bench drawer and the activity overlay.
+### Accent (interaction — the only one)
+- **Azure** (`#7ba6ef`): every interactive affordance — active nav fill, focus ring, links, caret, primary button, meters.
+- **Azure-bright** (`#9dbdf5`): hover on an azure surface.
+- **Azure-wash** (`#22304a`) and **Azure-line** (`#35507e`): azure's own dark-ground tint pair (selected tiles, focus glow, tinted chips).
+- **On-azure** (`#0e1a2b`): the dark glyph/text that sits on any azure fill. A light accent on a dark ground cannot carry white text — every azure fill takes this.
 
-### Code surface
-`slate` (`{colors.slate}`) is the only dark surface in the app, reserved for fenced model output: body `slate`, rules `slate-2` (`{colors.slate-2}`), bar `{colors.code-bar}`, text `{colors.code-ink}`, language tag `{colors.code-lang}`, plus one-off copy-button internals (#22303f/#2c3c4f/#3d5169/#9db2ca) recorded in the sidecar, not promoted.
+### State semantics (produced only by a stored row)
+- **Ran** (`#5fce9b`, with **ran-wash** `#1d3227` / **ran-line** `#2f5a44`): completed / approved.
+- **Waiting** (`#e8b25c`, with **waiting-wash** `#33291a` / **waiting-line** `#5c4626`): queued, running, pending, due.
+- **Fault** (`#f48cab`, with **fault-wash** `#35202a` / **fault-line** `#5f3243` / **on-fault** `#2a0f16`): failed, cancelled, rejected, provider error. The one place a state colour fills a button is the destructive confirmation (`.primary.solid-fault`), and it takes a dark glyph like every other light fill; its hover inverts to `fault-line` + `fault` rather than inventing a sixth pink.
 
-### Derived one-offs (recorded, not canonized)
-Selection #cfe0fb, scrollbar thumb #c3cfdd (#a8b9cc hover), user-entry text #24303f, fault-entry text #6f2019, the primary/ident button shadows rgba(20,63,146,.3)/.25, and the delete-dialog's inline fault-fill overrides are single-use literals deliberately outside the token system. If one is needed twice, promote it to `:root` first instead of scattering it.
+### Identity tints (which agent, never a status)
+Three fully-specified hues live in `src/lib/identity.ts`, each an `ink`/`tile`/`glyph`/`wash`/`line` set applied as inline custom properties (`--h-*`) so one stylesheet rule serves every agent:
+- **Sage** (`#a8d98a` ink), **Aqua** (`#70d2db` ink), **Mauve** (`#c4a3dd` ink). Each tile takes a **dark** glyph (sage `#2c372a`, aqua `#21363a`, mauve `#322d3b`) — never white.
+
+### Code well
+- **Code-bg** (`#101215`): the only recessed dark surface other than the rail; the code block sits deliberately darker than everything so model output reads as an artifact. Its family: **code-line** `#23272d`, **code-text** `#dfe6ee`, **code-lang** `#7f8b99`.
+
+### Single-use surface steps (deliberate one-offs, kept out of `:root`)
+These exist for one specific job and are intentionally not tokens. **Rule: a second use promotes the value into `:root`.**
+- Hover steps: `#1e2126` (rail button/status hover), `#1f2226` (section item / node / board row hover), `#202327` (node & board row hairline), `#2a2d32` (row hover, team-card head), `#282b30` (agent-card hover), `#22252a` (the user's own thread entry).
+- Text steps: `#dfe3e8` (user entry body), `#ffdbe4` (fault entry body), `#f5f7f9` (rich-text `<strong>`).
+- Selection: `#35507e`. Scrollbar thumb `#3b4149` / hover `#4b525c`. Ghost border-hover `#575f6a`. Rail badge ink `#17140d`. Code bar `#15181c`.
 
 ### Named Rules
-**The Who-Not-Status Rule.** An identity hue answers "which agent" and nothing else. It never means busy, waiting, or done; those words belong exclusively to ran/waiting/fault. Conversely a state color never decorates an interactive affordance.
-
-**The Recorded-State Rule.** A color state is a claim about the server. If the server did not record it, the element wears idle neutral and the copy says what is true ("sample", "no key", "not connected"). `toneOf()`'s `sample` parameter forcing idle is the law; new surfaces must pass the flag, not hand-pick tones.
-
-**The Printer Rule.** The activity board prints rows. Every one is a stored run, delegation, audit event or approval — or a live SSE fact this client actually received — newest first, timestamped in mono. The live layer never rewrites the record: a row moves from In flight into Record when the server has the row, and due schedules say so in words ("executes as this workspace is read").
-
-**The No-Side-Accent Rule.** A card kind is signaled by a full wash (`.consult` on `--h-wash`, `.entry-user` on `user-entry-wash`), never by a colored border-left stripe. The 1px `rule-2` border-left of a markdown blockquote is a typographic quote rule, not an accent, and is the only left border in the system.
+**The One Voice Rule.** Azure is the only interaction colour. It appears as a fill (with a dark glyph) or as its tint family (wash/line) — nothing else on the bench goes blue to mean "clickable".
+**The Dark-Glyph Rule.** A light accent or identity tint on a dark ground cannot carry white text. Every azure fill and every identity tile takes a dark glyph (`--on-azure`, or the tint's own dark `glyph`). `identity.test.ts` asserts a tile is never given a white glyph.
+**The Stored-Row Rule.** Green, amber and red are only ever produced by a stored row. A seeded sample wears **idle** grey (`raised` + `ink-2`); a fabricated success state is a defect, not a colour.
+**The Three-Mark Rule.** Identity is exactly three tints (sage/aqua/mauve). This is a measured ceiling, not taste: with azure owning interaction and green/amber/red owning state, the cool half of the wheel has room for three marks at 30° of separation, so identity is led by the avatar glyph and the tint is secondary. **Adding a fourth hue requires changing the accent or the semantics first** — `identity.test.ts` fails on contrast floors, the 30° separation from the accent and every state colour, or a warm drift.
 
 ## Typography
 
-**Display Font:** Manrope (with 'DM Sans', sans-serif) — headings, wordmark, identity-bar names.
-**Body Font:** DM Sans (with ui-sans-serif) — all UI text at 14px/1.6.
-**Label/Mono Font:** JetBrains Mono (with ui-monospace) — measurement only.
+**Display Font:** Manrope (`--font-display`), self-hosted through `next/font`.
+**Body Font:** DM Sans (`--font-body`), self-hosted through `next/font`.
+**Label/Mono Font:** JetBrains Mono (`--font-mono`), self-hosted through `next/font`.
 
-All three are self-hosted through `next/font/google` in `src/app/layout.tsx` and reach CSS as `--font-body`, `--font-display`, `--font-mono` (with `display: swap`). There is no remote Google `@import` any more; the literal family names in stacks are fallbacks only.
-
-Character: Manrope's tight -0.022em headings give the board its confident printed-header voice; DM Sans stays calm in the thread; JetBrains Mono is the instrument readout. The split is enforced by selectors: `.num, time, .mono` automatically sets any `<time>` tag in mono with tabular figures, which is why every timestamp in every column aligns in columns.
+**Character:** Manrope's tight, geometric headings give the rail and bars a technical poise; DM Sans stays neutral and workmanlike at 14px/1.6 for dense reading. JetBrains Mono is a measuring instrument, not a voice.
 
 ### Hierarchy
-- **Display** (Manrope 800, 27px base, lh 1.2, -0.022em): `h1`, stepped down to 22px in the identity bar, 20px in the sheet bar, 24px in pane heads. Contrast carried by weight, not scale jumps.
-- **Headline** (Manrope 700, 18px): `h2`; 17px in dialogs and the thread empty-state; block titles in panes drop to 15px.
-- **Title** (Manrope 700, 15px): `h3`; blank-state headings; a model's own `###` renders at 14px, `##` at 16px.
-- **Body** (DM Sans 400, 14px, lh 1.6): UI default. Thread prose runs 15px/1.7 at the hard 80ch measure (`--measure`) — a reply is read, not scanned; the composer textarea matches at 15px/1.55.
-- **Label** (DM Sans 700, 10–11px uppercase, tracking .05–.1em): group labels, board section heads, chips, entry tags, field labels, pane section heads (`pane-h2`). Small, wide, everywhere — the board's stamped voice.
-- **Mono** (JetBrains Mono, 9.5–12.5px, tabular-nums, -0.01em): stamps, counts, char/token figures, model ids, fault detail, `kbd`, prov measurements, row times. The dense UI ladder between label and body remains 10.5/11/11.5/12/12.5/13/13.5px — new micro UI picks a step from it, it does not mint one.
+- **Display / headings** (Manrope 700–800, `-.022em`, line-height 1.2): `h1` 26px, `h2` 18px, `h3` 15px at rest; the surface bar tightens to 20px, the identity bar to 22px, a pane head to 24px, and the editable org name carries the full 26px/800. A dialog title is 17px, a card heading 16px.
+- **Body** (DM Sans 400, 14px/1.6): chrome, labels, list rows.
+- **Reading** (DM Sans, 15px/1.7, max-width `80ch` via `--measure`): thread message text, channel posts and composer input.
+- **Label** (DM Sans 700, ~11px, `.08em`, uppercase): group labels, section headings inside panes, chips — the only uppercase device, and it is never a kicker placed *above* a heading.
+- **Mono** (JetBrains Mono, tabular-nums, `-.01em`): numbers, token counts, timestamps, model ids, code, schedule lines.
+- **The chrome ladder** (13.5 → 9px, half-stepped: 13.5, 13, 12.5, 12, 11.5, 11, 10.5, 10, 9.5, 9): the working text of a 276px panel and a 320px board. It is half-stepped deliberately — one full pixel is the difference between a row that holds its two-line label and one that wraps, so the ladder is the ramp for dense chrome and the steps above it belong to prose. A new size outside this ladder and the prose steps above is drift; a new size *on* it is not.
 
 ### Named Rules
-**The Measurement Rule.** Monospace means a number, a timestamp, an id, or a machine detail. Never set prose, a button label, or a heading in mono. If it isn't something you'd check with a ruler, it isn't mono.
-
-**The Label Case Rule.** Micro-labels are uppercase with ≥.05em tracking at 9.5–11px; nothing else in the system is letter-spaced upward.
+**The Monospace-Means-Measurement Rule.** JetBrains Mono marks only measured data — a count, a time, a token figure, a language tag. It never sets prose. `.num`, `time`, `.mono` exist for this and nothing else.
 
 ## Layout
 
-Fixed three-column workbench grid, viewport-locked: `.workbench { grid-template-columns: var(--rail) minmax(0,1fr) var(--boardw) }` — 272px organisation rail, fluid centre, 336px activity board — at `height: 100dvh; overflow: hidden`, each column scrolling independently. No named spacing tokens exist; the observed rhythm is whole pixels clustered at 2 / 5–9 / 10–14 / 16 / 22–26 / 40 (`--gutter`), with the rail's search, list and pinned footer nav stacked under a bordered top bar.
+The bench is a four-column grid defined once as `.workbench`: `68px` icon rail · `276px` section panel · `minmax(0,1fr)` fluid work surface · `320px` activity board, at `100dvh` with internal scroll. The section panel can collapse to `0` (`panel-closed`).
 
-**Left (bench):** the organisation as navigation. Teams render through `orgTree()` as depth-indented seat nodes (padding grows 14px per depth via `--depth`); each node is a 30px face tile, a name line with a state dot, paused marker, mono message count and relative last-touch time, and an ellipsised role line. Panes (Scheduler, Tools & MCP, Settings) are demoted to `.pane-link` rows in the pinned `.index-foot` under a hairline, with the workspace "Model ready / No model key" pulse beneath them.
+- **Breakpoint 1250px:** the activity board leaves the grid and becomes a right-side overlay drawer (`min(372px,92vw)`, `--shadow-lift`); `.only-narrow` affordances appear.
+- **Breakpoint 860px:** the section panel becomes a full-width step (rail narrows to `60px`, `--gutter` tightens to `18px`); the panel slides in as an overlay (`mpanel`); `.sheet-bar` compresses and `.facts` wrap to a third row. `.only-mobile` appears, `.only-wide` hides.
+- **600px:** agent grid and org stats drop to two columns; the create button collapses to a bare icon.
 
-**Centre (sheet):** bar (identity tile, name, role + reports-to chain in words, `.facts` pills for active/paused, model and message count, action ghosts) → scrollable body → composer. The thread caps at 1120px inside the fluid column, sits at `--measure: 80ch` padding, on 28px repeating rules with the azure margin spine 26px in. Day separators are label-plus-hairline rows. The `.prov` provenance line renders only under the last real reply (a message the gateway actually produced; seeded greetings don't qualify). Demoted panes reuse the column at max-width 980px. A `.jump` pill floats bottom-center only when the reader has scrolled up.
+Visibility helpers are exactly three: `.only-narrow`, `.only-wide`, `.only-mobile`. Rhythm uses `--gutter` (40px, tightening to 18px on mobile) as the sheet's horizontal step and `--measure` (80ch) as the reading column. Thread maxes at 1120px; panes at 1020px.
 
-**Right (board):** uppercase section heads with mono counts; rows are `.bd-row` grids (status dot | bold label + note | mono stamp). Empty sections state their emptiness in words; `.board-foot` permanently prints the deployment truth ("No background worker: due work executes when this workspace is read") plus today's call budget.
-
-**Responsive (exact breakpoints):**
-- **≤1180px** — the board leaves the grid; `.only-narrow` controls switch on (menu, Activity button, overlay close); `show-activity` floats the board as a fixed right overlay (`min(372px, 92vw)`, lift shadow, z-58) over a scrim.
-- **≤860px** — single column. The bench becomes a fixed 292px drawer sliding from the left (`.24s`, scrim z-55); `.only-wide` content hides (the ⌘K `kbd`, the composer's keyboard instruction); sheet bar reorders facts to their own line; thread/composer/pane paddings tighten to 16px; `.caps-row` and `.reach` stack.
-- **`.only-narrow` / `.only-wide` convention** — the two visibility helpers, both decisive in `globals.css`. New chrome that exists in only one mode uses these classes, never a bespoke media query.
+**The Naming Rule.** The section panel is titled by **what it holds** (Shortcuts, The bench, Reporting lines, Routines, Connectors, Workspace) while the work surface carries the **section title** (Overview, Organisation, Automations, Integrations, Settings, or the agent's name). Neither repeats the other; a heading is never duplicated in two columns.
 
 ## Elevation & Depth
 
-A paper stack, not a glass stack. Surfaces at rest are flat: separation comes from 1px hairlines and background swaps (paper → sheet → tint). Shadows are strictly structural — two diffuse, ink-tinted ambients that read as "this sheet is lifted off the board", never as glow.
+This system is **flat by construction**. Depth is carried entirely by the graphite surface ramp (`void → panel → sheet → card → raised`, stepping toward the reader) plus 1px hairlines (`--rule`, `--rule-2`). There is exactly one shadow token — `--shadow-lift` (`0 20px 48px rgba(0,0,0,.48)`) — and it belongs only to layers that genuinely float above the bench: the dialog, the toast, the jump pill, and the two overlay drawers (activity board, mobile section panel). Resting surfaces, cards, rows and inputs have no shadow.
 
 ### Shadow Vocabulary
-- **Sheet shadow** (`--shadow-sheet`: `0 1px 2px rgba(27,36,48,.05), 0 8px 22px -14px rgba(27,36,48,.18)`): resting lift — the composer box and the active segmented pill.
-- **Lift shadow** (`--shadow-lift`: `0 2px 4px rgba(27,36,48,.07), 0 16px 34px -18px rgba(27,36,48,.26)`): raised-over-page state — dialogs, toasts, the ≤1180px board overlay, the open ≤860px drawer, the jump pill.
-- **Fill shadows:** the primary button (`0 1px 2px rgba(20,63,146,.3)`) and the 38px identity tile (`rgba(20,63,146,.25)`) carry a 2px tint under their azure-family fills only.
+- **Lift** (`--shadow-lift`): the only shadow. Floating layers only (`.dialog`, `.toast`, `.jump`, `.board`/`.sidepanel` when drawer-positioned).
 
 ### Named Rules
-**The Paper Stack Rule.** Depth is state, not hierarchy: a shadow appears when something is physically above the page (dialog open, overlay shown, drawer slid out, pill selected) and disappears when it settles back. Resting rows, nodes and thread entries are flat.
+**The Flat-By-Default Rule.** Surfaces are flat at rest. Elevation is a surface step plus a hairline. `--shadow-lift` appears only where a layer leaves the grid and floats, and a shadow is never used to make a static card "pop".
 
 ## Shapes
 
-Gently practical, never razor, never blobby: exactly three radii — 6px (`--r-sm`: controls, tiles, chips'-host rows, fields, kbd, jump), 8px (`--r`: seat nodes, thread entries, rows containers, blocks, team cards) — 10px (`--r-lg`: dialogs, the composer box) — plus 99px pills reserved for chips, facts, counts, the jump and the provenance state pill. Faces are hairline-bordered squares at 30px (seat/entry tiles), 38px (identity tile), 28px (row faces), 27px (the brand `.mark`, the only solidly-filled one).
-
-The recurring silhouette is the **seat node**: tile at left, a name line (dot, bold name, floating mono count, mono last-touch), an ellipsised role line — used identically in trees and flat bench lists, echoed by thread entries and `.bd-row`s. The second silhouette is **dashed means provisional**: proposal strips, muted sample counts, blank-state frames, the empty bench sheet, `.fact.none`, the prov-note divider. Solid means real and filed.
-
-Borders are 1px `rule` by default; `rule-2` where the edge carries weight (composer box, dialog frame, drawer overlay). The composer is a *bordered field* — `rule-2` stroke, 10px corners, paper fill lifting to sheet with a 3px `--h-wash` ring on focus — the old ink-line composer is gone. The only dark shape is the code block (`slate` body, `slate-2` frame, its own header bar).
-
-### Motion grammar
-One entrance, one loop, everything else is state response. `rise` (9px up + .985 scale → rest, on `--ease` `cubic-bezier(.22,.68,.31,1)`) settles dialogs (.26s), toasts (.22s) and the jump pill (.2s); `fade` (.18s) brings scrims. The **only loop** is `blink` (1.05s steps) on the 2px `--h-ink` caret — the same animation drives the streaming reply's caret and the In-flight row's status dot, so "live" has exactly one visual verb. Press/hover transitions are 120ms; composer box and `.field` shifts are 140ms; the drawer is 240ms. Under `prefers-reduced-motion` all durations clamp to .01ms and the carets rest at 60% opacity — the live signal survives without blinking.
+Form is restrained and mechanical. Radii are three steps plus pills: `--r-sm` 6px (inputs, icon buttons, tiles, chips-of-consideration), `--r` 8px (cards, rows, dialogs body, tabs track), `--r-lg` 10px (composer box, dialog), and `99px` pills (chips, meters, badges, `fact`, `org-count`). Borders are 1px hairlines; there are no heavy outlines and no decorative clipping. Tiles (30px seat nodes, 38px identity/avatar) are the recurring silhouette, and the active seat gets a 3px azure tab that bleeds from the rail (`rail-btn.on::before`). The code well (`--code-bg`) is the only deliberately recessed dark surface other than the rail.
 
 ## Components
 
 ### Buttons
-- **Shape:** gently squared (6px).
-- **Primary:** azure fill, white 13px/600 label, `7px 13px`, 7px icon gap, 2px fill shadow; hover deepens to azure-deep, active presses 1px, both at .12s on `--ease`.
-- **Ghost:** sheet white, 1px `rule` border, ink 13px/600; hover shifts border to `rule-2` and fill to tint. The default for everything that isn't the one action on a surface. `.danger` recolors text to `fault` with `{colors.danger-line}`, washing to fault-wash on hover.
-- **Icon button:** 32px square, hairline border, `ink-2` glyph, same hover as ghost.
-- **Send:** borderless 34px square filled with `--h-tile` (the selected agent's hue tile — azure by default); hover brightens 12%, active presses with `scale(.97)`.
-- **Stop:** a small ghost (12px, `4px 10px`) whose hover takes the identity hue (`--h-ink` text, `--h-wash` fill); replaces Send while a reply streams, in both the composer box and the live entry head.
+- **Shape:** gently curved (6px).
+- **Primary** (`.primary`): azure fill, dark `on-azure` label, 700 weight, padding `7px 13px`; hover → azure-bright, active → 1px press (`translateY(1px)`), transition 120ms.
+- **Ghost** (`.ghost`): sheet background, `rule-2` border, ink text; hover lifts the border to `#575f6a` and the ground to **raised**.
+- **Danger** (`.danger`): a ghost that takes **fault** text and `fault-line` border; hover fills `fault-wash`. Danger stays a *ghost* — it is not a filled red button.
+- **Icon button** (`.icon-btn`): 32px square, sheet background, `rule` border; hover → raised.
+- **Send** (`.send`): 34px square tinted with the active agent's identity tile, dark identity glyph; hover brightens via `filter: brightness(1.12)`.
+- **Focus:** one shared treatment — `:focus-visible` draws a 2px azure outline at 2px offset.
 
-### Seat Node (signature, rail)
-30px face tile (identity-washed, `--h-line` border; selected flips to sheet fill with `--h-ink` border), name 13.5px/700 with a 6px state dot (idle `rule-2`, or ran/waiting/fault — with a title explaining the word in plain language), a "paused" micro-marker, mono count and mono relative time floating right, role line beneath at 12px `ink-2`. Hover tints; selected fills `--h-wash`. Siblings separated by hairline top borders that vanish after a selected node. Depth shows as 14px-per-level padding, not connector lines.
+### Chips / status
+- **Style:** 99px pill, uppercase 10.5px label with a leading 5px dot of `currentColor`, transparent border at rest.
+- **Variants:** `.ran` / `.waiting` / `.fault` each take the matching state wash background + state text + state line border; `.idle` is `raised` + `ink-2` (used for samples and unconfigured); `.azure` is the interaction tint. State chips are only ever rendered from `toneOf(status)`.
 
-### State Chips & Badges
-Pill, uppercase 10.5px/700 label with a 5px dot at `currentColor`, wash background + tinted `*-line` border per state; `.idle` is tint/`ink-2` and is the mandatory look for sample rows (labelled "sample" in words, never "COMPLETED"). `.fact` pills (composer bar, sheet bar) are the calm sibling: 11.5px sentence-case, paper fill, hairline border; `live` swaps its dot to ran green. `.count` badges are mono 11px tint pills; `.count.muted` goes transparent with a dashed `rule-2` ring and the tooltip "seeded sample data, not a real run".
+### Cards / rows
+- **Corner:** 8px. **Background:** `card` with a `rule` hairline; no shadow. Rows (`.row`, `.node`, `.sp-item`) separate with a 1px `rule`/`#202327` top border and hover to a single-use step (`#2a2d32` / `#1f2226`).
+- **Agent card** (`.agent-card`): 216px min column, `card` ground, 38px identity avatar tile, an `agent-live` dot in `ran` (or `ink-3` when paused); hover swaps the border to the tint's `line` and the ground to `#282b30`.
 
-### Thread Entries (the ruled page)
-30px face, head row (bold name — `--h-ink` for the assistant, `via {origin}` handoff note, mono time, right-floating state tag, hover-revealed tools), 15px/1.7 prose capped at 80ch. User entries sit on the `user-entry-wash` band with a 10px inset; assistant faces take the identity wash; fault entries sit in a fault-wash panel with a mono detail line. `RichText` re-typesets model markdown into React nodes (paragraphs, 16/14px headings, italic quotes on a 1px hairline, lists with `--h-ink` markers and tabular figures, `inline-code` chips, slate code blocks with a language tag and copy pill) — model text is never injected as HTML. Reasoning that arrived in the answer channel renders in the `.reasoning` fold: "+/−" marker, labelled "verbatim from {model}", opened and saying so when reasoning filled the row. Live states: pending echo ("sending"), streaming entry ("answering" / "reasoning" / "consulting" / "waiting") ending in the caret, with the Stop pill in its head and the `.consulting` wash line for peer hops inside the prose.
+### Inputs / fields
+- **Style:** `sunken` background, `rule`/`rule-2` border, 6px radius; textarea auto-grows to 168px.
+- **Focus:** border shifts to azure with a `0 0 0 3px azure-wash` glow (the composer box uses the active identity hue instead: `h-line` border, `h-wash` glow).
+- **Placeholder/muted:** `ink-3`. Disabled: opacity `.45`, `not-allowed`.
 
-### Provenance Line (`.prov`, signature)
-One `<details>` under the last real reply, capped at the measure: summary = the state pill (complete / partial / stopped by you / budget reached / reasoning only / not answered), provider, model id, then the right-floating mono measurement string ("N chars · N reasoning · N tokens (est.) · saved 7:39 PM") with a "+/−" affordance. Opening adds one dashed-ruled plain-language note stating exactly what happened ("The connection died mid-reply. What is here is what arrived; it was not replayed."). This replaces the margin's taped slip: the evidence is printed where the work is, not pinned beside it.
+### Navigation — the icon rail (`.iconrail`)
+- Permanent `void` column at every breakpoint. Logo is a 40px azure tile with a dark glyph (hover scale 1.05 → azure-bright). Buttons are 54px tall, `ink-3` at rest, hover `#1e2126`+ink, active `azure-wash` + `azure-bright` label with the 3px azure tab. A `waiting`-coloured count badge sits top-right. Footer holds a panel-toggle and a status pulse (`rule-2` at rest, `ran` + `ran-wash` ring when a model is configured).
 
-### Activity Board Rows (`.bd-row`, signature)
-Grid: 7px status dot (or the caret-st for live rows) | bold 12.5px label over 11.5px `ink-2` note | mono stamp right. Sections In flight (`--h-wash` rows, caret dots), Needs attention (approvals carry inline Reject/Approve ghost+primary pairs; waiting runs and due routines explain themselves in words — "there is no worker on this server, so it stays waiting"), Upcoming, Record (newest-first merge of runs, today's delegations, filtered audit events, decided/sample approvals; sample rows wear the idle "sample" chip; rows open dialogs or seats only where a real record exists; capped at 24). `.board-foot` is the permanent deployment truth plus budget line.
+### Signature: the seat node & activity printer
+- **Seat node** (`.node`): 30px identity tile (glyph-first), a status dot answering "what is this seat doing" from stored rows, the name, message count in mono, and last-activity relative time; indent scales by reporting depth. Selected fills `h-wash` and inverts the tile to `h-tile`/`h-glyph`.
+- **Activity board** (`.board`): a printer, not a dashboard. Sections In flight / Needs attention / Upcoming / Record, each row one stored run, delegation, event, approval, or a live SSE fact — with an `caret-st` (the shared blink) marking a live row and mono timestamps. The foot states plainly that no background worker exists.
 
-### Consulted Hops & Handoffs (`.consult`)
-Full identity wash (1px `--h-line` border, `--h-wash` fill — never a side stripe), head row with identity-hued arrow, "A consulted B" / "A handed this turn to B" at 11.5px, right-floating mono time, italic question, then the peer's recorded answer (folded reasoning first) or the honest fallback line "Their answer is recorded but was not kept for display." The card never silently disappears.
+### Organisation channel (`.thread.channel`)
+- The record of one company's briefed work, not a chat window. `.channel-head` states the stored team brief and the `.channel-seats` roster: pill chips with the seat's glyph tile, its `seatTone` dot, a `lead` marker on the seat a brief actually reaches, and a click that opens that seat's own thread.
+- A post is an `.entry` wearing its author's identity tile and tint, with a kind tag (`notice`, `teammate post`, `report`) and, when the server refused to spend more, a state tag (`stopped at the budget`, `no answer`, `not answered`, `partial`, `stopped by you`, `budget reached`). Fault-family states take `--fault`; a budget refusal takes `--waiting` — the server declining to spend is not a broken thing.
+- The question that produced a teammate post prints above it in the reused `.consult` block ("X asked Y"), so the summon is legible without opening anything. `.post-foot` is the mono provenance (`model · N chars · N reasoning · N tokens (est.)`) with a **Run steps** link into the stored `runs` row — the drill-in that answers "what is this seat doing right now".
+- The composer in channel mode is the same `.composer` machine, reworded: placeholder "Brief {lead} for {org}", a note stating the summons ceiling, and Stop rendered only while the report streams. The bench panel stays visible beside it, because the channel is a view *of* the bench.
 
-### Proposal Cards (`.team-card` + `.org-chart` / `.team-roster`)
-An `org_proposal` prints a real reporting chart inside a solid sheet card: tint head band with the 27px azure mark, "N seats · nothing created yet · they would report to X", then `.org-row` tree rows indented 15px per depth with tick stubs, names, roles and mono descendant-count pills — disabled rows, because the seats do not exist. A `team_proposal` renders the flat `team-roster` (92px name column, identity-hued role, duty line). Foot: one promise sentence in words and the primary Create button. Dashed never stands in for the copy; the not-filed status lives in the words.
+### Organisation memory and the trigger panel
+- Two pills in `.memory-bar` under the channel head — **Memory** and **Trigger**, each with a stored count — expand a `.memory-panel` in place. No new pane, no new colour: the panel is `card` on `sheet` with a `rule` hairline, and a kind chip is the same uppercase label treatment as every other chip.
+- A note is a row of evidence, not a toast: kind chip, the sentence, then a mono line of who wrote it, when, `used N times`, and which channel posts it came from. Pinned takes the azure chip treatment (it is a priority, not a status); a superseded note is struck through and still listed, so a correction is visible as one.
+- An injected block is labelled as a record to weigh, and the reply's provenance prints `· from N org memories (X chars)` — retrieval that the reader cannot see did not happen is not allowed.
+- The trigger panel is deliberately plain: a copyable `curl` line in mono, its fire count, and copy that states there is no worker and nothing continues after the call. A surface that hands out a credential should not look like a feature card.
 
-### Rows, Panes, Blocks, Segmented, Blank
-Demoted panes list data in bordered `.rows` cards (12px 14px rows, 28px face, 13.5px bold title, ellipsised 12px sub, optional mono `row-when` line, right-side state/time or actions). `.pane-h2` stamps sections uppercase 11px with a right-floating mono count. Settings stack bordered `.block` cards with hairline `kv` rows and azure `.meter` bars for budget. Segmented controls: tint track, white raised pill (`--shadow-sheet`) when on. Blank states are dashed centered sheets — invitations, not success screens.
-
-### Forms & the Composer
-Fields: uppercase 11.5px labels, 1px `rule-2` bordered 6px-radius inputs on white; focus drops the outline for an azure border plus a 3px `field-ring-azure` ring. The composer box: `rule-2` stroke, 10px radius, paper fill lifting to sheet with a 3px `--h-wash` identity ring on `:focus-within`; auto-growing textarea (max 168px); Enter sends, Shift+Enter newlines; the bar beneath carries the model `.fact`, the boundary note ("no browser, files, or connectors"), and a right-aligned mono line that is *state-dependent*: an "N est. tokens" estimate while typing, "Stop keeps what has arrived" while a reply streams, and the keyboard instruction only when idle **and** wide.
-
-### Dialogs & Toast
-Scrim at 34% ink with a .18s fade; dialog 468px (`.wide` 620px) sheet, 10px radius, `rule-2` border, lift shadow, one `rise` settle (.26s). Head: 27px mark tile (azure; `azure-deep` for routines; `fault` for delete confirms), 17px Manrope title, X. Actions are full-width ghost+primary halves. Agent settings live in a dialog with Identity/Capabilities segmented tabs; the Capabilities editor is the boundary-lit surface — unavailable tools listed but disabled with the reason in words, dormant ones amber "no team", an active-tools summary line. Toasts are the same lifted sheet bottom-center, 5.2s auto-dismiss.
-
-### Browser-Surface Theming
-Selection is soft azure (#cfe0fb one-off) with ink text; input carets are azure; `:focus-visible` is a 2px outline in `--h-ink` (the *identity* hue, locally scoped) at 2px offset with 6px corners — the only outline in the system, never removed. Scrollbars are 11px with transparent track and a paper-outlined rounded thumb (#c3cfdd, #a8b9cc hover).
+### Motion
+One entrance rise (`@keyframes rise`, ~0.2–0.26s, on dialog/toast/jump), one shared blink (`caret` and `caret-st`, 1.05s steps), 120–150ms press/background transitions, all on `--ease` (`cubic-bezier(.22,.68,.31,1)`). Under `prefers-reduced-motion` every duration collapses to ~0 and the caret rests at 60% opacity.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** treat `globals.css` `:root` as the single normative token source and `src/lib/identity.ts` as the single source of hues; new CSS references `var(--paper)` … `var(--ease)` and `var(--h-*)` inside agent-scoped subtrees.
-- **Do** keep fonts on the `next/font` path (`--font-body` / `--font-display` / `--font-mono` from `layout.tsx`); never add a remote `@import`.
-- **Do** reserve green/amber/red for statuses `toneOf()` produced from a real server row, always passing the `sample` flag; seeded rows render idle and say "sample".
-- **Do** print only recorded rows in the activity board — or live SSE facts this client received — each with a mono stamp and words explaining what it means; the live layer never rewrites the record.
-- **Do** use identity hues for "who": selection washes, faces, focus, carets, live rows, consult cards, list markers. A status question never gets a hue answer.
-- **Do** print the reply's provenance as the one inline `.prov` line under the last real reply, with the honest note on open; never fabricate progress, replay stopped streams, or fill gaps ("Nothing was invented to fill the gap").
-- **Do** render model text through `RichText` React nodes; reasoning arrives folded and labelled, never deleted; never inject model or user text as HTML.
-- **Do** keep monospace to measurement (`<time>`, counts, char/token figures, model ids) — the `.num, time, .mono` selector already enforces it for timestamps.
-- **Do** cap thread prose at the 80ch measure and let 28px rule lines, hairline dividers and the margin spine do the structural work instead of boxes.
-- **Do** use 6/8/10px radii and 99px pills only; 1px `rule` hairlines for separation; dashed borders only for provisional/unfiled things; non-creation stated in words, not dashed styling.
-- **Do** reuse `.only-narrow` / `.only-wide` for mode-specific chrome and the 1180px/860px collapse order (activity board → overlay, then bench → drawer).
-- **Do** keep motion to the recorded vocabulary (one `rise` settle, one `blink` loop, 120ms press, 140ms field shift, 240ms drawer) on `var(--ease)`, inside the shipped `prefers-reduced-motion` clamp with carets resting at 60%.
-- **Do** let copy state boundaries as content ("No background worker: due work executes when this workspace is read", "no browser, files, or connectors").
+- **Do** carry elevation with a graphite step plus a `rule` hairline; reserve `--shadow-lift` for floating layers (dialog, toast, jump, overlay drawers) only.
+- **Do** put a dark glyph (`--on-azure`, or the tint's own dark `glyph`) on every azure or identity fill.
+- **Do** source green/amber/red only from `toneOf(status)` on a stored row, and render a seeded sample as `idle` grey.
+- **Do** title the section panel by what it holds and the work surface by the section — never both the same word.
+- **Do** use JetBrains Mono only for measurement (counts, times, tokens, code, language tags).
+- **Do** keep identity to the three tints led by the avatar glyph; keep a tertiary text at `ink-3` no lighter than `raised` (4.5:1).
+- **Don't** add a fourth identity hue without first changing the accent or the state semantics — the tests will fail.
+- **Don't** promote a single-use surface hex into a token before it has a second use.
 
 ### Don't:
-- **Don't** resurrect the discarded Bench Notebook devices: no taped evidence slips, no `.slip` cards, no printed `.key` state legend, no margin slip scroll-tie, no flat agent-tab index list, no ink-line composer. They are deleted from the code; a new surface must not quietly bring one back.
-- **Don't** reintroduce the retired warm-ivory/violet world: paper stays cool (`#f4f7fa`) and the only warm hue is the reserved waiting state.
-- **Don't** use state colors on interactive affordances or decorative dots, and don't use identity hues to mean status; each family answers exactly one question.
-- **Don't** mark sample or unconfigured things with ran green, live badges, or optimistic counts; keep the `realPending` gate on every new alert surface.
-- **Don't** signal a card kind with a colored border-left or any >1px side stripe; use the full wash (`.consult` on `--h-wash`). Side stripes are a detector AI tell this system refuses.
-- **Don't** set prose, headings or button labels in JetBrains Mono, and don't use it as an aesthetic tech font.
-- **Don't** add shadows beyond `--shadow-sheet` / `--shadow-lift` (plus the fixed azure-fill button tints), and don't shadow resting surfaces.
-- **Don't** add radii outside 6/8/10px/pill, razor corners, glassmorphism, or a second dark surface — the code block owns `slate`.
-- **Don't** add infinite animation beyond the caret blink (and its In-flight dot, which is literally the same keyframe), and don't animate anything not lifted, settled, or pressed.
-- **Don't** mint off-token hexes; single-use literals stay single-use (see Derived one-offs). If one is needed twice, promote it to `:root` first.
-- **Don't** let the composer's right-hand line be static: it is token estimate while typing, "Stop keeps what has arrived" while streaming, keyboard instruction only when idle and wide.
+- **Don't** reintroduce the deleted Overview devices: the hero illustration, the four large stat cards, per-card ghost numerals, eyebrow/kicker labels above headings, or duplicated Upcoming/Recent panels. (Residual `.header-eyebrow` / `.sp-kicker` CSS rules are orphaned — do not build new surfaces on them.)
+- **Don't** give a light accent or tint fill white text.
+- **Don't** use a shadow to make a resting card or button "lift" — that breaks the flat graphite construction.
+- **Don't** use a colour outside azure/state/identity to signal interactivity.
+- **Don't** set prose in the monospace face, or place an uppercase kicker above a heading.
+- **Don't** invent a colour, an avatar or a name for a channel participant. A post is authored by a stored seat or by the human reading it; anything else is a row the server did not write.
+- **Don't** let a channel go silent. A brief that was cut short, a peer that failed to answer, and a report that never got written each leave their own labelled row.
+
+<!-- The two defects this file used to carry as "not canonized" are gone: the routine dialog's `--azure-deep` mark and the delete-confirmation's inline `--fault` fill with an offset shadow were both removed in the Graphite pass (grep finds neither token nor shadow in src). Feature 11 added no single-use surface hexes: `.channel-head`, `.seat-chip`, `.group-channel` and `.post-foot` are built entirely from the existing graphite ramp, hairlines, identity variables and state colours. -->

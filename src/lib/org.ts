@@ -85,22 +85,6 @@ export function managerOf<T extends Linkable>(rows: T[], id: string): T | null {
   return self?.managerId ? rows.find(r => r.id === self.managerId && r.id !== id) ?? null : null;
 }
 
-/**
- * Who one agent may reach through the structure: their manager, their direct reports, and the
- * people who share their manager. Not the whole workspace — an agent that could ask anyone would
- * make the reporting line decorative.
- */
-export function reachableFor<T extends Linkable>(rows: T[], id: string): T[] {
-  const self = rows.find(r => r.id === id);
-  if (!self) return [];
-  const manager = self.managerId ? rows.find(r => r.id === self.managerId) : undefined;
-  const reports = rows.filter(r => r.managerId === self.id && r.id !== self.id);
-  const siblings = manager ? rows.filter(r => r.managerId === manager.id && r.id !== self.id) : [];
-  const seen = new Map<string, T>();
-  for (const row of [manager, ...reports, ...siblings]) if (row && !seen.has(row.id)) seen.set(row.id, row);
-  return [...seen.values()];
-}
-
 /** The company the product asks for most: strategy, the product line, the build line, quality, data, customers. */
 export function orgTemplate(team: string, brief: string): Org {
   const seat = (name: string, role: string, reportsTo: string | null, instructions: string): OrgMember => ({ name, role, reportsTo, instructions });

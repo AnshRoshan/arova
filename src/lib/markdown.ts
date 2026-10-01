@@ -22,16 +22,25 @@ export type Block =
   | { kind: "rule" };
 
 /** Some compatible endpoints stream their reasoning into the answer channel itself.
- * Show it, folded and labelled — never delete model output, and never let it bury the reply. */
-const THINK = /^\s*<think>([\s\S]*?)<\/think>\s*/;
+ * Show it, folded and labelled — never delete model output, and never let it bury the reply. A
+ * closed block is found anywhere in the text, not only at the front: a channel report opens with
+ * its own header line, so the reasoning sits in the middle of the stored row. */
+const THINK = /\s*<\/?think>([\s\S]*?)<\/think>\s*/gi;
 const THINK_OPEN = /^\s*<think>([\s\S]*)$/;
 
-export function splitReasoning(text: string): { reasoning: string | null; answer: string } {
-  const closed = text.match(THINK);
-  if (closed) return { reasoning: closed[1].trim(), answer: text.slice(closed[0].length).trim() };
+export type SplitReply = { reasoning: string | null; answer: string; rest: string };
+
+export function splitReasoning(text: string): SplitReply {
+  const blocks = [...text.matchAll(THINK)];
+  if (blocks.length) {
+    // Every block is kept and labelled; only the tags come out of what the reader is shown as the answer.
+    const NL2 = String.fromCharCode(10, 10);
+    const rest = text.replace(THINK, NL2).trim();
+    return { reasoning: blocks.map(b => b[1].trim()).filter(Boolean).join(NL2), answer: rest, rest };
+  }
   const open = text.match(THINK_OPEN);
-  if (open) return { reasoning: open[1].trim(), answer: "" };
-  return { reasoning: null, answer: text };
+  if (open) return { reasoning: open[1].trim(), answer: "", rest: text };
+  return { reasoning: null, answer: text, rest: text };
 }
 
 /** Only web schemes are ever made clickable. Everything else stays visible as plain text. */

@@ -275,3 +275,21 @@ test("mention route: a word inside another word is not a name", () => {
   const roster = [{ id: "d", name: "Dev", role: "Build" }];
   assert.equal(mentionConsult("what is the deviation from plan?", roster, "x"), null);
 });
+
+test("a reasoning block that mentions the shapes is not read as the decision", () => {
+  // A reasoning model enumerates its options verbatim before answering. Parsing the first
+  // directive in the raw text picks up a hypothetical instead of the decision.
+  const raw = [
+    "<think>",
+    'The options are {"consult":null} or {"approval":{"title":"placeholder"}}. The user wants approval, so option 4 fits.',
+    "</think>",
+    "",
+    '{"approval":{"title":"Email the customer list","detail":"Sends to every customer"}}',
+  ].join("\n");
+  const r = parseRouting(raw);
+  assert.equal(r.action, "approval");
+  assert.equal(r.title, "Email the customer list");
+  const t = parseTurn('<think>\nmaybe {"consult":{"agent":"Scout","question":"x"}} would be right\n</think>\n\nI will answer this myself.');
+  assert.equal(t.consult, null, "a consult mentioned in reasoning is not a consult");
+  assert.equal(t.text, "I will answer this myself.");
+});

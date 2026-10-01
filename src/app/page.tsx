@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import {
-  Activity, ArrowDown, ArrowLeft, ArrowRight, Bot, CalendarDays, Check, CircleHelp, Compass, Copy,
-  Globe2, Menu, Network, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun,
-  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, type LucideIcon,
+  Activity, ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bot, CalendarDays, Check, CircleHelp, Compass, Copy,
+  Globe2, LayoutDashboard, Menu, Network, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun,
+  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, type LucideIcon,
 } from "lucide-react";
 import { TOOL_REGISTRY, mcpSummary, resolveTools, tokenBudgetFor, type Capabilities as ToolCaps } from "@/lib/tools";
 import { SKILL_REGISTRY, resolveSkills } from "@/lib/skills";
@@ -12,11 +12,13 @@ import { parseMarkdown, splitReasoning, type Block, type Inline as MdInline } fr
 import { hueFor, hueVars } from "@/lib/identity";
 import { describeSchedule } from "@/lib/scheduler";
 import { orgTree, type OrgNode } from "@/lib/org";
+import { resolveLead, summonCeiling } from "@/lib/channel";
 
 type Agent = { id: string; name: string; role: string; instructions: string; avatar: string; status: string; provider: string; teamId: string | null; managerId: string | null; capabilities: Capabilities };
-type Message = { id: string; agentId: string; role: string; content: string; kind: string; metadata: Record<string, unknown>; createdAt: string };
-type Routine = { id: string; agentId: string; name: string; description: string; schedule: string; timezone: string; enabled: boolean; lastRunAt: string | null; nextRunAt: string | null; lastStatus: string | null };
-type Run = { id: string; agentId: string; routineId: string | null; title: string; status: string; summary: string; startedAt: string; completedAt: string | null };
+/** A row belongs to one seat's thread or to one organisation's channel — `teamId` set means channel. */
+type Message = { id: string; agentId: string | null; teamId: string | null; role: string; content: string; kind: string; metadata: Record<string, unknown>; createdAt: string };
+type Routine = { id: string; agentId: string; name: string; description: string; schedule: string; timezone: string; enabled: boolean; lastRunAt: string | null; nextRunAt: string | null; lastStatus: string | null; failStreak: number };
+type Run = { id: string; agentId: string; routineId: string | null; title: string; status: string; summary: string; initiator: string; startedAt: string; completedAt: string | null };
 type Step = { id: string; runId: string; title: string; detail: string; createdAt: string };
 type Approval = { id: string; agentId: string; title: string; detail: string; status: string; createdAt: string };
 type Profile = { name: string; label: string; model: string; configured: boolean; builtIn: boolean; maxContextTokens: number };
@@ -27,19 +29,25 @@ type Capabilities = {
   maxTurns: number | null; modelParams: { temperature?: number; maxTokens?: number };
   mcpServers: { name: string; transport: string }[]; mcpInheritance: unknown; skills: string[];
 };
-type Team = { id: string; name: string; brief: string; createdAt: string };
+type Team = { id: string; name: string; brief: string; createdAt: string; leadAgentId: string | null; creatorAgentId: string | null };
+/** What an organisation recorded. Scoped to its team, authored by a seat or by the human. */
+type Memory = { id: string; workspaceId: string; teamId: string; agentId: string | null; kind: "note" | "decision" | "glossary"; text: string; sourceIds: string[]; supersedes: string | null; pinned: boolean; lastUsedAt: string | null; hits: number; createdAt: string };
+/** A bearer token that lets something outside the app brief one organisation. */
+type Trigger = { id: string; teamId: string; token: string; label: string; enabled: boolean; lastFiredAt: string | null; hits: number; createdAt: string };
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
 type BoardEvent = { id: string; agentId: string | null; type: string; detail: string; createdAt: string };
 type Board = {
-  workspace: { id: string; name: string; timezone: string };
+  workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
+  overview: { activeAgents: number; enabledRoutines: number; completedRuns: number; pendingApprovals: number; messagesToday: number };
   agents: Agent[]; messages: Message[]; routines: Routine[]; runs: Run[]; steps: Step[]; approvals: Approval[];
   connections: { agentId: string; slug: string }[]; events: BoardEvent[];
   sandboxProvider: string; modelConfigured: boolean; profiles: Profile[];
-  teams: Team[]; delegations: Delegation[];
+  auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
+  teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
 };
-type Pane = "scheduler" | "tools" | "settings";
+type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel";
 type Tone = "ran" | "waiting" | "fault" | "idle";
 
 const faces: Record<string, LucideIcon> = { sparkles: Sparkles, globe: Globe2, palette: WandSparkles, sun: Sun, bot: Bot, zap: Zap };
@@ -63,6 +71,12 @@ const est = (s: string) => Math.ceil(s.length / 4);
 
 /** Reformat an ISO instant embedded in stored prose; the words around it are untouched. */
 const humanStamps = (text: string) => text.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, m => { const d = new Date(m); return Number.isNaN(d.getTime()) ? m : `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`; });
+
+/** What a reply may claim about memory: only the ids the server recorded as used, never a guess. */
+const memoryNote = (metadata: Record<string, unknown> | undefined) => {
+  const mem = metadata?.memory as { count?: number; chars?: number } | undefined;
+  return mem?.count ? ` · from ${mem.count} org ${mem.count === 1 ? "memory" : "memories"} (${mem.chars ?? 0} chars)` : "";
+};
 
 const toneOf = (status: string, sample = false) => (sample ? "idle" : status === "COMPLETED" || status === "APPROVED" ? "ran" : ["FAILED", "CANCELLED", "TIMED_OUT", "REJECTED"].includes(status) ? "fault" : ["WAITING_FOR_TOOL", "QUEUED", "RUNNING", "PENDING"].includes(status) ? "waiting" : "idle");
 /** Seeded rows describe a run that never happened; they must never wear the green of a real one. */
@@ -167,19 +181,39 @@ export default function Workbench() {
   const [data, setData] = useState<Board | null>(null);
   const [loading, setLoading] = useState(true);
   const [agentId, setAgentId] = useState<string | null>(null);
-  const [pane, setPane] = useState<Pane | null>(null);
+  const [pane, setPane] = useState<Pane | null>("overview");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [rail, setRail] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [agentTab, setAgentTab] = useState<"all" | "active" | "paused">("all");
+  const [orgTab, setOrgTab] = useState<"teams" | "bench">("teams");
+  const [orgSel, setOrgSel] = useState<string | null>(null);
+  const [autoTab, setAutoTab] = useState<"routines" | "runs">("routines");
+  const [toolsTab, setToolsTab] = useState<"connectors" | "mcp">("connectors");
+  const [settingsTab, setSettingsTab] = useState<"workspace" | "models" | "limits">("workspace");
+  const [teamForm, setTeamForm] = useState({ name: "", brief: "" });
   const [activity, setActivity] = useState(false);
   const [draft, setDraft] = useState("");
   const [stream, setStream] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [consulting, setConsulting] = useState<{ from: string; to: string; question: string } | null>(null);
+  /** The open organisation channel, the posts this brief has already landed, and the run behind them. */
+  const [channelId, setChannelId] = useState<string | null>(null);
+  const [livePosts, setLivePosts] = useState<Message[]>([]);
+  const [liveRunId, setLiveRunId] = useState<string | null>(null);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryDraft, setMemoryDraft] = useState({ text: "", kind: "decision" as "note" | "decision" | "glossary" });
+  const [proposals, setProposals] = useState<{ kind: "note" | "decision" | "glossary"; text: string }[]>([]);
+  const [triggerOpen, setTriggerOpen] = useState(false);
+  const [triggerLabel, setTriggerLabel] = useState("");
+  /** The origin is only known in the browser, so the copy line is filled after mount rather than rendered from a guess. */
+  const [origin, setOrigin] = useState("");
+  useEffect(() => { setOrigin(window.location.origin); }, []);
   const [atBottom, setAtBottom] = useState(true);
-  const [dialog, setDialog] = useState<null | "agent" | "routine" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent"; id: string; name: string } | null>(null);
+  const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | Run>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -217,7 +251,7 @@ export default function Workbench() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(String((e.target as HTMLElement | null)?.tagName));
-      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) { e.preventDefault(); searchRef.current?.focus(); setPane(null); }
+      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) { e.preventDefault(); setPane(null); setPanelOpen(true); setTimeout(() => searchRef.current?.focus(), 40); }
       if (e.key === "Escape" && typing) (e.target as HTMLElement).blur();
     };
     window.addEventListener("keydown", onKey);
@@ -246,18 +280,27 @@ export default function Workbench() {
     finally { setBusy(false); }
   }
 
+  /** Assistant rows in the subject the reader was watching: one seat's thread, or one channel. */
+  const rowsFor = (board: Board, subject: { agentId?: string; teamId?: string }) =>
+    board.messages.filter(m => m.role === "assistant" && (subject.agentId ? m.agentId === subject.agentId : m.teamId === subject.teamId));
+
   /** The server writes the partial when it sees the reader go away, which is a moment after we
    * abort — so poll for the row instead of showing a reply that is not stored yet. */
-  async function awaitAssistantRow(targetId: string, before: number, tries = 10): Promise<Board | null> {
+  async function awaitAssistantRow(subject: { agentId?: string; teamId?: string }, before: number, tries = 10): Promise<Board | null> {
     for (let i = 0; i < tries; i++) {
       await new Promise(r => setTimeout(r, 300));
       const r = await fetch("/api/board", { cache: "no-store" }).catch(() => null);
       if (!r?.ok) continue;
       const j = (await r.json()) as Board;
-      if (j.messages.filter(m => m.agentId === targetId && m.role === "assistant").length > before) return j;
+      if (rowsFor(j, subject).length > before) return j;
     }
     return null;
   }
+
+  const lastAnswerChars = (board: Board, subject: { agentId?: string; teamId?: string }) => {
+    const last = [...rowsFor(board, subject)].reverse()[0];
+    return last ? splitReasoning(last.content).answer.length : 0;
+  };
 
   async function send(content: string): Promise<boolean> {
     if (!agent) return false;
@@ -283,7 +326,7 @@ export default function Workbench() {
           if (!line) continue;
           let ev: { type: string; text?: string; board?: Board; error?: string };
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "delta") { answer += ev.text ?? ""; setStream(answer); }
+          if (ev.type === "delta") { answer += ev.text ?? ""; setStream(answer); setConsulting(null); }
           else if (ev.type === "consult") setConsulting({ from: String((ev as { from?: string }).from), to: String((ev as { to?: string }).to), question: String((ev as { question?: string }).question) });
           else if (ev.type === "end") finalBoard = ev.board ?? null;
           else if (ev.type === "error") setToast(ev.error || "The reply could not be completed");
@@ -294,10 +337,10 @@ export default function Workbench() {
       return true;
     } catch (e) {
       if (e instanceof Error && e.name === "AbortError") {
-        const board = await awaitAssistantRow(agent.id, answeredBefore);
+        const board = await awaitAssistantRow({ agentId: agent.id }, answeredBefore);
         if (board) setData(board); else void load();
         setToast(board
-          ? `Stopped after ${answerChars(board, agent.id)} characters. What arrived is saved and marked partial.`
+          ? `Stopped after ${lastAnswerChars(board, { agentId: agent.id })} characters. What arrived is saved and marked partial.`
           : "Stopped. The server was still writing the partial reply — reload to see it.");
         return true;
       }
@@ -313,18 +356,97 @@ export default function Workbench() {
 
   const stop = () => abortRef.current?.abort();
 
+  /**
+   * Brief the organisation. This is the record Feature 11 exists to make: each teammate the lead
+   * pulls in lands as its own channel post while the brief runs, and the lead's report names the
+   * posts it built on. Stop is offered only once the report is streaming — aborting mid-hop would
+   * cancel a turn that has already spent its summons.
+   */
+  async function brief(content: string): Promise<boolean> {
+    if (!channel || !briefLead) return false;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const postedBefore = (data?.messages ?? []).filter(m => m.teamId === channel.id && m.role === "assistant").length;
+    setBusy(true); setPending(content); setStream(""); setLivePosts([]); setLiveRunId(null);
+    try {
+      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "briefOrg", teamId: channel.id, content }), signal: controller.signal });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "The brief was not accepted");
+      if (!(r.headers.get("content-type") || "").includes("text/event-stream")) { setData((await r.json()).board); return true; }
+      const reader = r.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "", answer = "", finalBoard: Board | null = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find(l => l.startsWith("data: "));
+          if (!line) continue;
+          let ev: { type: string; text?: string; board?: Board; error?: string; post?: Message; runId?: string; from?: string; to?: string; question?: string };
+          try { ev = JSON.parse(line.slice(6)); } catch { continue; }
+          if (ev.type === "delta") { answer += ev.text ?? ""; setStream(answer); setConsulting(null); }
+          else if (ev.type === "start") setLiveRunId(ev.runId ?? null);
+          else if (ev.type === "consult") setConsulting({ from: String(ev.from), to: String(ev.to), question: String(ev.question) });
+          else if (ev.type === "post" && ev.post) { setLivePosts(p => [...p, ev.post!]); setConsulting(null); }
+          else if (ev.type === "end") finalBoard = ev.board ?? null;
+          else if (ev.type === "error") setToast(ev.error || "The brief did not complete");
+        }
+      }
+      if (!finalBoard) throw new Error("The connection dropped before the report finished. Every post that had landed is saved.");
+      setData(finalBoard);
+      setLivePosts([]);
+      return true;
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") {
+        const board = await awaitAssistantRow({ teamId: channel.id }, postedBefore);
+        if (board) setData(board); else void load();
+        setToast(board
+          ? `Stopped after ${lastAnswerChars(board, { teamId: channel.id })} characters of the report. What had already been posted stays in the channel.`
+          : "Stopped. The server was still writing the channel rows — reload to see what landed.");
+        return true;
+      }
+      setToast(e instanceof Error ? e.message : "Something went wrong"); return false;
+    }
+    finally { abortRef.current = null; setBusy(false); setPending(null); setStream(""); setConsulting(null); }
+  }
+
+  const submitBrief = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const content = draft.trim();
+    if (!content || busy || !briefLead) return;
+    setDraft("");
+    if (!(await brief(content))) setDraft(content);
+  };
+
+  const openChannel = (teamId: string) => { setChannelId(teamId); setPane("channel"); setLivePosts([]); setLiveRunId(null); setMemoryOpen(false); setProposals([]); setTriggerOpen(false); setTriggerLabel(""); setPanelOpen(true); setRail(false); };
+
+  const channel = data?.teams.find(t => t.id === channelId) ?? null;
+  const channelSeats = useMemo(() => (data && channel ? data.agents.filter(a => a.teamId === channel.id) : []), [data, channel]);
+  /** The same rule the server applies, imported rather than restated: the UI must not name a lead a brief would not reach. */
+  const briefLead = useMemo(() => (channel ? resolveLead(channelSeats, channel.leadAgentId) ?? null : null), [channel, channelSeats]);
+  /** Stored posts, plus the ones this brief has already landed before the board refresh arrives. */
+  const channelFeed = useMemo(() => (data && channel ? [...data.messages.filter(m => m.teamId === channel.id), ...livePosts] : []), [data, channel, livePosts]);
+  /** The ceiling the server will actually apply to this lead, so the bar never promises a summons it would refuse. */
+  const leadCeiling = summonCeiling({ envMax: data?.limits.maxDelegations ?? 0, seatMaxTurns: briefLead?.capabilities?.maxTurns ?? null });
+  const orgMemories = useMemo(() => (data && channel ? data.memories.filter(m => m.teamId === channel.id) : []), [data, channel]);
+  /** A note something newer supersedes stays listed, struck through, so a correction is visible as one. */
+  const staleMemoryIds = useMemo(() => new Set(orgMemories.map(m => m.supersedes).filter((id): id is string => !!id)), [orgMemories]);
+  const orgTriggers = useMemo(() => (data && channel ? data.triggers.filter(t => t.teamId === channel.id) : []), [data, channel]);
+
   /** True once the server has stored the message being answered: the echo would be a duplicate. */
   const threadHasPending = !!pending && (data?.messages ?? []).some(m => m.role === "user" && m.content === pending);
 
   const agent = data?.agents.find(a => a.id === agentId) ?? data?.agents[0];
   const thread = useMemo(() => (data && agent ? data.messages.filter(m => m.agentId === agent.id) : []), [data, agent]);
   const byId = (id: string) => data?.agents.find(a => a.id === id);
-  const answering = useMemo(() => {
-    if (!data || !agent) return null;
-    if (agent.provider === "local") return null;
-    if (agent.provider === "auto") return data.profiles.find(p => p.configured) ?? null;
-    return data.profiles.find(p => p.name === agent.provider) ?? null;
-  }, [data, agent]);
+  /** Which model a seat would really be answered by, in the seat's own words and the server's. */
+  const profileOf = (providerName: string | undefined) => (!data || !providerName || providerName === "local"
+    ? null
+    : providerName === "auto" ? data.profiles.find(p => p.configured) ?? null : data.profiles.find(p => p.name === providerName) ?? null);
+  const answering = profileOf(agent?.provider);
+  const leadAnswering = profileOf(briefLead?.provider);
 
   const pendingApprovals = data?.approvals.filter(a => a.status === "PENDING") ?? [];
   /** Only a message the gateway actually produced counts as a reply; a seeded greeting does not. */
@@ -333,6 +455,9 @@ export default function Workbench() {
   const delegationsToday = (data?.delegations ?? []).filter(d => d.createdAt.slice(0, 10) === new Date().toISOString().slice(0, 10));
   const lastMessageOf = (id: string) => (data?.messages ?? []).filter(m => m.agentId === id).pop();
   const messageCountOf = (id: string) => (data?.messages ?? []).filter(m => m.agentId === id).length;
+  /** Posts in an organisation's channel — the count on the bench's channel entry. */
+  const channelCountOf = (teamId: string) => (data?.messages ?? []).filter(m => m.teamId === teamId).length;
+  const lastPostOf = (teamId: string) => (data?.messages ?? []).filter(m => m.teamId === teamId).pop();
   /** One hue per agent, carried on the element via custom properties; never a status colour. */
   const hueOf = (id: string | null | undefined) => hueVars(hueFor(id ?? undefined));
   const hue = hueOf(agent?.id);
@@ -385,17 +510,20 @@ export default function Workbench() {
    * SSE fact this client itself received. Nothing here is decorative. */
   const inFlight = useMemo(() => {
     const rows: { label: string; note?: string }[] = [];
+    // Whichever subject this turn belongs to: a seat's thread, or an organisation's channel.
+    const subject = (pane === "channel" ? briefLead?.name : agent?.name) ?? "The agent";
     if (consulting) rows.push({ label: `${consulting.from} is asking ${consulting.to}`, note: consulting.question });
-    if (busy && stream) { const r = splitReasoning(stream); rows.push({ label: `${agent?.name ?? "The agent"} is ${r.reasoning && !r.answer ? "reasoning" : "answering"}`, note: `${stream.length} chars received · saved when the reply completes` }); }
-    else if (busy) rows.push({ label: `${agent?.name ?? "The agent"} is waiting on the model`, note: "the request was sent; nothing has arrived yet" });
+    if (busy && pane === "channel" && livePosts.length) rows.push({ label: `${livePosts.length} teammate post${livePosts.length === 1 ? "" : "s"} landed in ${channel?.name ?? "the channel"}`, note: "each is stored with its own author, before the report is written" });
+    if (busy && stream) { const r = splitReasoning(stream); rows.push({ label: `${subject} is ${r.reasoning && !r.answer ? "reasoning" : "answering"}`, note: `${stream.length} chars received · saved when the reply completes` }); }
+    else if (busy) rows.push({ label: `${subject} is waiting on the model`, note: "the request was sent; nothing has arrived yet" });
     return rows;
-  }, [consulting, busy, stream, agent?.name]);
+  }, [consulting, busy, stream, agent?.name, briefLead?.name, pane, livePosts.length, channel?.name]);
   const waitingRows = useMemo(() => {
     if (!data) return [];
     return data.runs.filter(r => ["WAITING_FOR_TOOL", "QUEUED", "RUNNING"].includes(r.status)).map(r => ({
       run: r, tone: toneOf(r.status, isSample(r)) as Tone,
-      note: r.status === "RUNNING" ? "executing now — the scheduler claimed it when this workspace was read"
-        : r.status === "WAITING_FOR_TOOL" ? "there is no worker on this server, so it stays waiting"
+      note: r.status === "RUNNING" ? r.routineId ? "executing now — the scheduler claimed it when this workspace was read" : "a brief is being answered in its channel right now"
+        : r.status === "WAITING_FOR_TOOL" ? r.routineId ? "there is no worker on this server, so it stays waiting" : "the daily model budget stopped this brief part-way"
         : "queued behind the worker",
     }));
   }, [data]);
@@ -407,11 +535,27 @@ export default function Workbench() {
   const upcoming = data.routines.filter(r => r.enabled && r.nextRunAt && new Date(r.nextRunAt).getTime() > nowMs).sort((x, y) => String(x.nextRunAt).localeCompare(String(y.nextRunAt))).slice(0, 5);
   const callsToday = data.limits.usage.reduce((n, u) => n + u.calls, 0);
   const realPending = pendingApprovals.filter(a => !a.detail.includes("Sample approval"));
-  const panes: { id: Pane; label: string; icon: LucideIcon; count?: number; runs?: number; sample?: boolean }[] = [
-    { id: "scheduler", label: "Scheduler", icon: CalendarDays, count: data.routines.filter(r => r.enabled).length, runs: realRuns.length || data.runs.length, sample: !realRuns.length && data.runs.length > 0 },
-    { id: "tools", label: "Tools & MCP", icon: Compass, count: data.connections.length },
+  // The channel is reached from the bench, so the bench stays on screen while the channel is open.
+  const section: Pane | "agents" = !pane || pane === "channel" ? "agents" : pane;
+  const panelTitle = { overview: "Shortcuts", agents: "The bench", org: "Reporting lines", scheduler: "Routines", tools: "Connectors", settings: "Workspace" }[section];
+  const agentMatch = (a: Agent) => (!filter || `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase())) && (agentTab === "all" || (agentTab === "active") === (a.status === "ACTIVE"));
+  const activeTeam = data.teams.find(t => t.id === orgSel) ?? data.teams[0];
+  const railItems: { id: Pane | "agents"; label: string; icon: LucideIcon; badge?: number }[] = [
+    { id: "overview", label: "Overview", icon: LayoutDashboard, badge: data.overview.pendingApprovals },
+    { id: "agents", label: "Agents", icon: Bot },
+    { id: "org", label: "Organisation", icon: Network },
+    { id: "scheduler", label: "Automations", icon: CalendarDays },
+    { id: "tools", label: "Integrations", icon: Compass },
     { id: "settings", label: "Settings", icon: Settings2 },
   ];
+  /** Re-clicking the open section folds the panel away on wide screens; on phones the panel takes the full width until a choice is made. */
+  const goSection = (id: Pane | "agents") => {
+    const wide = window.innerWidth > 860;
+    if (wide && section === id) { setPanelOpen(o => !o); return; }
+    setPane(id === "agents" ? null : id);
+    setPanelOpen(true);
+    setRail(true);
+  };
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -440,14 +584,18 @@ export default function Workbench() {
     const seatNote = (id: string | null) => (id ? `${byId(id)?.name ?? "removed seat"} · ` : "");
     for (const r of data.runs) {
       const sample = isSample(r);
-      recordRows.push({ id: `r${r.id}`, label: r.title, note: `${seatNote(r.agentId)}${humanStamps(r.summary.replace(/^Sample run: /, ""))}`, tone: toneOf(r.status, sample), sample, state: r.status, time: r.startedAt, open: () => { setDialog(r); } });
+      const origin = r.initiator === "person" ? "" : `${r.initiator === "routine" ? "scheduled" : "trigger"} · `;
+      recordRows.push({ id: `r${r.id}`, label: r.title, note: `${origin}${seatNote(r.agentId)}${humanStamps(r.summary.replace(/^Sample run: /, ""))}`, tone: toneOf(r.status, sample), sample, state: r.status, time: r.startedAt, open: () => { setDialog(r); } });
     }
     for (const d of delegationsToday) {
       const asked = byId(d.fromAgentId)?.name ?? "removed seat";
       const peer = byId(d.toAgentId)?.name ?? "removed seat";
-      recordRows.push({ id: `d${d.id}`, label: `${asked} asked ${peer}`, note: d.question, tone: "idle", time: d.createdAt, open: () => { openSeat(d.fromAgentId); } });
+      // A summons from a brief lives in the channel as its own post; a hop inside a seat's reply
+      // lives in that thread. The row opens whichever of the two actually holds the answer.
+      const post = d.messageId ? data.messages.find(m => m.id === d.messageId) : undefined;
+      recordRows.push({ id: `d${d.id}`, label: `${asked} asked ${peer}`, note: d.question, tone: "idle", time: d.createdAt, open: () => { if (post?.teamId) openChannel(post.teamId); else openSeat(d.fromAgentId); } });
     }
-    for (const e of data.events.filter(x => ["org.created", "team.created", "run.cancelled", "approval.requested", "routine.created", "agent.created"].includes(x.type))) {
+    for (const e of data.events.filter(x => ["org.created", "org.briefed", "org.lead", "team.created", "run.cancelled", "approval.requested", "routine.created", "agent.created"].includes(x.type))) {
       recordRows.push({ id: `e${e.id}`, label: e.type.replace(/\./g, " · ").replace(/_/g, " "), note: e.detail, tone: "idle", time: e.createdAt });
     }
     for (const a of data.approvals) {
@@ -458,56 +606,168 @@ export default function Workbench() {
     recordRows.sort((x, y) => y.time.localeCompare(x.time));
   }
 
-  return <div className={`workbench ${activity ? "show-activity" : ""}`}>
-    <aside className={`bench ${rail ? "open" : ""}`}>
-      <div className="bench-top">
-        <span className="mark"><Sparkles size={15} strokeWidth={2.2} /></span>
-        <div className="brand"><span className="wordmark">Arova</span><span className="brand-ws">{data.workspace.name}</span></div>
-        <button className="icon-btn push" title="New agent" onClick={() => { setDialog("agent"); setRail(false); }}><Plus size={16} /></button>
+  return <div className={`workbench ${activity ? "show-activity" : ""} ${panelOpen ? "" : "panel-closed"} ${rail ? "mpanel" : ""}`}>
+    <nav className="iconrail" aria-label="Sections">
+      <button className="rail-logo" title={`Arova · ${data.workspace.name}`} onClick={() => { setPane("overview"); setPanelOpen(true); setRail(false); }}><Sparkles size={18} strokeWidth={2.2} /></button>
+      <div className="rail-items">
+        {railItems.map(item => <button key={item.id} className={`rail-btn ${section === item.id ? "on" : ""}`} title={item.label} aria-label={item.label} aria-current={section === item.id ? "page" : undefined} onClick={() => goSection(item.id)}>
+          <item.icon size={19} strokeWidth={1.8} />
+          <span className="rail-label">{item.label.split(" ")[0]}</span>
+          {item.badge ? <i className="rail-badge">{item.badge}</i> : null}
+        </button>)}
       </div>
-      <div className="bench-search">
-        <input ref={searchRef} className="search" placeholder="Find a seat" value={filter} onChange={e => setFilter(e.target.value)} aria-label="Find a seat" />
-        <kbd className="only-wide">{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"}</kbd>
+      <div className="rail-foot">
+        <button className="rail-btn" title={panelOpen ? "Hide the section panel" : "Show the section panel"} aria-label="Toggle section panel" onClick={() => setPanelOpen(o => !o)}>{panelOpen ? <PanelLeftClose size={18} strokeWidth={1.8} /> : <PanelLeftOpen size={18} strokeWidth={1.8} />}</button>
+        <button className="rail-status" title={data.modelConfigured ? "A model is ready" : "No model key configured"} onClick={() => { setSettingsTab("models"); setPane("settings"); setPanelOpen(true); }}><span className={`pulse ${data.modelConfigured ? "on" : ""}`} /></button>
       </div>
-      <div className="bench-list">
-        {teamGroups.map(g => {
-          const members = g.members;
-          if (filter && !members.some(a => `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase()))) return null;
-          const roots = g.charted ? orgTree(members.map(a => ({ name: a.name, role: a.role, instructions: a.role, reportsTo: data.agents.find(b => b.id === a.managerId && b.teamId === g.team.id)?.name ?? null }))) : [];
-          const shown = (a: Agent) => !filter || `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase());
-          return <div className="bench-group" key={g.team.id}>
-            <div className="group-label"><Network size={11} /><span>{g.team.name}</span><span className="group-count">{g.members.length}</span></div>
-            {g.charted
-              ? roots.map(node => <SeatBranch key={node.name} node={node} depth={0} members={data.agents} current={agent?.id} toneOfSeat={id => seatTone.get(id) ?? "idle"} counts={messageCountOf} lastAt={lastMessageOf} visible={shown} onOpen={openSeat} />)
-              : members.map(a => <SeatNode key={a.id} selected={!pane && agent?.id === a.id} agent={a} secondary={a.role} dot={seatTone.get(a.id) ?? "idle"} count={messageCountOf(a.id)} lastAt={lastMessageOf(a.id)?.createdAt} onSelect={() => openSeat(a.id)} />)}
-          </div>;
-        })}
-        {(() => {
-          const members = unfiled.filter(a => `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase()));
-          if (!members.length) return filter && teamGroups.length ? null : <div className="bench-empty-sheet"><h3>No one here yet</h3><p>Add the first seat and this board becomes your organisation.</p><button className="primary" onClick={() => setDialog("agent")}><Plus size={14} />Add agent</button></div>;
-          return <div className="bench-group">
-            <div className="group-label"><Users size={11} /><span>Bench</span><span className="group-count">{members.length}</span></div>
-            {members.map(a => <SeatNode key={a.id} selected={!pane && agent?.id === a.id} agent={a} secondary={a.role} dot={seatTone.get(a.id) ?? "idle"} count={messageCountOf(a.id)} lastAt={lastMessageOf(a.id)?.createdAt} onSelect={() => openSeat(a.id)} />)}
-          </div>;
-        })()}
-        {filter && !teamGroups.some(g => g.members.some(a => `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase()))) && !unfiled.some(a => `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase())) && <p className="bench-none">No seat matches that name or role.</p>}
+    </nav>
+
+    <aside className={`sidepanel ${rail ? "open" : ""}`} aria-label={`${panelTitle} panel`}>
+      <div className="sp-head">
+        <div className="sp-title"><h2>{panelTitle}</h2></div>
+        {(section === "agents" || section === "org" || section === "scheduler") && <button className="sp-icon" title={section === "agents" ? "New agent" : section === "org" ? "New team" : "New routine"} aria-label="Create new" onClick={() => {
+          if (section === "agents") setDialog("agent");
+          else if (section === "org") setDialog("team");
+          else { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }
+        }}><Plus size={16} /></button>}
+        <button className="sp-icon sp-collapse" title="Collapse panel" aria-label="Collapse panel" onClick={() => { setPanelOpen(false); setRail(false); }}><PanelLeftClose size={15} /></button>
       </div>
-      <nav className="index-foot">
-        {panes.map(p => <button key={p.id} className={`pane-link ${pane === p.id ? "on" : ""}`} onClick={() => { setPane(p.id); setRail(false); }}><p.icon size={16} strokeWidth={1.9} /><span>{p.label}</span>{p.count ? <span className="count">{p.count}</span> : null}{p.runs ? <span className={`count ${p.sample ? "muted" : ""}`} title={p.sample ? "seeded sample data, not a real run" : `${p.runs} recorded runs`}>{p.runs}</span> : null}</button>)}
-        <div className="foot-status">
-          <span className={`pulse ${data.modelConfigured ? "on" : ""}`} />
-          <span>{data.modelConfigured ? "Model ready" : "No model key"}</span>
+
+      {section === "overview" && <div className="sp-scroll">
+        <div className="sp-group">Quick actions</div>
+        <button className="sp-item" onClick={() => setDialog("agent")}><span className="sp-item-icon"><Bot size={16} /></span><span className="sp-item-main"><b>New agent</b><em>Add someone to the crew</em></span></button>
+        <button className="sp-item" onClick={() => setDialog("team")}><span className="sp-item-icon"><Network size={16} /></span><span className="sp-item-main"><b>New team</b><em>Group agents and reporting lines</em></span></button>
+        <button className="sp-item" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><span className="sp-item-icon"><CalendarDays size={16} /></span><span className="sp-item-main"><b>New routine</b><em>Put work on a schedule</em></span></button>
+        <button className="sp-item" onClick={() => { setActivity(true); setRail(false); }}><span className="sp-item-icon"><Activity size={16} /></span><span className="sp-item-main"><b>Activity feed</b><em>{realPending.length ? `${realPending.length} awaiting your review` : "Everything the server stored"}</em></span></button>
+        <div className="sp-group">Workspace status</div>
+        <div className="sp-card">
+          <div className="sp-kv"><span>Model</span><span className={`chip ${data.modelConfigured ? "ran" : "idle"}`}><i />{data.modelConfigured ? "ready" : "no key"}</span></div>
+          <div className="sp-kv"><span>Calls today</span><b className="mono">{callsToday}{data.limits.dailyModelCalls ? ` / ${data.limits.dailyModelCalls}` : ""}</b></div>
+          <div className="sp-kv"><span>Agents</span><b className="mono">{data.agents.length}</b></div>
+          <div className="sp-kv"><span>Teams</span><b className="mono">{data.teams.length}</b></div>
         </div>
-      </nav>
+      </div>}
+
+      {section === "agents" && <>
+        <Tabs value={agentTab} onChange={setAgentTab} items={[{ id: "all", label: "All", count: data.agents.length }, { id: "active", label: "Active", count: data.agents.filter(a => a.status === "ACTIVE").length }, { id: "paused", label: "Paused", count: data.agents.filter(a => a.status !== "ACTIVE").length }]} />
+        <div className="sp-search"><input ref={searchRef} placeholder="Find an agent" value={filter} onChange={e => setFilter(e.target.value)} aria-label="Find an agent" /><kbd className="only-wide">{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘K" : "Ctrl K"}</kbd></div>
+        <div className="sp-scroll">
+          {teamGroups.map(g => {
+            const members = g.members.filter(agentMatch);
+            if (!members.length) return null;
+            const roots = g.charted ? orgTree(g.members.map(a => ({ name: a.name, role: a.role, instructions: a.role, reportsTo: data.agents.find(b => b.id === a.managerId && b.teamId === g.team.id)?.name ?? null }))) : [];
+            return <div className="bench-group" key={g.team.id}>
+              <div className="group-label"><Network size={11} /><span>{g.team.name}</span><span className="group-count">{members.length}</span>
+                <button type="button" className={`group-channel push ${pane === "channel" && channelId === g.team.id ? "on" : ""}`} onClick={() => openChannel(g.team.id)} title={`Open the ${g.team.name} channel`} aria-label={`Open the ${g.team.name} channel`}><MessageSquare size={11} /><span>{channelCountOf(g.team.id)}</span></button>
+              </div>
+              {g.charted
+                ? roots.map(node => <SeatBranch key={node.name} node={node} depth={0} members={data.agents} current={agent?.id} toneOfSeat={id => seatTone.get(id) ?? "idle"} counts={messageCountOf} lastAt={lastMessageOf} visible={agentMatch} onOpen={openSeat} />)
+                : members.map(a => <SeatNode key={a.id} selected={!pane && agent?.id === a.id} agent={a} secondary={a.role} dot={seatTone.get(a.id) ?? "idle"} count={messageCountOf(a.id)} lastAt={lastMessageOf(a.id)?.createdAt} onSelect={() => openSeat(a.id)} />)}
+            </div>;
+          })}
+          {unfiled.filter(agentMatch).length > 0 && <div className="bench-group">
+            <div className="group-label"><Users size={11} /><span>Bench</span><span className="group-count">{unfiled.filter(agentMatch).length}</span></div>
+            {unfiled.filter(agentMatch).map(a => <SeatNode key={a.id} selected={!pane && agent?.id === a.id} agent={a} secondary={a.role} dot={seatTone.get(a.id) ?? "idle"} count={messageCountOf(a.id)} lastAt={lastMessageOf(a.id)?.createdAt} onSelect={() => openSeat(a.id)} />)}
+          </div>}
+          {!data.agents.some(agentMatch) && (data.agents.length
+            ? <p className="bench-none">No agent matches that search or tab.</p>
+            : <div className="bench-empty-sheet"><h3>No one here yet</h3><p>Add the first agent to start your crew.</p><button className="primary" onClick={() => setDialog("agent")}><Plus size={14} />Add agent</button></div>)}
+        </div>
+      </>}
+
+      {section === "org" && <>
+        <Tabs value={orgTab} onChange={setOrgTab} items={[{ id: "teams", label: "Teams", count: data.teams.length }, { id: "bench", label: "Bench", count: unfiled.length }]} />
+        <div className="sp-scroll">
+          {orgTab === "teams" && <>
+            {!data.teams.length && <div className="bench-empty-sheet"><h3>No teams yet</h3><p>Teams give agents shared context and reporting lines.</p><button className="primary" onClick={() => setDialog("team")}><Plus size={14} />New team</button></div>}
+            {data.teams.map(t => {
+              const size = data.agents.filter(a => a.teamId === t.id).length;
+              const lines = data.agents.filter(a => a.teamId === t.id && a.managerId).length;
+              return <button key={t.id} className={`sp-item ${activeTeam?.id === t.id ? "on" : ""}`} onClick={() => { setOrgSel(t.id); setPane("org"); setRail(false); }}>
+                <span className="sp-item-icon"><Network size={16} /></span>
+                <span className="sp-item-main"><b>{t.name}</b><em>{size} seat{size === 1 ? "" : "s"} · {lines ? `${lines} reporting line${lines === 1 ? "" : "s"}` : "flat"}</em></span>
+              </button>;
+            })}
+            {data.teams.length > 0 && <button className="sp-item sp-item-add" onClick={() => setDialog("team")}><span className="sp-item-icon"><Plus size={16} /></span><span className="sp-item-main"><b>New team</b></span></button>}
+          </>}
+          {orgTab === "bench" && <>
+            {!unfiled.length && <p className="bench-none">Everyone belongs to a team.</p>}
+            {unfiled.map(a => <SeatNode key={a.id} selected={orgSel === a.id} agent={a} secondary={a.role} dot={seatTone.get(a.id) ?? "idle"} count={messageCountOf(a.id)} lastAt={lastMessageOf(a.id)?.createdAt} onSelect={() => { setOrgSel(a.id); setPane("org"); setRail(false); }} />)}
+          </>}
+        </div>
+      </>}
+
+      {section === "scheduler" && <>
+        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }]} />
+        <div className="sp-scroll">
+          {autoTab === "routines" && <>
+            {!data.routines.length && <p className="bench-none">No routines yet. Use + to add one.</p>}
+            {data.routines.map(r => <button key={r.id} className="sp-item" onClick={() => { setAutoTab("routines"); setPane("scheduler"); setRail(false); }}>
+              <span className="sp-item-icon"><CalendarDays size={16} /></span>
+              <span className="sp-item-main"><b>{r.name}</b><em>{byId(r.agentId)?.name ?? "Agent"} · {describeSchedule(r.schedule, r.timezone)}</em></span>
+              <span className={`sp-dot ${r.enabled ? "ran" : ""}`} title={r.enabled ? "enabled" : "paused"} />
+            </button>)}
+          </>}
+          {autoTab === "runs" && <>
+            {!data.runs.length && <p className="bench-none">No runs recorded yet.</p>}
+            {data.runs.slice(0, 40).map(r => <button key={r.id} className="sp-item" onClick={() => { setAutoTab("runs"); setPane("scheduler"); setRail(false); setDialog(r); }}>
+              <span className="sp-item-icon"><Activity size={16} /></span>
+              <span className="sp-item-main"><b>{r.title}</b><em>{byId(r.agentId)?.name ?? "removed agent"} · {stamp(r.startedAt)}</em></span>
+              <span className={`sp-dot ${toneOf(r.status, isSample(r))}`} title={isSample(r) ? "sample" : r.status.toLowerCase()} />
+            </button>)}
+          </>}
+        </div>
+      </>}
+
+      {section === "tools" && <>
+        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
+        <div className="sp-scroll">
+          {toolsTab === "connectors" && [...new Set(toolCatalog.map(t => t.category))].map(cat => <div key={cat}>
+            <div className="sp-group">{cat}</div>
+            {toolCatalog.filter(t => t.category === cat).map(t => <button key={t.slug} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Compass size={16} /></span><span className="sp-item-main"><b>{t.name}</b><em>not connected</em></span></button>)}
+          </div>)}
+          {toolsTab === "mcp" && <>
+            {!mcpCount && <p className="bench-none">No MCP server configured. Add one in an agent’s capabilities.</p>}
+            {data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <button key={`${a.id}-${i}`} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Link2 size={16} /></span><span className="sp-item-main"><b>{srv.name || "unnamed"}</b><em>{a.name} · {srv.transport}</em></span></button>))}
+          </>}
+        </div>
+      </>}
+
+      {section === "settings" && <div className="sp-scroll">
+        <div className="sp-group">Preferences</div>
+        {([
+          { id: "workspace", label: "Workspace", note: "Name and time zone", icon: Building2 },
+          { id: "models", label: "Models & usage", note: "Providers and today’s calls", icon: Cpu },
+          { id: "limits", label: "Deployment limits", note: "What cannot run here", icon: Gauge },
+        ] as const).map(s => <button key={s.id} className={`sp-item ${settingsTab === s.id ? "on" : ""}`} onClick={() => { setSettingsTab(s.id); setPane("settings"); setRail(false); }}><span className="sp-item-icon"><s.icon size={16} /></span><span className="sp-item-main"><b>{s.label}</b><em>{s.note}</em></span></button>)}
+      </div>}
     </aside>
-    {rail && <div className="scrim-rail" onClick={() => setRail(false)} />}
 
     <main className="sheet">
       <header className="sheet-bar">
-        <button className="icon-btn only-narrow" onClick={() => setRail(true)} aria-label="Open the organisation"><Menu size={17} /></button>
-        {pane ? <>
-          <button className="icon-btn" onClick={() => setPane(null)} aria-label="Back to the thread"><ArrowLeft size={16} /></button>
-          <div><h1>{pane[0].toUpperCase() + pane.slice(1)}</h1><div className="sub">{pane === "scheduler" ? `${data.routines.length} routine${data.routines.length === 1 ? "" : "s"} · ${data.runs.length} run${data.runs.length === 1 ? "" : "s"}` : pane === "tools" ? "nothing is connected" : "workspace"}</div></div>
+        <button className="icon-btn only-mobile" onClick={() => setRail(true)} aria-label="Open the section menu"><Menu size={17} /></button>
+        {pane === "channel" && channel ? <>
+          <button className="icon-btn" onClick={() => setPane(null)} aria-label="Back to the seat thread"><ArrowLeft size={16} /></button>
+          <div className="ident" style={hueOf(briefLead?.id)}>
+            <span className="ident-tile"><Network size={17} /></span>
+            <div className="ident-main">
+              <h1>{channel.name}</h1>
+              <p className="ident-role">{channelSeats.length} seat{channelSeats.length === 1 ? "" : "s"} · {briefLead ? `led by ${briefLead.name}` : "no seat to brief yet"}</p>
+            </div>
+          </div>
+          <div className="facts">
+            <span className="fact mono" title="posts stored for this organisation">{channelFeed.length} post{channelFeed.length === 1 ? "" : "s"}</span>
+            <span className="fact" title={`The server allows ${data.limits.maxDelegations} hop(s) per reply and ${briefLead?.name ?? "the lead"} is allowed ${briefLead?.capabilities?.maxTurns ?? "its default"} turns, so a brief pulls in at most ${leadCeiling} teammate(s).`}>{leadCeiling === 0 ? "summons off" : <>≤{leadCeiling} summons<small>/brief</small></>}</span>
+            {leadAnswering && <span className="fact"><b>{leadAnswering.label}</b><s>{leadAnswering.model}</s></span>}
+          </div>
+          <div className="push" />
+          <button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button>
+          <button className="ghost" onClick={() => { setOrgSel(channel.id); setPane("org"); }}><SlidersHorizontal size={15} />Organisation</button>
+        </> : pane ? <>
+          {pane !== "overview" && <button className="icon-btn" onClick={() => setPane("overview")} aria-label="Back to overview"><ArrowLeft size={16} /></button>}
+          <div className="page-heading"><h1>{pane === "overview" ? "Overview" : pane === "org" ? "Organisation" : pane === "scheduler" ? "Automations" : pane === "tools" ? "Integrations" : "Settings"}</h1></div>
+          <div className="push" />
+          {pane === "overview" && <><span className="header-date">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span><button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button><button className="header-create" onClick={() => setDialog("agent")}><Plus size={16} /> New agent</button></>}
         </> : agent && <>
           <div className="ident" style={hue}>
             <span className="ident-tile"><FaceIcon agent={agent} size={17} /></span>
@@ -529,6 +789,152 @@ export default function Workbench() {
       </header>
 
       <div className="sheet-body" ref={bodyRef}>
+        {pane === "overview" && <div className="overview-page">
+          <div className="overview-content">
+            <div className="overview-section-head"><div><h2>Workspace pulse</h2></div><span className="section-aside"><span className="pulse on" /> Live from your workspace</span></div>
+            <div className="pulse-strip">
+              <span><b>{data.overview.activeAgents}</b> of {data.agents.length} seats active</span>
+              <span><b>{data.overview.enabledRoutines}</b> automation{data.overview.enabledRoutines === 1 ? "" : "s"} on schedule</span>
+              <span><b>{data.overview.completedRuns}</b> run{data.overview.completedRuns === 1 ? "" : "s"} completed <span className="muted">· real rows, not samples</span></span>
+              <span><b>{data.overview.pendingApprovals}</b> waiting on you</span>
+              <span className="push mono">{callsToday} of {data.limits.dailyModelCalls || "no"} model calls today</span>
+            </div>
+            <div className="overview-section-head agent-heading"><div><h2>Meet your agents <span className="subtle-count">{data.agents.length}</span></h2></div><button className="section-action" onClick={() => setDialog("agent")}>Add an agent <Plus size={16} /></button></div>
+            <div className="agent-grid">{data.agents.map((a) => <button className="agent-card" key={a.id} onClick={() => openSeat(a.id)} style={hueOf(a.id)}><span className="agent-card-top"><span className="agent-avatar"><FaceIcon agent={a} size={23} /></span><ArrowUpRight size={17} className="agent-go" /></span><span className="agent-card-name">{a.name}</span><span className="agent-card-role">{a.role}</span><span className="agent-card-divider"/><span className="agent-card-bottom"><span><span className={`agent-live ${a.status !== "ACTIVE" ? "paused" : ""}`} />{a.status === "ACTIVE" ? "Available" : "Paused"}</span><span>{messageCountOf(a.id)} message{messageCountOf(a.id) === 1 ? "" : "s"}</span></span></button>)}<button className="agent-card agent-card-add" onClick={() => setDialog("agent")}><span className="agent-add-icon"><Plus size={25} strokeWidth={1.4} /></span><span className="agent-card-name">Make room for more</span><span className="agent-card-role">Build an agent for any kind of work.</span><span className="agent-add-bottom">Create agent <ArrowRight size={16} /></span></button></div>
+          </div></div>}
+        {pane === "channel" && channel && <>
+          <div className="channel-head">
+            <p className="channel-brief">{channel.brief || "No brief was written when this organisation was founded."}</p>
+            {channelSeats.length
+              ? <div className="channel-seats">{channelSeats.map(a => <button type="button" key={a.id} className={`seat-chip ${briefLead?.id === a.id ? "on" : ""}`} style={hueOf(a.id)} onClick={() => openSeat(a.id)} title={`Open ${a.name}'s own thread`}>
+                <FaceIcon agent={a} size={13} /><span>{a.name}</span>
+                {briefLead?.id === a.id && <em>lead</em>}
+                <i className={`sp-dot ${seatTone.get(a.id) ?? "idle"}`} />
+              </button>)}</div>
+              : <p className="bench-none">This organisation has no seats, so a brief has nowhere to go.</p>}
+          </div>
+          <div className="memory-bar">
+            <button type="button" className={`ghost ${memoryOpen ? "on" : ""}`} onClick={() => setMemoryOpen(o => !o)} aria-expanded={memoryOpen}><Brain size={14} />Memory<span className="mono">{orgMemories.length}</span></button>
+            <button type="button" className={`ghost ${triggerOpen ? "on" : ""}`} onClick={() => setTriggerOpen(o => !o)} aria-expanded={triggerOpen}><Webhook size={14} />Trigger<span className="mono">{orgTriggers.length}</span></button>
+            <span className="push" />
+            {(memoryOpen || triggerOpen) && <span className="memory-scope mono">scoped to {channel.name}</span>}
+          </div>
+          {memoryOpen && <div className="memory-panel">
+            <form className="memory-add" onSubmit={async e => { e.preventDefault(); const text = memoryDraft.text.trim(); if (!text || busy) return; if (await act("saveMemory", { teamId: channel.id, text, kind: memoryDraft.kind }, "This organisation will remember it")) setMemoryDraft({ text: "", kind: memoryDraft.kind }); }}>
+              <select aria-label="Kind of memory" value={memoryDraft.kind} onChange={e => setMemoryDraft({ ...memoryDraft, kind: e.target.value as typeof memoryDraft.kind })}>
+                <option value="decision">decision</option><option value="note">note</option><option value="glossary">glossary</option>
+              </select>
+              <input aria-label="What to remember" value={memoryDraft.text} maxLength={240} placeholder="What should this org remember next time?" onChange={e => setMemoryDraft({ ...memoryDraft, text: e.target.value })} />
+              <button className="primary" type="submit" disabled={busy || !memoryDraft.text.trim()}><Plus size={13} />Remember</button>
+            </form>
+            <button className="ghost" type="button" disabled={busy} onClick={async () => { const r = await act("distilMemory", { teamId: channel.id }, "Read each proposal before saving it"); setProposals((r as { candidates?: { kind: "note" | "decision" | "glossary"; text: string }[] })?.candidates ?? []); }}><Sparkles size={13} />Distil from the channel<span className="mono">1 call</span></button>
+            {proposals.length > 0 && <div className="memory-propose">
+              <p className="hint">Proposed from the last posts. Nothing is remembered until you save it — a sentence nobody has read is a rumour.</p>
+              {proposals.map((p, i) => <div className="memory-row propose" key={`${p.text}-${i}`}>
+                <span className="memory-kind">{p.kind}</span>
+                <span className="memory-main"><b>{p.text}</b></span>
+                <button className="ghost" type="button" disabled={busy} onClick={async () => { if (await act("saveMemory", { teamId: channel.id, text: p.text, kind: p.kind }, "Saved to this organisation's memory")) setProposals(list => list.filter((_, j) => j !== i)); }}><Check size={13} />Save</button>
+              </div>)}
+            </div>}
+            {!orgMemories.length && <p className="bench-none">Nothing recorded yet. What is saved here is shown only to seats inside {channel.name}, and never to another organisation.</p>}
+            {orgMemories.map(m => <div className={`memory-row ${m.pinned ? "pinned" : ""} ${staleMemoryIds.has(m.id) ? "stale" : ""}`} key={m.id}>
+              <span className="memory-kind">{m.kind}</span>
+              <span className="memory-main">
+                <b>{m.text}</b>
+                <em>{m.agentId ? byId(m.agentId)?.name ?? "a removed seat" : "you"} · {stamp(m.createdAt)} · used {m.hits} {m.hits === 1 ? "time" : "times"}{m.lastUsedAt ? ` (${ago(m.lastUsedAt)})` : " · never"}{m.sourceIds.length ? ` · from ${m.sourceIds.length} post(s)` : ""}{staleMemoryIds.has(m.id) ? " · superseded" : ""}</em>
+              </span>
+              <button className="icon-btn" type="button" title={m.pinned ? "Unpin this note" : "Pin: always offered, whatever the question"} disabled={busy} onClick={() => void act("updateMemory", { memoryId: m.id, pinned: !m.pinned }, m.pinned ? "Unpinned" : "Pinned first")}>{m.pinned ? <PinOff size={14} /> : <Pin size={14} />}</button>
+              <button className="icon-btn" type="button" title="Forget this note" disabled={busy} onClick={() => void act("deleteMemory", { memoryId: m.id }, "Forgotten")}><Trash2 size={14} /></button>
+            </div>)}
+          </div>}
+          {triggerOpen && <div className="memory-panel">
+            <p className="hint">Something outside this app can brief {channel.name} by posting to it. There is no worker here, so the work runs when the call arrives and its report lands in this channel — nothing keeps going after the caller hangs up.</p>
+            <form className="memory-add" onSubmit={async e => { e.preventDefault(); const label = triggerLabel.trim(); if (label.length < 2 || busy) return; if (await act("createTrigger", { teamId: channel.id, label }, "Trigger created — copy the call line")) setTriggerLabel(""); }}>
+              <input aria-label="Trigger name" value={triggerLabel} maxLength={60} placeholder="Name it (e.g. nightly build report)" onChange={e => setTriggerLabel(e.target.value)} />
+              <button className="primary" type="submit" disabled={busy || triggerLabel.trim().length < 2}><Plus size={13} />Create trigger</button>
+            </form>
+            {!orgTriggers.length && <p className="bench-none">No trigger is wired to this organisation.</p>}
+            {orgTriggers.map(t => {
+              const line = `curl -X POST ${origin || "https://this-server"}/api/trigger -H "Authorization: Bearer ${t.token}" -H "content-type: application/json" -d '{"text":"what to work on"}'`;
+              return <div className="memory-row" key={t.id}>
+                <span className="memory-kind">POST</span>
+                <span className="memory-main"><b className="call-line">{line}</b><em>{t.label} · fired {t.hits} {t.hits === 1 ? "time" : "times"}{t.lastFiredAt ? ` (${ago(t.lastFiredAt)})` : " · never"} · one organisation only · 60s cooldown · the token is the only credential</em></span>
+                <CopyBtn text={line} label="Copy" />
+                <button className="icon-btn" type="button" title="Revoke this trigger" disabled={busy} onClick={() => void act("revokeTrigger", { triggerId: t.id }, "Trigger revoked")}><Trash2 size={14} /></button>
+              </div>;
+            })}
+          </div>}
+          {!channelFeed.length && channelSeats.length > 0 && <div className="thread-empty">
+            <span className="entry-face" style={hueOf(briefLead?.id)}><Network size={15} /></span>
+            <h2>Nothing has been briefed here yet</h2>
+            <p>Say what you want done. {briefLead?.name ?? "The lead"} answers as the organisation: any teammate it pulls in posts its own answer in this channel, and the report names those posts.</p>
+          </div>}
+          <div className="thread channel">
+            {channelFeed.map((m, i) => {
+              const authorId = m.metadata?.authoredBy ? String(m.metadata.authoredBy) : null;
+              const author = authorId ? byId(authorId) : null;
+              const human = m.role === "user";
+              const question = m.metadata?.question ? String(m.metadata.question) : "";
+              const askedBy = m.metadata?.askedBy ? String(m.metadata.askedBy) : "the lead";
+              const model = m.metadata?.model ? String(m.metadata.model) : null;
+              const runId = m.metadata?.runId ? String(m.metadata.runId) : "";
+              const run = runId ? data.runs.find(r => r.id === runId) : undefined;
+              const state = m.kind === "budget_stop" ? "stopped at the budget" : m.kind === "channel_gap" ? "no answer" : m.metadata?.stopped ? "stopped by you" : m.metadata?.truncated ? "budget reached" : m.metadata?.incomplete ? "partial" : m.kind === "provider_error" ? "not answered" : "";
+              // The same split the seat thread makes: a thing that failed is a fault, a thing the
+              // server refused to spend more on is only waiting.
+              const bad = m.kind === "provider_error" || m.kind === "channel_gap";
+              const kind = m.kind === "channel_summary" ? "report" : m.kind === "channel_post" ? "teammate post" : m.kind === "channel_memory" ? "memory" : m.kind === "channel_opened" || m.kind === "channel_lead" || m.kind === "channel_seat" ? "notice" : "";
+              const r = splitReasoning(m.content);
+              return <div key={m.id}>
+                {(i === 0 || dayLabel(channelFeed[i - 1].createdAt) !== dayLabel(m.createdAt)) && <div className="rule-day"><span>{dayLabel(m.createdAt)}</span><i /></div>}
+                <div className={`entry ${human ? "entry-user" : "entry-assistant"} ${bad ? "entry-fault" : ""}`} style={human ? undefined : hueOf(authorId)}>
+                  <span className="entry-face">{human ? <User size={15} /> : author ? <FaceIcon agent={author} /> : <Network size={15} />}</span>
+                  <div className="entry-main">
+                    <div className="entry-head">
+                      <strong>{human ? `You briefed ${briefLead?.name ?? "the lead"}` : author?.name ?? String(m.metadata?.authoredByName ?? channel.name)}</strong>
+                      <time>{clock(m.createdAt)}</time>
+                      {kind ? <span className="tag">{kind}</span> : null}
+                      {state ? <span className="tag" style={{ color: bad ? "var(--fault)" : "var(--waiting)" }}>{state}</span> : null}
+                      <span className="entry-tools">{!human && <CopyBtn text={m.content} label="Copy" />}</span>
+                    </div>
+                    {question && <div className="consult"><div className="consult-head"><ArrowDownLeft size={13} /><span><b>{askedBy}</b> asked{author ? <> <b>{author.name}</b></> : null}</span></div><p className="consult-q">{question}</p></div>}
+                    <ReasoningFold text={m.content} model={model ?? undefined} truncated={Boolean(m.metadata?.truncated)} />
+                    <div className="entry-text">{r.answer || state ? <RichText text={r.answer} /> : <span className="muted">This post carries no answer text.</span>}</div>
+                    {(model || run) && <div className="post-foot mono">
+                      {model && <span>{model} · {r.answer.length} chars{r.reasoning ? ` · ${r.reasoning.length} reasoning` : ""} · {est(r.answer)} tokens (est.){memoryNote(m.metadata)}</span>}
+                      {run && <button className="ghost push" type="button" onClick={() => setDialog(run)}><Gauge size={13} />Run steps</button>}
+                    </div>}
+                  </div>
+                </div>
+              </div>;
+            })}
+
+            {pending && !channelFeed.some(m => m.role === "user" && m.content === pending) && <div className="entry entry-user"><span className="entry-face"><User size={15} /></span><div className="entry-main"><div className="entry-head"><strong>You briefed {briefLead?.name}</strong><time>now</time></div><div className="entry-text">{pending}</div></div></div>}
+            {busy && briefLead && (() => {
+              const live = splitReasoning(stream);
+              const run = liveRunId ? data.runs.find(x => x.id === liveRunId) : undefined;
+              return <div className="entry entry-assistant entry-live" style={hueOf(briefLead.id)}>
+                <span className="entry-face"><FaceIcon agent={briefLead} /></span>
+                <div className="entry-main">
+                  <div className="entry-head">
+                    <strong>{briefLead.name}</strong>
+                    <time>live</time>
+                    <span className="tag">{consulting ? `asking ${consulting.to}` : live.answer || live.reasoning ? "writing the report" : "thinking"}</span>
+                    <span className="entry-tools">
+                      {run && <button className="ghost" type="button" onClick={() => setDialog(run)}><Gauge size={13} />Run steps</button>}
+                      {/* Mid-hop there is nothing to stop without discarding the summons already spent. */}
+                      {!consulting && stream && <button className="stop-btn" type="button" onClick={stop} title="Stop the report; every post that has landed is kept"><Square size={11} fill="currentColor" />Stop</button>}
+                    </span>
+                  </div>
+                  {consulting && <div className="consult"><div className="consult-head"><ArrowDownLeft size={13} /><span><b>{consulting.from}</b> is asking <b>{consulting.to}</b></span></div><p className="consult-q">{consulting.question}</p></div>}
+                  <ReasoningFold text={stream} model={leadAnswering?.model} streaming />
+                  <div className="entry-text">{live.answer || (consulting || live.reasoning ? "" : "Waiting for the model…")}{stream ? <span className="caret" /> : null}</div>
+                </div>
+              </div>;
+            })()}
+          </div>
+        </>}
+
         {!pane && agent && <div className="thread">
           {!thread.length && <div className="thread-empty">
             <span className="entry-face" style={hue}><FaceIcon agent={agent} /></span>
@@ -564,8 +970,8 @@ export default function Workbench() {
                         <div className="team-card-head"><span className="mark"><Network size={13} /></span><div><strong>{team}</strong><span>{seats.length} seats · nothing created yet · they would report to {agent.name}</span></div></div>
                         <div className="org-chart">{orgTree(seats).map(node => <OrgBranch key={node.name} node={node} depth={0} />)}</div>
                         <div className="team-card-foot">
-                          <span>Confirm and every seat exists with its reporting line, able to ask up and down that line.</span>
-                          <button className="primary" disabled={busy} onClick={() => act("createOrg", { team, brief: String(m.metadata?.brief ?? ""), members: seats, provider: agent.provider, managerId: agent.id }, `${team} created`)}>Create {seats.length} seats<ArrowRight size={14} /></button>
+                          <span>Confirm and every seat exists inside one organisation, able to ask any other seat in it. The top of the chart becomes the lead you brief, and its summons post in that channel.</span>
+                          <button className="primary" disabled={busy} onClick={() => act("createOrg", { team, brief: String(m.metadata?.brief ?? ""), members: seats, provider: agent.provider, managerId: agent.id, onBehalfOf: agent.id }, `${team} founded with ${seats.length} seats`)}>Create {seats.length} seats<ArrowRight size={14} /></button>
                         </div>
                       </>;
                     })()}
@@ -575,7 +981,7 @@ export default function Workbench() {
                     <ul className="team-roster">{(m.metadata?.agents as { name: string; role: string; instructions: string }[] ?? []).map(a => <li key={a.name}><b>{a.name}</b><span>{a.role}</span><em>{a.instructions}</em></li>)}</ul>
                     <div className="team-card-foot">
                       <span>They will be able to consult each other on your next question.</span>
-                      <button className="primary" disabled={busy} onClick={() => act("createTeam", { team: String(m.metadata?.team ?? "New team"), agents: m.metadata?.agents ?? [], provider: agent.provider }, "Team created")}>Create team<ArrowRight size={14} /></button>
+                      <button className="primary" disabled={busy} onClick={() => act("createTeam", { team: String(m.metadata?.team ?? "New team"), agents: m.metadata?.agents ?? [], provider: agent.provider, onBehalfOf: agent.id }, "Team created")}>Create team<ArrowRight size={14} /></button>
                     </div>
                   </div>}
                   {m.metadata?.handoffFrom ? <div className="consult">
@@ -594,7 +1000,7 @@ export default function Workbench() {
                     <summary>
                       <span className="prov-state">{provenance.state}</span>
                       <span className="prov-provider">{provenance.provider}</span><span className="prov-model">{provenance.model ?? "no model"}</span>
-                      <span className="push prov-mono">{provenance.r.answer.length} chars{provenance.r.reasoning ? ` · ${provenance.r.reasoning.length} reasoning` : ""}{provenance.model ? ` · ${est(provenance.r.answer)} tokens (est.)` : ""} · saved {provenance.saved}</span>
+                      <span className="push prov-mono">{provenance.r.answer.length} chars{provenance.r.reasoning ? ` · ${provenance.r.reasoning.length} reasoning` : ""}{provenance.model ? ` · ${est(provenance.r.answer)} tokens (est.)` : ""}{memoryNote(lastReply?.metadata)} · saved {provenance.saved}</span>
                     </summary>
                     <p className="prov-note">{provenance.fault ? "No model answer exists for this turn. Nothing was invented to fill it." : provenance.state === "stopped by you" ? "You stopped this one. What is here is everything that had arrived; it was not replayed." : provenance.state === "partial" ? "The connection died mid-reply. What is here is what arrived; it was not replayed, because replaying would duplicate text you already watched." : provenance.state === "budget reached" ? "The provider stopped at the output budget, which this server sets per agent. The reasoning that filled it is kept verbatim; nothing was invented to close the sentence." : provenance.state === "reasoning only" ? "The model streamed reasoning and then stopped. The stored row is exactly that, and the thread says so rather than showing a blank bubble." : "Stored in PostgreSQL. Reloading shows the same text."}</p>
                   </details>}
@@ -619,10 +1025,10 @@ export default function Workbench() {
 
         {pane === "scheduler" && <div className="pane">
           <div className="pane-head"><div><h1>Scheduler</h1><p>A due routine runs the next time this workspace is opened — there is no background daemon on this server, so a routine that fell due while the laptop was closed fires once on the next open and is marked late.</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
-          <h2 className="pane-h2">Routines<span className="mono">{data.routines.length}</span></h2>
+          {autoTab === "routines" && <><h2 className="pane-h2">Routines<span className="mono">{data.routines.length}</span></h2>
           {data.routines.length ? <div className="rows">{data.routines.map(r => <div className="row" key={r.id}>
             <span className="row-face"><CalendarDays size={15} /></span>
-            <span className="row-main"><strong>{r.name}</strong><span>{r.description} · {byId(r.agentId)?.name}</span><span className="row-when">{r.enabled ? <>next {r.nextRunAt ? `${dayLabel(r.nextRunAt)} ${clock(r.nextRunAt)}` : "not scheduled"} · {describeSchedule(r.schedule, r.timezone)}</> : <>paused · {r.schedule}</>}</span></span>
+            <span className="row-main"><strong>{r.name}</strong><span>{r.description} · {byId(r.agentId)?.name}</span><span className="row-when">{r.enabled ? <>next {r.nextRunAt ? `${dayLabel(r.nextRunAt)} ${clock(r.nextRunAt)}` : "not scheduled"} · {describeSchedule(r.schedule, r.timezone)}{r.failStreak > 0 ? ` · ${r.failStreak} failed in a row` : ""}</> : <>{r.failStreak >= 10 ? `switched off after ${r.failStreak} failures` : "paused"} · {r.schedule}</>}</span></span>
             <span className="row-actions">
               <span className="row-side">{r.lastStatus ? <State status={r.lastStatus} /> : null}</span>
               <button className="ghost" disabled={busy} onClick={() => act("runRoutine", { routineId: r.id }, "Run started")}><Play size={14} />Run now</button>
@@ -630,39 +1036,48 @@ export default function Workbench() {
               <button className="icon-btn" title="Delete" disabled={busy} onClick={() => setAskDelete({ kind: "routine", id: r.id, name: r.name })}><Trash2 size={15} /></button>
             </span>
           </div>)}</div> : <div className="blank"><h3>No routines</h3><p>Ask an agent for something on a schedule and it will propose one.</p></div>}
-          <h2 className="pane-h2">Runs<span className="mono">{data.runs.length}</span></h2>
+          </>}{autoTab === "runs" && <><h2 className="pane-h2">Runs<span className="mono">{data.runs.length}</span></h2>
           {data.runs.length ? <div className="rows">{data.runs.map(r => <button className="row" key={r.id} onClick={() => setDialog(r)}>
             <span className="row-face"><Activity size={15} /></span>
-            <span className="row-main"><strong>{r.title}</strong><span>{byId(r.agentId)?.name ?? "removed agent"} · {r.summary}</span></span>
+            <span className="row-main"><strong>{r.title}</strong><span>{byId(r.agentId)?.name ?? "removed agent"} · {r.initiator === "person" ? "" : r.initiator === "routine" ? "started by its schedule · " : "started by an inbound trigger · "}{r.summary}</span></span>
             <span className="row-side"><State status={r.status} sample={isSample(r)} /><time>{dayLabel(r.startedAt)} {clock(r.startedAt)}</time></span>
-          </button>)}</div> : <div className="blank"><h3>No runs yet</h3><p>Run a routine and the request is recorded here.</p></div>}
+          </button>)}</div> : <div className="blank"><h3>No runs yet</h3><p>Run a routine and the request is recorded here.</p></div>}</>}
         </div>}
+
+        {pane === "org" && <OrgManager tab={orgTab} team={activeTeam} sel={orgSel} agents={data.agents} teams={data.teams} busy={busy} act={act}
+          onOpen={openSeat} onNewTeam={() => setDialog("team")} onAskDelete={(id, name) => setAskDelete({ kind: "team", id, name })}
+          onChannel={openChannel} posts={channelCountOf}
+          onDraft={() => { const lead = agent ?? data.agents[0]; if (!lead) return; openSeat(lead.id); setDraft("Build me an organisation for "); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 80); }} />}
 
         {pane === "tools" && <div className="pane">
           <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has a browser, files, or an external account. Per-agent grants live in Agent › Capabilities.</p></div></div>
-          <div className="rows">{toolCatalog.map(t => <div className="row" key={t.slug}>
+          <div className={`rows ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <div className="row" key={t.slug}>
             <span className="row-face"><Compass size={15} /></span>
             <span className="row-main"><strong>{t.name}</strong><span>{t.description} · {t.category}</span></span>
             <span className="row-side"><span className="chip idle"><i />not connected</span></span>
             <span className="row-actions"><button className="ghost" disabled={busy} onClick={() => act("connectTool", { agentId: agent?.id, slug: t.slug })}>Connect</button></span>
           </div>)}</div>
-          <h2 className="pane-h2">MCP servers<span className="mono">{mcpCount}</span></h2>
+          <div className={toolsTab === "mcp" ? "" : "is-hidden"}><h2 className="pane-h2">MCP servers<span className="mono">{mcpCount}</span></h2>
           {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
             <span className="row-face"><Settings2 size={15} /></span>
             <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}</span></span>
             <span className="row-side"><span className="chip idle"><i />no transport</span></span>
-          </div>))}</div> : <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities. It is stored and shown, and nothing connects until a transport exists.</p></div>}
+          </div>))}</div> : <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities. It is stored and shown, and nothing connects until a transport exists.</p></div>}</div>
         </div>}
 
         {pane === "settings" && <div className="pane">
           <div className="pane-head"><div><h1>Settings</h1><p>What this workspace is, and exactly what it cannot do.</p></div></div>
           <div className="stack">
-            <div className="block">
+            <div className={`block ${settingsTab !== "workspace" ? "is-hidden" : ""}`}>
               <h2>Workspace</h2><p>Your personal space. Identified by a browser cookie, not an account.</p>
-              <div className="field"><label htmlFor="ws">Name</label><input id="ws" value={data.workspace.name} disabled /></div>
+              <div className="field"><label htmlFor="ws">Name</label><input id="ws" key={data.workspace.name} defaultValue={data.workspace.name} maxLength={60} onBlur={e => { const name = e.target.value.trim(); if (name && name !== data.workspace.name) void act("renameWorkspace", { name }, "Workspace renamed"); }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /><span className="hint">Edit and press Enter or click away to save.</span></div>
               <div className="field"><label htmlFor="tz">Time zone</label><select id="tz" value={data.workspace.timezone} onChange={e => act("updateWorkspace", { timezone: e.target.value }, "Time zone saved")}>{zones.map(z => <option key={z}>{z}</option>)}</select><span className="hint">Applied when a routine is saved.</span></div>
+              <div className="field"><label htmlFor="creator">Creator seat</label><select id="creator" value={data.workspace.creatorAgentId ?? ""} disabled={busy} onChange={e => act("assignCreator", { agentId: e.target.value || null }, e.target.value ? `${byId(e.target.value)?.name} may now found organisations` : "Creator designation cleared")}>
+                <option value="">None designated · any seat may propose an organisation</option>
+                {data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}
+              </select><span className="hint">With a creator seat chosen, only that seat may found an organisation on its own behalf; an organisation&rsquo;s own lead may add seats inside it. You can always create one yourself.</span></div>
             </div>
-            <div className="block">
+            <div className={`block ${settingsTab !== "models" ? "is-hidden" : ""}`}>
               <h2>Model providers</h2><p>Configured on the server in <span className="mono">.env.local</span>. A key never reaches the browser.</p>
               {data.profiles.map(p => <div className="kv" key={p.name}><span>{p.label}</span><span className="mono" style={{ fontSize: 12, color: "var(--ink-2)" }}>{p.model}</span><span className="push"><span className={`chip ${p.configured ? "ran" : "idle"}`}><i />{p.configured ? "ready" : "no key"}</span></span></div>)}
               <hr />
@@ -672,9 +1087,9 @@ export default function Workbench() {
               </div>
               {data.limits.usage.length ? data.limits.usage.map(u => <div className="kv" key={u.provider}><span>{data.profiles.find(p => p.name === u.provider)?.label ?? u.provider}</span><span className="push mono">{u.inputTokens} in · {u.outputTokens} out {u.estimated ? <span style={{ color: "var(--ink-3)" }}>est.</span> : <span style={{ color: "var(--ink-3)" }}>reported</span>}</span></div>) : <div className="kv"><span>No model calls recorded today</span></div>}
             </div>
-            <div className="block">
+            <div className={`block ${settingsTab !== "limits" ? "is-hidden" : ""}`}>
               <h2>What cannot run here</h2><p>Limits of this deployment, not switches for you to find.</p>
-              <div className="kv"><span>Sign-in</span><span className="push"><span className="chip idle"><i />cookie demo</span></span></div>
+              <div className="kv"><span>Sign-in</span><span className="push"><span className="chip idle"><i />cookie demo{data.auth.providers.length ? ` · ${data.auth.providers.map(p => p.label).join(", ")} env-ready, flow pending` : data.auth.incomplete.length ? ` · ${data.auth.incomplete.map(i => `${i.name} missing ${i.missing.join("/")}`).join("; ")}` : ""}</span></span></div>
               <div className="kv"><span>Scheduler</span><span className="push"><span className="chip waiting"><i />runs on open</span></span></div>
               <div className="kv"><span>Tool connectors</span><span className="push"><span className="chip idle"><i />not configured</span></span></div>
               <div className="kv"><span>Computer / browser</span><span className="push"><span className="chip idle"><i />{data.sandboxProvider}</span></span></div>
@@ -698,6 +1113,26 @@ export default function Workbench() {
             <span className="fact">{answering ? <><b>{answering.label}</b><s>{answering.model}</s></> : <>no model key · local replies</>}</span>
             <span className="composer-note"><CircleHelp size={12} />no browser, files, or connectors</span>
             <span className="push mono">{draft.trim() ? <>{est(draft)} est. tokens</> : busy ? <>Stop keeps what has arrived</> : <span className="only-wide">Enter sends · Shift+Enter newline</span>}</span>
+          </div>
+        </form>
+      </>}
+
+      {pane === "channel" && channel && briefLead && <>
+        {!atBottom && <button className="jump" type="button" onClick={() => { const b = bodyRef.current; if (b) b.scrollTop = b.scrollHeight; setAtBottom(true); }}><ArrowDown size={14} />{busy ? "Reporting below" : "Latest post"}</button>}
+        <form className="composer" onSubmit={submitBrief} style={hueOf(briefLead.id)}>
+          <div className="composer-box">
+            <textarea value={draft} rows={1} placeholder={briefLead.status === "ACTIVE" ? `Brief ${briefLead.name} for ${channel.name}` : `${briefLead.name} is paused`} disabled={briefLead.status !== "ACTIVE" || !data.modelConfigured}
+              aria-label={`Brief ${briefLead.name}`}
+              onChange={e => { setDraft(e.target.value); e.target.style.height = "auto"; e.target.style.height = `${Math.min(e.target.scrollHeight, 168)}px`; }}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} />
+            {busy && stream && !consulting
+              ? <button className="stop-btn" type="button" onClick={stop} title="Stop the report; every post that has landed is kept"><Square size={11} fill="currentColor" />Stop</button>
+              : <button className="send" type="submit" disabled={!draft.trim() || busy || briefLead.status !== "ACTIVE"} aria-label="Brief the organisation"><ArrowRight size={17} /></button>}
+          </div>
+          <div className="composer-bar">
+            <span className="fact">{leadAnswering ? <><b>{leadAnswering.label}</b><s>{leadAnswering.model}</s></> : <>no model key · the brief will not run</>}</span>
+            <span className="composer-note"><Users size={12} />{leadCeiling === 0 ? `${briefLead.name} answers alone` : `up to ${leadCeiling} teammate posts land here`}</span>
+            <span className="push mono">{draft.trim() ? <>{est(draft)} est. tokens</> : busy ? <>one turn · posts land as they finish</> : <span className="only-wide">Enter sends · Shift+Enter newline</span>}</span>
           </div>
         </form>
       </>}
@@ -782,12 +1217,19 @@ export default function Workbench() {
       </form>}
 
       {dialog === "routine" && <form className="dialog" onSubmit={async e => { e.preventDefault(); const r = await act("createRoutine", routineForm, "Routine saved"); if (r) setDialog(null); }}>
-        <div className="dialog-top"><span className="mark" style={{ background: "var(--azure-deep)" }}><CalendarDays size={14} /></span><h2>New routine</h2><button type="button" className="icon-btn x" onClick={() => setDialog(null)} aria-label="Close"><X size={15} /></button></div>
+        <div className="dialog-top"><span className="mark" ><CalendarDays size={14} /></span><h2>New routine</h2><button type="button" className="icon-btn x" onClick={() => setDialog(null)} aria-label="Close"><X size={15} /></button></div>
         <div className="field"><label htmlFor="rn">Name</label><input id="rn" required placeholder="Morning briefing" value={routineForm.name} onChange={e => setRoutineForm({ ...routineForm, name: e.target.value })} /></div>
         <div className="field"><label htmlFor="ra">Agent</label><select id="ra" value={routineForm.agentId} onChange={e => setRoutineForm({ ...routineForm, agentId: e.target.value })}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select></div>
         <div className="field"><label htmlFor="rd">What should they do?</label><textarea id="rd" required rows={3} value={routineForm.description} onChange={e => setRoutineForm({ ...routineForm, description: e.target.value })} /></div>
         <div className="field"><label htmlFor="rs">Schedule</label><select id="rs" value={routineForm.schedule} onChange={e => setRoutineForm({ ...routineForm, schedule: e.target.value })}>{["Every day at 8:00 AM", "Weekdays at 8:00 AM", "Every Monday at 9:00 AM", "Every Friday at 4:00 PM", "Every week"].map(s => <option key={s}>{s}</option>)}</select><span className="hint">A due routine executes the next time this workspace is opened; nothing fires while the app is closed.</span></div>
         <div className="dialog-actions"><button type="button" className="ghost" onClick={() => setDialog(null)}>Cancel</button><button className="primary" disabled={busy}>Save routine</button></div>
+      </form>}
+
+      {dialog === "team" && <form className="dialog" onSubmit={async e => { e.preventDefault(); const r = await act("createEmptyTeam", teamForm, `${teamForm.name} created`); if (r) { setDialog(null); setOrgTab("teams"); setOrgSel(String((r as { teamId?: string }).teamId ?? "")); setPane("org"); setTeamForm({ name: "", brief: "" }); } }}>
+        <div className="dialog-top"><span className="mark"><Network size={14} /></span><h2>New team</h2><button type="button" className="icon-btn x" onClick={() => setDialog(null)} aria-label="Close"><X size={15} /></button></div>
+        <div className="field"><label htmlFor="tn">Team name</label><input id="tn" required maxLength={60} placeholder="Growth" value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} /></div>
+        <div className="field"><label htmlFor="tb">What is it for?</label><textarea id="tb" rows={3} maxLength={400} placeholder="Shared goal, scope, or how the team should work." value={teamForm.brief} onChange={e => setTeamForm({ ...teamForm, brief: e.target.value })} /></div>
+        <div className="dialog-actions"><button type="button" className="ghost" onClick={() => setDialog(null)}>Cancel</button><button className="primary" disabled={busy}>Create team</button></div>
       </form>}
 
       {typeof dialog === "object" && <div className="dialog wide">
@@ -799,15 +1241,15 @@ export default function Workbench() {
       </div>}
     </div>}
 
-    {settingsFor && byId(settingsFor) && <AgentDialog key={settingsFor} agent={byId(settingsFor)!} profiles={data.profiles} teammates={(() => { const target = byId(settingsFor); if (!target?.teamId) return []; return data.agents.filter(a => a.teamId === target.teamId && a.id !== target.id).map(a => ({ id: a.id, name: a.name, role: a.role })); })()} busy={busy} act={act} onClose={() => setSettingsFor(null)} onAskDelete={(id, name) => setAskDelete({ kind: "agent", id, name })} />}
+    {settingsFor && byId(settingsFor) && <AgentDialog key={settingsFor} agent={byId(settingsFor)!} team={(() => { const id = byId(settingsFor)?.teamId; return id ? data.teams.find(t => t.id === id) ?? null : null; })()} tierActive={!!data.workspace.creatorAgentId} profiles={data.profiles} teammates={(() => { const target = byId(settingsFor); if (!target?.teamId) return []; return data.agents.filter(a => a.teamId === target.teamId && a.id !== target.id).map(a => ({ id: a.id, name: a.name, role: a.role })); })()} busy={busy} act={act} onClose={() => setSettingsFor(null)} onAskDelete={(id, name) => setAskDelete({ kind: "agent", id, name })} />}
 
     {askDelete && <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) setAskDelete(null); }}>
       <div className="dialog" style={{ width: 'min(380px, 100%)' }}>
         <div className="dialog-top"><span className="mark" style={{ background: 'var(--fault)' }}><Trash2 size={14} /></span><h2>Delete {askDelete.name}?</h2><button type="button" className="icon-btn x" onClick={() => setAskDelete(null)} aria-label="Close"><X size={15} /></button></div>
-        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
+        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary" style={{ background: 'var(--fault)', boxShadow: '0 1px 2px rgba(155, 39, 32, .3)' }} disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}
@@ -912,13 +1354,15 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
   </div>;
 }
 
-function AgentDialog({ agent, profiles, teammates, busy, act, onClose, onAskDelete }: { agent: Agent; profiles: Profile[]; teammates: { id: string; name: string; role: string }[]; busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>; onClose: () => void; onAskDelete: (id: string, name: string) => void }) {
+function AgentDialog({ agent, team, tierActive, profiles, teammates, busy, act, onClose, onAskDelete }: { agent: Agent; team: Team | null; tierActive: boolean; profiles: Profile[]; teammates: { id: string; name: string; role: string }[]; busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>; onClose: () => void; onAskDelete: (id: string, name: string) => void }) {
   const [name, setName] = useState(agent.name);
   const [role, setRole] = useState(agent.role);
   const [instructions, setInstructions] = useState(agent.instructions);
   const [provider, setProvider] = useState(agent.provider);
   const [caps, setCaps] = useState<Capabilities>(agent.capabilities);
   const [section, setSection] = useState<"identity" | "capabilities">("identity");
+  const [hire, setHire] = useState({ name: "", role: "", reportsTo: "" });
+  const isLead = team?.leadAgentId === agent.id;
   return <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
     <div className="dialog">
       <div className="dialog-top"><span className="mark"><SlidersHorizontal size={14} /></span><h2>{agent.name}</h2><button type="button" className="icon-btn x" onClick={onClose} aria-label="Close"><X size={15} /></button></div>
@@ -934,9 +1378,127 @@ function AgentDialog({ agent, profiles, teammates, busy, act, onClose, onAskDele
         {section === "capabilities" ? <CapabilitiesEditor caps={caps} setCaps={setCaps} teammates={teammates} /> : null}
         <div className="dialog-actions"><button className="primary" type="submit" disabled={busy}>Save</button></div>
       </form>
+      {team && <div className="dialog-hire">
+        <h3>Add a teammate as {agent.name}</h3>
+        <div className="hire-row">
+          <input aria-label="New seat name" placeholder="Name" maxLength={40} value={hire.name} onChange={e => setHire({ ...hire, name: e.target.value })} />
+          <input aria-label="New seat role" placeholder="What it owns" maxLength={80} value={hire.role} onChange={e => setHire({ ...hire, role: e.target.value })} />
+          <select className="org-select" aria-label="New seat reports to" value={hire.reportsTo} onChange={e => setHire({ ...hire, reportsTo: e.target.value })}>
+            <option value="">Reports to {agent.name}</option>
+            {teammates.map(m => <option key={m.id} value={m.id}>Reports to {m.name}</option>)}
+            <option value="none">Top of the chart</option>
+          </select>
+        </div>
+        <button className="ghost" type="button" disabled={busy || !hire.name.trim() || !hire.role.trim()} onClick={async () => { const reportsTo = hire.reportsTo === "none" ? null : hire.reportsTo || agent.id; if (await act("createAgent", { name: hire.name.trim(), role: hire.role.trim(), provider: agent.provider, teamId: team.id, managerId: reportsTo, onBehalfOf: agent.id }, `${hire.name.trim()} joins ${team.name}`)) setHire({ name: "", role: "", reportsTo: "" }); }}><Plus size={14} />Create inside {team.name}</button>
+        <p className="hint">{!tierActive ? `No creator seat is designated, so staffing is not gated yet — any seat could do this. Choose one in Settings › Workspace to enforce the rule.` : isLead ? `${agent.name} leads ${team.name}, so the seat is created inside this organisation only: it can be asked and can ask here, and it reaches no seat in another company.` : `${agent.name} is not the lead of ${team.name}, so the server refuses this and names the seat that may.`}</p>
+      </div>}
       <hr className="dialog-rule" />
       <div className="kv"><span>{agent.status === "ACTIVE" ? "Active now" : "Paused now"}</span><button type="button" className="ghost push" disabled={busy} onClick={() => act("updateAgent", { agentId: agent.id, status: agent.status === "ACTIVE" ? "PAUSED" : "ACTIVE" }, agent.status === "ACTIVE" ? "Paused" : "Resumed")}>{agent.status === "ACTIVE" ? <Pause size={14} /> : <Play size={14} />}{agent.status === "ACTIVE" ? "Pause" : "Resume"}</button></div>
       <div className="kv"><span style={{ color: "var(--ink-2)" }}>Deleting removes the agent from the board</span><button type="button" className="ghost danger push" disabled={busy} onClick={() => onAskDelete(agent.id, agent.name)}><Trash2 size={14} />Delete</button></div>
+    </div>
+  </div>;
+}
+
+/** Segmented tabs that divide one sidebar panel into sections; counts come from stored rows. */
+function Tabs<T extends string>({ value, onChange, items }: { value: T; onChange: (v: T) => void; items: { id: T; label: string; count?: number }[] }) {
+  return <div className="sp-tabs" role="tablist">{items.map(i => <button key={i.id} role="tab" aria-selected={value === i.id} className={value === i.id ? "on" : ""} onClick={() => onChange(i.id)}>{i.label}{i.count !== undefined && <span>{i.count}</span>}</button>)}</div>;
+}
+
+/**
+ * Organisation management: rename/describe a team, see its chart, set each seat's reporting line,
+ * add or remove seats, and place benched agents. Every control is one server action; the server
+ * rejects loops and cross-team managers, so the UI only offers what is valid to try.
+ */
+function OrgManager({ tab, team, sel, agents, teams, busy, act, onOpen, onNewTeam, onAskDelete, onDraft, onChannel, posts }: {
+  tab: "teams" | "bench"; team: Team | undefined; sel: string | null; agents: Agent[]; teams: Team[]; busy: boolean;
+  act: (action: string, payload?: Record<string, unknown>, say?: string) => Promise<unknown>;
+  onOpen: (id: string) => void; onNewTeam: () => void; onAskDelete: (id: string, name: string) => void; onDraft: () => void;
+  onChannel: (teamId: string) => void; posts: (teamId: string) => number;
+}) {
+  const [addId, setAddId] = useState("");
+  if (tab === "bench") {
+    const bench = agents.filter(a => !a.teamId);
+    return <div className="pane">
+      <div className="pane-head"><div><h1>Bench</h1><p>Agents that are not on a team. Place one on a team and it gains teammates it can consult.</p></div></div>
+      {bench.length ? <div className="rows">{bench.map(a => <div className={`row ${sel === a.id ? "row-focus" : ""}`} key={a.id}>
+        <span className="row-face"><FaceIcon agent={a} /></span>
+        <span className="row-main"><strong>{a.name}</strong><span>{a.role}</span></span>
+        <span className="row-actions">
+          <select className="org-select" aria-label={`Move ${a.name} to a team`} value="" disabled={busy || !teams.length} onChange={e => { if (e.target.value) void act("assignAgent", { agentId: a.id, teamId: e.target.value, managerId: null }, `${a.name} joined the team`); }}>
+            <option value="">{teams.length ? "Move to team…" : "No teams yet"}</option>
+            {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+          <button className="ghost" onClick={() => onOpen(a.id)}>Open</button>
+        </span>
+      </div>)}</div> : <div className="blank"><h3>Everyone is placed</h3><p>Every agent belongs to a team.</p></div>}
+      {!teams.length && <div className="blank" style={{ marginTop: 16 }}><h3>Create a team first</h3><p>A team is where agents share context and reporting lines.</p><button className="primary" onClick={onNewTeam}><Plus size={14} />New team</button></div>}
+    </div>;
+  }
+  if (!team) return <div className="pane"><div className="blank"><h3>No team selected</h3><p>Create a team, or have an agent draft a whole organisation for you.</p><div className="blank-actions"><button className="primary" onClick={onNewTeam}><Plus size={14} />New team</button><button className="ghost" onClick={onDraft}><Sparkles size={14} />Draft with an agent</button></div></div></div>;
+
+  const members = agents.filter(a => a.teamId === team.id);
+  /** The same rule the server uses when a brief arrives, so this picker shows what is really in force. */
+  const lead = resolveLead(members, team.leadAgentId);
+  const others = agents.filter(a => a.teamId !== team.id);
+  const teamName = (id: string | null) => teams.find(t => t.id === id)?.name;
+  const roots = orgTree(members.map(a => ({ name: a.name, role: a.role, instructions: a.role, reportsTo: agents.find(b => b.id === a.managerId && b.teamId === team.id)?.name ?? null })));
+  const lines = members.filter(a => a.managerId).length;
+  return <div className="pane org-pane">
+    <div className="pane-head">
+      <div className="org-title">
+        <input className="org-name" key={`n${team.id}${team.name}`} defaultValue={team.name} maxLength={60} aria-label="Team name" onBlur={e => { const name = e.target.value.trim(); if (name && name !== team.name) void act("updateTeam", { teamId: team.id, name }, "Team renamed"); else e.target.value = team.name; }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} />
+        <textarea className="org-brief" key={`b${team.id}${team.brief}`} defaultValue={team.brief} rows={2} maxLength={400} placeholder="What is this team for?" aria-label="Team brief" onBlur={e => { const brief = e.target.value.trim(); if (brief !== team.brief) void act("updateTeam", { teamId: team.id, brief }, "Team brief saved"); }} />
+      </div>
+      <div className="push" />
+      <button className="ghost" onClick={onDraft}><Sparkles size={15} />Draft with an agent</button>
+      <button className="ghost danger" onClick={() => onAskDelete(team.id, team.name)}><Trash2 size={15} />Delete team</button>
+    </div>
+    <div className="org-stats">
+      <div><b className="mono">{members.length}</b><span>seats</span></div>
+      <div><b className="mono">{lines}</b><span>reporting lines</span></div>
+      <div><b className="mono">{members.filter(a => a.status === "ACTIVE").length}</b><span>active</span></div>
+      <div><b className="mono">{roots.length}</b><span>top-level</span></div>
+    </div>
+
+    <div className="org-roles">
+      <label className="org-reports"><span>Briefs go to</span>
+        <select className="org-select" aria-label="Organisation lead" value={lead?.id ?? ""} disabled={busy || !members.length}
+          onChange={e => { const pick = members.find(m => m.id === e.target.value); if (pick) void act("assignOrgLead", { teamId: team.id, agentId: pick.id }, `${pick.name} now leads ${team.name}`); }}>
+          <option value="">{lead ? `${lead.name} · top of the chart` : "no seat to lead"}</option>
+          {members.map(m => <option key={m.id} value={m.id}>{m.name} — {m.role}</option>)}
+        </select>
+      </label>
+      <span className="push" />
+      <button className="ghost" onClick={() => onChannel(team.id)}><MessageSquare size={15} />Channel<span className="mono">{posts(team.id)}</span></button>
+    </div>
+
+    <h2 className="pane-h2">Chart<span className="mono">{members.length}</span></h2>
+    {members.length ? <div className="org-chart org-chart-lg">{roots.map(node => <OrgBranch key={node.name} node={node} depth={0} onPick={name => { const a = members.find(m => m.name === name); if (a) onOpen(a.id); }} />)}</div>
+      : <div className="blank"><h3>This team is empty</h3><p>Add an agent below, or draft a full organisation with an agent.</p></div>}
+
+    <h2 className="pane-h2">Seats &amp; reporting<span className="mono">{members.length}</span></h2>
+    {members.length > 0 && <div className="rows">{members.map(a => <div className="row org-seat" key={a.id}>
+      <span className="row-face"><FaceIcon agent={a} /></span>
+      <span className="row-main"><strong>{a.name}{a.status !== "ACTIVE" && <em className="org-paused"> paused</em>}</strong><span>{a.role}</span></span>
+      <span className="row-actions">
+        <label className="org-reports"><span>Reports to</span>
+          <select className="org-select" value={a.managerId && members.some(m => m.id === a.managerId) ? a.managerId : ""} disabled={busy} onChange={e => void act("assignAgent", { agentId: a.id, teamId: team.id, managerId: e.target.value || null }, "Reporting line saved")}>
+            <option value="">No one (top of team)</option>
+            {members.filter(m => m.id !== a.id).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+        <button className="ghost" onClick={() => onOpen(a.id)}>Open</button>
+        <button className="icon-btn" title={`Remove ${a.name} from this team`} aria-label={`Remove ${a.name} from this team`} disabled={busy} onClick={() => void act("assignAgent", { agentId: a.id, teamId: null, managerId: null }, `${a.name} moved to the bench`)}><X size={15} /></button>
+      </span>
+    </div>)}</div>}
+
+    <h2 className="pane-h2">Add a seat</h2>
+    <div className="org-add">
+      <select className="org-select" aria-label="Agent to add" value={addId} onChange={e => setAddId(e.target.value)} disabled={!others.length}>
+        <option value="">{others.length ? "Choose an agent…" : "Every agent is already here"}</option>
+        {others.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}{a.teamId ? ` (from ${teamName(a.teamId)})` : " (bench)"}</option>)}
+      </select>
+      <button className="primary" disabled={busy || !addId} onClick={async () => { if (await act("assignAgent", { agentId: addId, teamId: team.id, managerId: null }, "Seat added")) setAddId(""); }}><Plus size={14} />Add to team</button>
     </div>
   </div>;
 }

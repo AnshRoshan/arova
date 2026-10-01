@@ -29,7 +29,7 @@ export const TOOL_REGISTRY: ToolSpec[] = [
   { id: "request_approval", label: "Request approval", description: "Raise an action for the user to approve before it is recorded.", kind: "workspace", writes: true, available: true },
   { id: "build_org", label: "Propose an organisation", description: "Propose a set of agents with reporting lines for the user to confirm before any of them exist.", kind: "workspace", writes: true, available: true },
   
-  { id: "save_note", label: "Save note", description: "Write a durable note into this agent's own thread.", kind: "workspace", writes: true, available: false, whyUnavailable: "No agent-initiated note tool is wired; the thread is written by the user and by replies." },
+  { id: "save_note", label: "Record org memory", description: "Write a durable note into this organisation's memory, attributed to this seat and readable only inside it.", kind: "workspace", writes: true, available: true },
   { id: "web_fetch", label: "Fetch a URL", description: "Read a web page the user names.", kind: "external", writes: false, available: false, whyUnavailable: "No network tool is enabled in this deployment; it needs an allow-listed fetch policy first." },
   { id: "web_search", label: "Web search", description: "Search the public web.", kind: "external", writes: false, available: false, whyUnavailable: "No search provider is configured, and results would need a source to be citable." },
   { id: "browser", label: "Browser", description: "Operate a page in an isolated session.", kind: "external", writes: false, available: false, whyUnavailable: "No sandbox provider is wired, so nothing can host a browser session." },
