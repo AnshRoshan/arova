@@ -65,35 +65,9 @@ async function initialize() {
     if (workspace) return { workspace, isNew: false };
   }
   const [workspace] = await db.insert(workspaces).values({ name: "My workspace" }).returning();
-  const seeded = await db.insert(agents).values([
-    { workspaceId: workspace.id, name: "Nova", role: "Personal assistant", instructions: "A thoughtful, organized assistant that helps manage everyday work and keeps things moving.", avatar: "sparkles", color: "violet" },
-    { workspaceId: workspace.id, name: "Atlas", role: "Research analyst", instructions: "Find reliable information, compare sources, and turn research into clear takeaways.", avatar: "globe", color: "blue" },
-    { workspaceId: workspace.id, name: "Pixel", role: "Creative partner", instructions: "Help brainstorm, write, and refine creative ideas with a fresh perspective.", avatar: "palette", color: "peach" },
-  ]).returning();
-  await db.insert(messages).values([
-    { workspaceId: workspace.id, agentId: seeded[0].id, role: "assistant", content: "Hey! I’m Nova, your personal assistant. Tell me what’s on your mind, or ask me to set up a routine for you." },
-    { workspaceId: workspace.id, agentId: seeded[1].id, role: "assistant", content: "Hi, I’m Atlas. Give me a topic to explore, and I’ll help turn the details into a clear picture." },
-    { workspaceId: workspace.id, agentId: seeded[2].id, role: "assistant", content: "Hello! I’m Pixel. Let’s make something great together." },
-  ]);
-  const demoRoutines = await db.insert(routines).values([
-    { workspaceId: workspace.id, agentId: seeded[0].id, name: "Morning briefing", description: "Prepare a summary of the day ahead", schedule: "Weekdays at 8:00 AM", timezone: workspace.timezone, icon: "sun" },
-    { workspaceId: workspace.id, agentId: seeded[1].id, name: "Industry pulse", description: "Keep an eye on industry news and trends", schedule: "Every Monday at 9:00 AM", timezone: workspace.timezone, icon: "globe" },
-    { workspaceId: workspace.id, agentId: seeded[0].id, name: "Weekly reset", description: "Review priorities and plan the next week", schedule: "Every Friday at 4:00 PM", timezone: workspace.timezone, icon: "calendar" },
-  ]).returning();
-  const sampleRuns = await db.insert(runs).values([
-    { workspaceId: workspace.id, agentId: seeded[0].id, routineId: demoRoutines[0].id, title: "Morning briefing", status: "COMPLETED", summary: "Sample run: a morning briefing was prepared.", startedAt: new Date(Date.now() - 2 * 3600000), completedAt: new Date(Date.now() - 2 * 3600000 + 12000) },
-    { workspaceId: workspace.id, agentId: seeded[1].id, routineId: demoRoutines[1].id, title: "Industry pulse", status: "COMPLETED", summary: "Sample run: a research summary was prepared.", startedAt: new Date(Date.now() - 25 * 3600000), completedAt: new Date(Date.now() - 25 * 3600000 + 19000) },
-    { workspaceId: workspace.id, agentId: seeded[0].id, routineId: demoRoutines[2].id, title: "Weekly reset", status: "COMPLETED", summary: "Sample run: weekly priorities were reviewed.", startedAt: new Date(Date.now() - 73 * 3600000), completedAt: new Date(Date.now() - 73 * 3600000 + 8000) },
-  ]).returning();
-  await db.insert(runSteps).values(sampleRuns.flatMap(run => [
-    { workspaceId: workspace.id, runId: run.id, title: "Run started", detail: "Sample activity for your new workspace" },
-    { workspaceId: workspace.id, runId: run.id, title: "Task completed", detail: run.summary },
-  ]));
-  await db.insert(approvals).values({ workspaceId: workspace.id, agentId: seeded[0].id, title: "Send weekly summary", detail: "Sample approval request · Review before sharing a summary outside your workspace.", risk: "WRITE" });
-  await audit(workspace.id, null, "workspace.created", "Demo workspace initialized with sample activity");
-  // One seat is designated the workspace's creator (D-15.4): it is the only seat that may found an
-  // organisation on its own behalf. The human can move or clear the designation at any time.
-  await db.update(workspaces).set({ creatorAgentId: seeded[0].id }).where(eq(workspaces.id, workspace.id));
+  await audit(workspace.id, null, "workspace.created", "Workspace created empty");
+  // Sample content lives in seed/fixtures.json and is inserted by `node seed/seed-demo.ts`. A first
+  // visit is deliberately empty, so the counters and the bench show your own work, not staged data.
   return { workspace, isNew: true };
 }
 
@@ -147,7 +121,6 @@ async function board(workspaceId: string) {
     // Names only: what the sign-in screen would build itself from, and what a half-configured
     // provider is missing. A secret never appears here — this whole payload goes to the browser.
     auth: (() => { const d = loadAuthProviders(process.env); return { providers: d.providers.map(p => ({ name: p.name, label: p.label })), incomplete: d.incomplete }; })(),
-    demo: true,
   };
 }
 

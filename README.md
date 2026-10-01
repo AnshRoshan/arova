@@ -8,7 +8,19 @@ Arova is an agent workspace built with Next.js, PostgreSQL, Drizzle ORM, and Tai
 2. Run `npm install` and `npx drizzle-kit push`.
 3. Run `npm run dev` and open `http://localhost:3000`.
 
-The app creates a personal **demo workspace** on first visit, with three sample agents, sample routines, and clearly labeled sample activity. Agent creation/editing/pausing/deletion, persisted chat, natural-language routine proposals, routine creation/toggling/deletion, manual run requests, run cancellation, approval decisions, timezone changes, and audit events are backed by PostgreSQL.
+First visit creates an empty personal workspace. You add the first agent yourself, and every number on the overview is then something you did. Agent creation/editing/pausing/deletion, persisted chat, natural-language routine proposals, routine creation/toggling/deletion, manual run requests, run cancellation, approval decisions, timezone changes, and audit events are backed by PostgreSQL.
+
+## Sample content (optional, and never automatic)
+
+A demo, a screenshot session or a walkthrough may want three agents and some history. That content lives in `seed/fixtures.json` and is inserted by a script the app never imports:
+
+```bash
+DATABASE_URL=... node seed/seed-demo.ts            # fills the most recent workspace
+DATABASE_URL=... node seed/seed-demo.ts --new      # creates "Demo workspace" and fills it
+DATABASE_URL=... node seed/seed-demo.ts --list     # show workspaces and their ids
+```
+
+It refuses to seed a workspace that already has agents unless you pass `--force`. Seeded runs are labelled as sample activity and are excluded from the overview counters, so a seeded workspace still reports honest numbers about real work.
 
 ## Model providers (Grok, OpenAI, or any compatible endpoint)
 
@@ -65,9 +77,9 @@ Delegation is model-to-model. It is not a connector: no agent here can read your
 - **Authentication:** The demo uses a random, HTTP-only workspace cookie for separation. This is **not production authentication**. Add Google/GitHub OAuth, authenticated user-to-workspace membership, CSRF protection, and session rotation before a public deployment.
 - **Tools:** The catalog is present, but OAuth providers are not configured. Connect buttons fail safely and do not pretend to connect accounts.
 - **Scheduling:** Routines execute. A due routine runs the next time the workspace is opened — there is no background daemon in this deployment, so a routine that fell due while the machine was off fires once on the next open and is marked late. Each execution creates a real run with steps and posts the answer into that agent's thread, under the same daily model-call budget as chat.
-- **Runs:** Run Now and the scheduler both execute the agent and record the outcome. A run still cannot touch anything outside the workspace, because no browser, files or connectors exist here. Existing sample runs are labeled as sample activity.
+- **Runs:** Run Now and the scheduler both execute the agent and record the outcome. A run still cannot touch anything outside the workspace, because no browser, files or connectors exist here. Runs inserted by the seed script are labelled as sample activity and excluded from the overview counters.
 - **Computer:** `SandboxProvider` is defined in `src/lib/sandbox.ts`. The default `UnconfiguredSandboxProvider` deliberately rejects start and execute requests. It does not execute host commands or pretend to provide a browser. Integrate an isolated Docker/Playwright or hosted provider through this contract before enabling it.
-- **Approvals:** The initial request is sample data. Resolving it records a decision only; it does not trigger an external write.
+- **Approvals:** A fresh workspace has no pending approvals; one exists only if you seeded sample content. Resolving an approval records a decision; it does not trigger an external write.
 
 ## Operational checklist before production
 

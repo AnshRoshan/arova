@@ -62,3 +62,18 @@ Design-system bookkeeping after the build: DESIGN.md gained the channel surface 
 ## Up next
 - Production authentication, isolated computer and MCP transport still need separate specs; message pagination (the board loads every message per workspace) and rate limiting + CSRF + session rotation are the next queue items.
 - If exact spend matters: replace the character estimate with a real tokenizer or upstream `usage` (Feature 09 records reported counts where the server sends them).
+
+## Session 2026-10-01 (night) — repo relocated, demo content moved out of `src`
+
+**Complete.**
+- Repository now lives at `AnshRoshan/arova`. The three commits from the previous remote were rebuilt with `git commit-tree` against identical trees, authored and committed as `Ansh Roshan <ianshroshan@gmail.com>` and signed with key `09E4C18BD838D4A2`. `git diff` between the imported branch and the rewritten one is empty, so content is byte-identical and only identity and signatures changed. The pre-rewrite history is kept locally as `imported-from-old-account`.
+- `drizzle.config.json` restored from the earlier snapshot; it was missing from the repo, so `npx drizzle-kit push` had no config to read.
+- **First visit is now an empty workspace.** `initialize()` in `src/app/api/board/route.ts` creates the workspace row and one audit event, nothing else. The three named agents, three greetings, three routines, three sample runs with six steps, the sample approval and the automatic creator designation are gone from `src`. The `demo: true` field was dropped from the board payload; nothing in `src/app/page.tsx` ever read it.
+- Sample content moved to `seed/fixtures.json` with `seed/seed-demo.ts` as the only loader (`--new`, `--workspace <id>`, `--list`, `--force`). The app imports neither file. Overview counters still exclude rows labelled as sample activity, so a seeded workspace keeps reporting honest numbers about real work.
+- Verified: `npm test` 151/151, `npm run typecheck` clean, `npm run build` succeeds with all five routes. The build was run against a non-connecting placeholder `DATABASE_URL` because the health route imports the pool at module load; no database was contacted.
+
+**Not verified (honest boundary).**
+- `seed/seed-demo.ts` has never been executed. It needs a real `DATABASE_URL` for a database this project owns, and the shared local Postgres password is not in this environment. Types check and the insert logic mirrors what was removed, but the script is untested against a live database.
+- The empty first-run state was reasoned about from the code, not seen in a browser: `src/app/page.tsx` already guards `!data?.agents.length`, and the bench renders "No one here yet / Add the first agent", so no new UI was required. It still needs one human look.
+- `npm run lint` fails with 18 errors, all in `src/app/page.tsx` on `react-hooks/*` and one `react/no-unescaped-entities`. Pre-existing and untouched, consistent with the note above that lint is not this project's gate.
+

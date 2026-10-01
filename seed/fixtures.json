@@ -1,0 +1,30 @@
+{
+  "$comment": "Sample content for a demo workspace only. Nothing here is loaded by the app; run `node seed/seed-demo.ts` to insert it. The product's own first run is an empty workspace.",
+  "workspaceName": "Demo workspace",
+  "agents": [
+    { "key": "nova", "name": "Nova", "role": "Personal assistant", "instructions": "A thoughtful, organized assistant that helps manage everyday work and keeps things moving.", "avatar": "sparkles", "color": "violet" },
+    { "key": "atlas", "name": "Atlas", "role": "Research analyst", "instructions": "Find reliable information, compare sources, and turn research into clear takeaways.", "avatar": "globe", "color": "blue" },
+    { "key": "pixel", "name": "Pixel", "role": "Creative partner", "instructions": "Help brainstorm, write, and refine creative ideas with a fresh perspective.", "avatar": "palette", "color": "peach" }
+  ],
+  "greetings": [
+    { "agent": "nova", "content": "Hey! I’m Nova, your personal assistant. Tell me what’s on your mind, or ask me to set up a routine for you." },
+    { "agent": "atlas", "content": "Hi, I’m Atlas. Give me a topic to explore, and I’ll help turn the details into a clear picture." },
+    { "agent": "pixel", "content": "Hello! I’m Pixel. Let’s make something great together." }
+  ],
+  "routines": [
+    { "agent": "nova", "name": "Morning briefing", "description": "Prepare a summary of the day ahead", "schedule": "Weekdays at 8:00 AM", "icon": "sun" },
+    { "agent": "atlas", "name": "Industry pulse", "description": "Keep an eye on industry news and trends", "schedule": "Every Monday at 9:00 AM", "icon": "globe" },
+    { "agent": "nova", "name": "Weekly reset", "description": "Review priorities and plan the next week", "schedule": "Every Friday at 4:00 PM", "icon": "calendar" }
+  ],
+  "runs": [
+    { "agent": "nova", "routine": "Morning briefing", "title": "Morning briefing", "summary": "Sample run: a morning briefing was prepared.", "hoursAgo": 2, "durationSeconds": 12 },
+    { "agent": "atlas", "routine": "Industry pulse", "title": "Industry pulse", "summary": "Sample run: a research summary was prepared.", "hoursAgo": 25, "durationSeconds": 19 },
+    { "agent": "nova", "routine": "Weekly reset", "title": "Weekly reset", "summary": "Sample run: weekly priorities were reviewed.", "hoursAgo": 73, "durationSeconds": 8 }
+  ],
+  "runSteps": [
+    { "title": "Run started", "detail": "Sample activity for your new workspace" },
+    { "title": "Task completed", "detail": "$summary" }
+  ],
+  "approval": { "agent": "nova", "title": "Send weekly summary", "detail": "Sample approval request · Review before sharing a summary outside your workspace.", "risk": "WRITE" },
+  "creator": "nova"
+}
