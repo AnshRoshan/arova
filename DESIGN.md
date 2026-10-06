@@ -1,6 +1,6 @@
 ---
 name: Arova — The Graphite Edition
-description: An agent workbench where every surface is a real graphite step and one cool azure does all interactive work.
+description: An agent workbench where every surface is a real graphite step, azure does the interactive work, and each room owns one hue on the rail.
 colors:
   void: "#131416"
   sunken: "#17191c"
@@ -40,6 +40,12 @@ colors:
   hue-sage: "#a8d98a"
   hue-aqua: "#70d2db"
   hue-mauve: "#c4a3dd"
+  sec-overview: "#8b9bff"
+  sec-agents: "#a8d98a"
+  sec-org: "#70d2db"
+  sec-scheduler: "#e6b455"
+  sec-tools: "#b78ff2"
+  sec-settings: "#f08cb8"
 typography:
   display:
     fontFamily: "Manrope, sans-serif"
@@ -173,13 +179,14 @@ components:
 
 **Creative North Star: "The Instrument Panel"**
 
-Arova is not a dashboard wearing a dark theme; it is an instrument bench. A permanent icon rail owns navigation at the far left, a contextual section panel owns the list you are working through beside it, the fluid work surface carries the single title of whatever you opened — one seat's thread, or one organisation's channel — and the activity board on the right is a printer that only emits rows the server actually stored. The whole world is graphite: neutral surfaces step toward the reader, ink stays neutral, and colour is rationed to three jobs — azure for interaction, green/amber/red for a stored state, and a fixed set of identity tints for *which agent* you are looking at. Nothing implies work that did not happen.
+Arova is not a dashboard wearing a dark theme; it is an instrument bench. A permanent icon rail owns navigation at the far left, a contextual section panel owns the list you are working through beside it, the fluid work surface carries the single title of whatever you opened — one seat's thread, or one organisation's channel — and the activity board on the right is a printer that only emits rows the server actually stored. The whole world is graphite: neutral surfaces step toward the reader, ink stays neutral, and colour is rationed to four jobs — azure for interaction, green/amber/red for a stored state, a fixed set of identity tints for *which agent* you are looking at, and one hue per room for *where you are*. Nothing implies work that did not happen.
 
 Density is the aesthetic. This is a working tool read every day by one operator who wants to continue, not tour. So the surfaces are dark and close together, hairlines and surface steps do the structural work that shadows would do elsewhere, and there is no hero, no decorative illustration, no repeated heading. The identity tints are led by the avatar glyph, not the hue — the hue is a secondary marker precisely because there are only three and they cannot carry the whole identity load.
 
 **Key Characteristics:**
 - Six graphite surfaces (void → sunken) that step toward the reader; elevation is carried by surface steps and hairlines, not shadows.
 - One cool azure does all interactive work; its dark-ground tint family (wash/line) and a dark glyph live alongside it.
+- Each of the six rooms owns one hue on the rail and in its panel head (`--sec`), so the rail reads as a colour bar: azure · sage · aqua · amber · violet · rose.
 - Green/amber/red exist only where a stored row produced them; a sample row wears idle grey, never the green of a real run.
 - Exactly three identity tints (sage/aqua/mauve), each proven 30° clear of the accent and of every state colour.
 - DM Sans body, Manrope headings, JetBrains Mono reserved strictly for measurement.
@@ -236,6 +243,8 @@ These exist for one specific job and are intentionally not tokens. **Rule: a sec
 **The Dark-Glyph Rule.** A light accent or identity tint on a dark ground cannot carry white text. Every azure fill and every identity tile takes a dark glyph (`--on-azure`, or the tint's own dark `glyph`). `identity.test.ts` asserts a tile is never given a white glyph.
 **The Stored-Row Rule.** Green, amber and red are only ever produced by a stored row. A seeded sample wears **idle** grey (`raised` + `ink-2`); a fabricated success state is a defect, not a colour.
 **The Three-Mark Rule.** Identity is exactly three tints (sage/aqua/mauve). This is a measured ceiling, not taste: with azure owning interaction and green/amber/red owning state, the cool half of the wheel has room for three marks at 30° of separation, so identity is led by the avatar glyph and the tint is secondary. **Adding a fourth hue requires changing the accent or the semantics first** — `identity.test.ts` fails on contrast floors, the 30° separation from the accent and every state colour, or a warm drift.
+
+**The Room-Colour Rule.** The multicolour budget is spent on *where you are*, not on *who* or *what happened*. Each of the six rooms owns one hue (`SECTION_COLORS` in `src/lib/identity.ts`, exposed as `--sec` on the workbench and each rail button), and it paints exactly three chrome surfaces: the active rail mark and its wash, the section panel's title and item icons, and the panel's right hairline. Room hues may reuse identity and state hues (Automations is amber, Agents is sage) because a rail mark is never read as a status dot — position disambiguates what the wheel cannot. Two hues exist only here: violet for Integrations and rose for Settings; rose never appears as a state, and amber-as-state still means only a stored waiting row. Azure remains the interactive colour inside every room: buttons, links, focus, selection do not change hue with the section.
 
 ## Typography
 

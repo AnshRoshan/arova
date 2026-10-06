@@ -20,8 +20,9 @@ and the surface shows it badly.
    places around it.
 
 ## Changes
-- **`src/lib/identity.ts`** — six cool, low-chroma identity hues, assigned deterministically from the agent
+- **`src/lib/identity.ts`** — ~~six~~ cool, low-chroma identity hues, assigned deterministically from the agent
   id, exposed as CSS custom properties (`--h-ink/-tile/-wash/-line`) on whatever element carries the agent.
+  Cut to three measured tints (sage/aqua/mauve) by the Graphite Edition, D-14 (2026-09-30).
   Semantics (`--ran/--waiting/--fault`) stay reserved for real states; hue never encodes status.
 - **`src/lib/markdown.ts`** — a pure block/inline parser: paragraphs, ordered/unordered lists, bold,
   emphasis, inline code, fenced code with language, ATX headings, thematic breaks, links restricted to
