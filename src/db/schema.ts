@@ -55,3 +55,39 @@ export const schedulerHeartbeats = pgTable("scheduler_heartbeats", {
   totalClaimed: integer("total_claimed").notNull().default(0),
   lastError: text("last_error"),
 });
+
+/**
+ * Feature 15 — signed-in people. A user is one identity from one issuer; `sub` is only unique
+ * inside that issuer, so the pair is the key and the email is data, never the key.
+ */
+export const users = pgTable("users", {
+  id: id(),
+  issuer: text("issuer").notNull(),
+  subject: text("subject").notNull(),
+  email: text("email").notNull().default(""),
+  name: text("name").notNull().default(""),
+  picture: text("picture").notNull().default(""),
+  createdAt: created(),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+}, t => [uniqueIndex("users_issuer_subject_unique").on(t.issuer, t.subject)]);
+
+/** Membership is per workspace: the first person in is the owner, and that is a stored row, not a guess. */
+export const memberships = pgTable("memberships", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  role: text("role").notNull().default("member"),
+  addedAt: created(),
+  removedAt: timestamp("removed_at", { withTimezone: true }),
+}, t => [index("memberships_workspace_index").on(t.workspaceId), uniqueIndex("memberships_workspace_user_unique").on(t.workspaceId, t.userId)]);
+
+/** Only the hash of the browser's token is stored — a leaked table must not mint sessions. */
+export const sessions = pgTable("sessions", {
+  id: id(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(),
+  createdAt: created(),
+  lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+}, t => [uniqueIndex("sessions_token_hash_unique").on(t.tokenHash), index("sessions_user_index").on(t.userId)]);

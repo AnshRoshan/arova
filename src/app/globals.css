@@ -884,3 +884,12 @@ button.sp-item:hover, button.node:hover { background: color-mix(in srgb, var(--s
 @media (prefers-reduced-motion: no-preference) {
   .rail-btn, .rail-btn::before { transition: background .2s var(--ease), color .2s var(--ease), box-shadow .2s var(--ease); }
 }
+
+/* ── account and people (Feature 15) ── */
+.account { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--rule); display: grid; gap: 10px; }
+.account h3 { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--sec, var(--azure)); }
+.account .primary { justify-self: start; text-decoration: none; }
+.people h4 { margin: 6px 0 2px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.people .kv .push { display: flex; gap: 6px; }
+.people .kv .mono { color: var(--ink-3); font-size: 11px; }
+.load-earlier { display: flex; align-items: center; gap: 6px; margin: 2px auto 10px; font-size: 11.5px; color: var(--ink-3); padding: 4px 12px; }

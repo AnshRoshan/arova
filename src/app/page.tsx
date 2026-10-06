@@ -43,9 +43,11 @@ type Board = {
   workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
   overview: { activeAgents: number; enabledRoutines: number; completedRuns: number; pendingApprovals: number; messagesToday: number };
   agents: Agent[]; messages: Message[]; routines: Routine[]; runs: Run[]; steps: Step[]; approvals: Approval[];
+  olderMessages: boolean;
   connections: { agentId: string; slug: string }[]; events: BoardEvent[];
   sandboxProvider: string; modelConfigured: boolean; profiles: Profile[];
   auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
+  identity: { signedIn: { name: string; email: string; role: "owner" | "member" } | null; people: { id: string; name: string; email: string; role: string; addedAt: string; lastSeenAt: string | null; sessions: number }[] };
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
@@ -55,7 +57,7 @@ type Tone = "ran" | "waiting" | "fault" | "idle";
 
 const faces: Record<string, LucideIcon> = { sparkles: Sparkles, globe: Globe2, palette: WandSparkles, sun: Sun, bot: Bot, zap: Zap };
 /** Tools that genuinely execute in the server process — the registry is the only source of this claim. */
-const localToolSpecs = TOOL_REGISTRY.filter(t => t.available && t.kind === "local");
+const localToolSpecs = TOOL_REGISTRY.filter(t => t.available && (t.kind === "local" || t.id === "web_fetch"));
 const toolCatalog = [  { name: "Gmail", slug: "gmail", category: "Communication", description: "Read, draft, and organise your inbox." },
   { name: "Slack", slug: "slack", category: "Communication", description: "Keep channels in sync." },
   { name: "GitHub", slug: "github", category: "Developer", description: "Track repositories, issues and pull requests." },
@@ -220,6 +222,11 @@ export default function Workbench() {
   /** The origin is only known in the browser, so the copy line is filled after mount rather than rendered from a guess. */
   const [origin, setOrigin] = useState("");
   useEffect(() => { setOrigin(window.location.origin); }, []);
+  /** A sign-in refusal arrives as a redirect with the sentence; show it once, then clean the URL. */
+  useEffect(() => {
+    const why = new URLSearchParams(window.location.search).get("auth");
+    if (why) { setToast(why); window.history.replaceState(null, "", window.location.pathname); }
+  }, []);
   const [atBottom, setAtBottom] = useState(true);
   const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | Run>(null);
   const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team"; id: string; name: string } | null>(null);
@@ -371,6 +378,19 @@ export default function Workbench() {
   }
 
   const stop = () => abortRef.current?.abort();
+
+  /** One page of older history, merged into the stored rows by id. The board only claims "there is
+   * more" when the window actually filled, so this button never promises an empty page forever. */
+  const [earlierBusy, setEarlierBusy] = useState(false);
+  const loadEarlier = async () => {
+    const oldest = (data?.messages ?? []).reduce((min, m) => (!min || m.createdAt < min ? m.createdAt : min), "");
+    if (!oldest || earlierBusy || busy) return;
+    setEarlierBusy(true);
+    const r = await act("loadEarlier", { before: oldest });
+    const earlier = Array.isArray(r?.earlier) ? (r.earlier as Message[]) : [];
+    if (earlier.length) setData(prev => prev ? { ...prev, messages: [...earlier.filter(e => !prev.messages.some(m => m.id === e.id)), ...prev.messages] } : prev);
+    setEarlierBusy(false);
+  };
 
   /**
    * Brief the organisation. This is the record Feature 11 exists to make: each teammate the lead
@@ -774,7 +794,7 @@ export default function Workbench() {
             {toolCatalog.filter(t => t.category === cat).map(t => <button key={t.slug} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Compass size={16} /></span><span className="sp-item-main"><b>{t.name}</b><em>not connected</em></span></button>)}
           </div>)}
           {toolsTab === "local" && <>
-            <div className="sp-group">Runs in this process</div>
+            <div className="sp-group">Runs for real here</div>
             {localToolSpecs.map(t => <button key={t.id} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Zap size={16} /></span><span className="sp-item-main"><b>{t.label}</b><em>no credential needed</em></span></button>)}
           </>}
           {toolsTab === "mcp" && <>
@@ -943,6 +963,7 @@ export default function Workbench() {
             <p>Say what you want done. {briefLead?.name ?? "The lead"} answers as the organisation: any teammate it pulls in posts its own answer in this channel, and the report names those posts.</p>
           </div>}
           <div className="thread channel">
+            {data.olderMessages && <button className="ghost load-earlier" type="button" disabled={earlierBusy} onClick={() => void loadEarlier()}><ArrowDown size={13} />{earlierBusy ? "Loading…" : "Load earlier history"}</button>}
             {channelFeed.map((m, i) => {
               const authorId = m.metadata?.authoredBy ? String(m.metadata.authoredBy) : null;
               const author = authorId ? byId(authorId) : null;
@@ -1015,6 +1036,7 @@ export default function Workbench() {
             <h2>No conversation here yet</h2>
             <p>{agent.name} is {answering ? `on ${answering.label} · ${answering.model}` : "running without a model key"}. Ask something below and the reply is written to this workspace.</p>
           </div>}
+          {data.olderMessages && <button className="ghost load-earlier" type="button" disabled={earlierBusy} onClick={() => void loadEarlier()}><ArrowDown size={13} />{earlierBusy ? "Loading…" : "Load earlier history"}</button>}
           {thread.map((m, i) => {
             const fault = m.kind === "provider_error";
             const mine = m.role === "user";
@@ -1128,7 +1150,7 @@ export default function Workbench() {
           onDraft={() => { const lead = agent ?? data.agents[0]; if (!lead) return; openSeat(lead.id); setDraft("Build me an organisation for "); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 80); }} />}
 
         {pane === "tools" && <div className="pane">
-          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has a browser, files, or an external account. Four tools do run inside the server itself — open Local tools. Per-agent grants live in Agent › Capabilities.</p></div></div>
+          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has a browser, files, or an external account. Five tools do run for real: four inside the server process, and one public web page behind an SSRF policy — open Local tools. Per-agent grants live in Agent › Capabilities.</p></div></div>
           <div className={`rows ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <div className="row" key={t.slug}>
             <span className="row-face"><Compass size={15} /></span>
             <span className="row-main"><strong>{t.name}</strong><span>{t.description} · {t.category}</span></span>
@@ -1137,13 +1159,13 @@ export default function Workbench() {
           </div>)}</div>
           {toolsTab === "local" && <div className="local-console">
             <h2 className="pane-h2">Local tools<span className="mono">{localToolSpecs.length}</span></h2>
-            <p className="hint">These execute right now, inside the server process, with no credential and no sandbox. The calculator is a hand-written arithmetic parser, so an expression cannot execute the app. Each run is stored as a real run with a step — nothing here is a mock.</p>
+            <p className="hint">These execute right now with no credential and no sandbox: four inside the server process, and the fetch through a public-address-only policy. The calculator is a hand-written arithmetic parser, so an expression cannot execute the app. Each run is stored as a real run with a step — nothing here is a mock.</p>
             <div className="lc-runner">
               <label className="lc-seat" htmlFor="lc-agent">Run as</label>
               <select id="lc-agent" value={consoleAgent || agent?.id || ""} onChange={e => setConsoleAgent(e.target.value)} disabled={!data.agents.length}>
                 {data.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
-              <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} placeholder={consoleSpec?.id === "calc" ? "2 * (3 + 4) - 1" : consoleSpec?.id === "now_in_timezone" ? "Europe/Berlin or UTC @ 2026-10-06T12:00:00Z" : consoleSpec?.id === "json_transform" ? "name.first::{\"name\":{\"first\":\"Ada\"}}" : "sha256::hello world or plain text"} aria-label="Tool input" disabled={!data.agents.length} />
+              <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} placeholder={consoleSpec.id === "calc" ? "2 * (3 + 4) - 1" : consoleSpec.id === "now_in_timezone" ? "Europe/Berlin or UTC @ 2026-10-06T12:00:00Z" : consoleSpec.id === "json_transform" ? "name.first::{\"name\":{\"first\":\"Ada\"}}" : consoleSpec.id === "web_fetch" ? "https://example.com/article" : "sha256::hello world or plain text"} aria-label="Tool input" disabled={!data.agents.length} />
               <button className="primary" type="button" disabled={busy || !data.agents.length || !consoleInput.trim()} onClick={async () => {
                 const r = await act("runTool", { agentId: consoleAgent || agent?.id, toolId: consoleSpec.id, toolInput: consoleInput });
                 if (r?.tool) setToolRuns(prev => ({ ...prev, [consoleSpec.id]: r.tool }));
@@ -1153,7 +1175,7 @@ export default function Workbench() {
             <div className="rows">{localToolSpecs.map(t => <div className={`row ${consoleTool === t.id ? "on" : ""}`} key={t.id}>
               <span className="row-face"><WandSparkles size={15} /></span>
               <span className="row-main"><strong>{t.label}<span className="mono">{t.id}</span></strong><span>{t.description}</span></span>
-              <span className="row-side"><span className="chip ran"><i />runs here</span></span>
+              <span className="row-side"><span className="chip ran"><i />{t.id === "web_fetch" ? "policy-guarded" : "runs here"}</span></span>
               {toolRuns[t.id] && <span className="row-actions"><span className={`lc-out ${toolRuns[t.id].ok ? "ok" : "bad"}`} title={toolRuns[t.id].ok ? toolRuns[t.id].output : toolRuns[t.id].error}>{(toolRuns[t.id].ok ? toolRuns[t.id].output : toolRuns[t.id].error)?.slice(0, 120) ?? ""}</span></span>}
               <span className="row-actions"><button className="ghost" type="button" onClick={() => setConsoleTool(t.id)}>{consoleTool === t.id ? "in the runner" : "use"}</button></span>
             </div>)}</div>
@@ -1177,6 +1199,26 @@ export default function Workbench() {
                 <option value="">None designated · any seat may propose an organisation</option>
                 {data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}
               </select><span className="hint">With a creator seat chosen, only that seat may found an organisation on its own behalf; an organisation&rsquo;s own lead may add seats inside it. You can always create one yourself.</span></div>
+              <div className="account">
+                <h3>Account</h3>
+                {data.identity.signedIn
+                  ? <div className="kv"><span>{data.identity.signedIn.name}{data.identity.signedIn.email ? ` · ${data.identity.signedIn.email}` : ""}</span><span className="push"><span className={`chip ${data.identity.signedIn.role === "owner" ? "ran" : "idle"}`}><i />{data.identity.signedIn.role}</span></span></div>
+                  : <p className="hint">{data.auth.providers.length ? "This browser is on an anonymous cookie session. Sign in to become a person on record." : "Identified by a browser cookie — no sign-in provider is configured on this server, so the cookie is the whole identity."}</p>}
+                {data.auth.providers.map(p => <a key={p.name} className="primary solid" href={`/api/auth/start?provider=${encodeURIComponent(p.name)}`}>Sign in with {p.label}<ArrowRight size={14} /></a>)}
+                {!data.identity.signedIn && data.auth.incomplete.length > 0 && <p className="hint mono">{data.auth.incomplete.map(i => `${i.name}: set ${i.missing.join(", ")}`).join(" · ")}</p>}
+                {data.identity.signedIn && <button className="ghost" type="button" disabled={busy} onClick={async () => { await fetch("/api/auth/signout", { method: "POST" }); void load(); }}>Sign out</button>}
+                {data.identity.signedIn?.role === "owner" && data.identity.people.length > 0 && <div className="people">
+                  <h4>People</h4>
+                  {data.identity.people.map(p => <div className="kv" key={p.id}>
+                    <span>{p.name}{p.email ? ` · ${p.email}` : ""}</span>
+                    <span className="mono">{p.sessions} live session{p.sessions === 1 ? "" : "s"}</span>
+                    <span className="push">
+                      <button className="ghost" type="button" disabled={busy} onClick={() => void act("setPersonRole", { userId: p.id, role: p.role === "owner" ? "member" : "owner" }, p.role === "owner" ? "Demoted to member" : "Promoted to owner")}>{p.role === "owner" ? "demote" : "make owner"}</button>
+                      {p.role !== "owner" && <button className="ghost" type="button" disabled={busy} onClick={() => void act("removePerson", { userId: p.id }, "Removed; their sessions ended")}>remove</button>}
+                    </span>
+                  </div>)}
+                </div>}
+              </div>
             </div>
             <div className={`block ${settingsTab !== "models" ? "is-hidden" : ""}`}>
               <h2>Model providers</h2><p>Configured on the server in <span className="mono">.env.local</span>. A key never reaches the browser.</p>
@@ -1190,7 +1232,7 @@ export default function Workbench() {
             </div>
             <div className={`block ${settingsTab !== "limits" ? "is-hidden" : ""}`}>
               <h2>What cannot run here</h2><p>Limits of this deployment, not switches for you to find.</p>
-              <div className="kv"><span>Sign-in</span><span className="push"><span className="chip idle"><i />cookie demo{data.auth.providers.length ? ` · ${data.auth.providers.map(p => p.label).join(", ")} env-ready, flow pending` : data.auth.incomplete.length ? ` · ${data.auth.incomplete.map(i => `${i.name} missing ${i.missing.join("/")}`).join("; ")}` : ""}</span></span></div>
+              <div className="kv"><span>Sign-in</span><span className="push"><span className={`chip ${data.identity.signedIn ? "ran" : "idle"}`}><i />{data.identity.signedIn ? `signed in as ${data.identity.signedIn.role}` : data.auth.providers.length ? `cookie session · ${data.auth.providers.map(p => p.label).join(", ")} available` : "cookie demo"}</span></span></div>
               <div className="kv"><span>Scheduler</span><span className="push"><span className={`chip ${data.scheduler.headline === "always-on" ? "ran" : data.scheduler.headline === "degraded" ? "fault" : "waiting"}`}><i />{data.scheduler.headline === "always-on" ? "always on" : data.scheduler.headline === "degraded" ? "went silent" : "runs on open"}</span></span></div>
               <div className="kv"><span>Tool connectors</span><span className="push"><span className="chip idle"><i />not configured</span></span></div>
               <div className="kv"><span>Computer / browser</span><span className="push"><span className="chip idle"><i />{data.sandboxProvider}</span></span></div>
