@@ -32,6 +32,17 @@ export function parseSchedule(label: string): Schedule | null {
   const text = (label ?? "").trim();
   if (!text) return null;
 
+  // "Every 30 minutes": stored as a fractional everyHours so the Schedule shape stays one type.
+  // The floor is five minutes: every tick is a model call and the daily budget is finite.
+  const minutes = /^every\s+(\d{1,3})\s+minutes?$/i.exec(text);
+  if (minutes) {
+    const n = Number(minutes[1]);
+    return n >= 5 && n <= 180 ? { minute: 0, hour: null, weekdays: null, everyHours: n / 60 } : null;
+  }
+  if (/^every\s+hour$/i.test(text)) return { minute: 0, hour: null, weekdays: null, everyHours: 1 };
+  // Older builds of the routine dialog offered the bare label "Every week"; it now means Monday 9:00 AM.
+  if (/^every\s+week$/i.test(text)) return { minute: 0, hour: 9, weekdays: [1], everyHours: null };
+
   const every = /^every\s+(\d{1,3})\s+hours?$/i.exec(text);
   if (every) {
     const hours = Number(every[1]);
@@ -135,6 +146,8 @@ const DAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export function describeSchedule(label: string, timeZone: string): string {
   const schedule = parseSchedule(label);
   if (!schedule) return "no recognised schedule — it will not run";
+  if (schedule.everyHours && schedule.everyHours < 1) return `every ${Math.round(schedule.everyHours * 60)} minutes`;
+  if (schedule.everyHours === 1) return `every hour`;
   if (schedule.everyHours) return `every ${schedule.everyHours} hours, ${timeZone}`;
   const hour = schedule.hour ?? 0;
   const meridiem = hour < 12 ? "AM" : "PM";

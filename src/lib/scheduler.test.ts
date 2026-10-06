@@ -14,7 +14,7 @@ test("parse: the five saved labels and an hourly form all resolve", () => {
 });
 
 test("parse: anything unrecognised is null, not a guess", () => {
-  assert.equal(parseSchedule("Every week"), null);
+  assert.equal(parseSchedule("Every fortnight"), null);
   assert.equal(parseSchedule(""), null);
   assert.equal(parseSchedule("sometime on tuesday maybe"), null);
   assert.equal(parseSchedule("Every day at 25:00"), null);
@@ -54,7 +54,7 @@ test("next: a wall clock that spring-forward deletes is skipped, not invented", 
 });
 
 test("next: an unparseable label or unknown zone yields no time", () => {
-  assert.equal(nextRunAt("Every week", "UTC", at("2026-03-02T00:00:00Z")), null);
+  assert.equal(nextRunAt("Every fortnight", "UTC", at("2026-03-02T00:00:00Z")), null);
   assert.equal(nextRunAt("Every day at 8:00 AM", "Mars/Olympus_Mons", at("2026-03-02T00:00:00Z")), null);
   assert.equal(nextRunAt("Every day at 8:00 AM", "UTC", null), null);
 });
@@ -82,5 +82,20 @@ test("describe: the UI gets a sentence that names the zone", () => {
   assert.equal(describeSchedule("Every 6 hours", "UTC"), "every 6 hours, UTC");
   assert.equal(describeSchedule("Every Friday at 4:00 PM", "UTC"), "4:00 PM Fri, UTC", "a PM hour must not print as 16:00 PM");
   assert.equal(describeSchedule("Every day at 12:00 AM", "UTC"), "12:00 AM daily, UTC");
-  assert.equal(describeSchedule("Every week", "UTC"), "no recognised schedule — it will not run");
+  assert.equal(describeSchedule("Every fortnight", "UTC"), "no recognised schedule — it will not run");
+});
+
+test("minute intervals parse, respect the five-minute floor and describe themselves", () => {
+  assert.deepEqual(parseSchedule("Every 30 minutes"), { minute: 0, hour: null, weekdays: null, everyHours: 0.5 });
+  assert.equal(parseSchedule("Every 4 minutes"), null);
+  assert.equal(parseSchedule("Every 181 minutes"), null);
+  assert.equal(describeSchedule("Every 15 minutes", "UTC"), "every 15 minutes");
+  const next = nextRunAt("Every 15 minutes", "UTC", new Date("2026-03-01T10:07:00Z"));
+  assert.equal(next?.toISOString(), "2026-03-01T10:15:00.000Z");
+});
+
+test("the labels the dialog has offered all resolve to a real schedule", () => {
+  assert.deepEqual(parseSchedule("Every week"), { minute: 0, hour: 9, weekdays: [1], everyHours: null });
+  assert.equal(parseSchedule("Every hour")?.everyHours, 1);
+  assert.equal(describeSchedule("Every hour", "UTC"), "every hour");
 });

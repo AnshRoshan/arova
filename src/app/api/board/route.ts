@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { and, desc, eq, gt, lte, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agents, approvals, connections, delegations, events, memories, messages, modelUsage, routines, runs, runSteps, sandboxes, teams, triggers, workspaces } from "@/db/schema";
+import { agents, approvals, connections, delegations, events, memories, messages, modelUsage, routines, runs, runSteps, sandboxes, schedulerHeartbeats, teams, triggers, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { skillPrompt } from "@/lib/skills";
 import { DEFAULT_RESERVE_TOKENS, completionText, estimateTokens, finishReason, loadProfiles, requestCompletion, resolveForAgent, sseDelta, trimToTokenBudget, usageFromJson, usageFromSseLine, type ProviderProfile } from "@/lib/model-gateway";
@@ -11,6 +11,7 @@ import { ORG_SYSTEM, buildPeerPrompt, decollide, extractJsonObject, extractRoste
 import { DEFAULT_CAPABILITIES, allowsAction, mcpSummary, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor, type Capabilities } from "@/lib/tools";
 import { MAX_MEMBERS, decollideOrg, normaliseOrg, orgTemplate, type Org } from "@/lib/org";
 import { nextRunAt } from "@/lib/scheduler";
+import { alwaysOn, cronState, driverState, schedulerIntervalSeconds, workerEnabled } from "@/lib/worker-config";
 import { nextFatigue } from "@/lib/fatigue";
 import { withProvenance } from "@/lib/provenance";
 import { loadAuthProviders } from "@/lib/auth-providers";
@@ -79,7 +80,7 @@ function publicProfiles(profiles: ProviderProfile[]) {
 async function board(workspaceId: string) {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
   const profiles = loadProfiles();
-  const [agentList, messageList, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList] = await Promise.all([
+  const [agentList, messageList, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
     db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(messages.createdAt),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
@@ -93,6 +94,7 @@ async function board(workspaceId: string) {
     db.select().from(teams).where(eq(teams.workspaceId, workspaceId)).orderBy(teams.createdAt),
     db.select().from(memories).where(eq(memories.workspaceId, workspaceId)).orderBy(desc(memories.createdAt)),
     db.select().from(triggers).where(eq(triggers.workspaceId, workspaceId)).orderBy(desc(triggers.createdAt)),
+    db.select().from(schedulerHeartbeats),
   ]);
   // A consult card must still show the peer's answer the day after it happened. The day window is
   // there to keep the index's "today" list small — it was never meant to erase stored evidence.
@@ -111,6 +113,17 @@ async function board(workspaceId: string) {
       messagesToday: messageList.filter(m => m.createdAt >= startOfUtcDay && m.role === "user").length,
     },
     agents: agentList.map(a => ({ ...a, capabilities: normaliseCapabilities(a.capabilities) })), messages: messageList, routines: routineList, runs: runList, steps: stepList, approvals: approvalList, connections: connectionList, sandboxes: sandboxList, events: eventList, memories: memoryList, triggers: triggerList,
+    scheduler: (() => {
+      const now = new Date();
+      const interval = schedulerIntervalSeconds();
+      const enabled = workerEnabled();
+      const cronConfigured = Boolean(process.env.CRON_SECRET);
+      const w = beats.find(b => b.source === "worker") ?? null;
+      const c = beats.find(b => b.source === "cron") ?? null;
+      const worker = driverState(w, interval, now, enabled);
+      const cron = cronState(c, cronConfigured, now);
+      return { headline: alwaysOn(worker, cron), now: now.toISOString(), intervalSeconds: interval, worker: { enabled, state: worker, beat: w }, cron: { configured: cronConfigured, state: cron, beat: c } };
+    })(),
     sandboxProvider: sandboxProvider.name,
     profiles: publicProfiles(profiles),
     providers: Object.fromEntries(profiles.map(p => [p.name, p.configured])) as Record<string, boolean>,
@@ -131,8 +144,9 @@ const inFlight = new Set<string>();
  * The scheduler tick. There is no daemon in this deployment, so due work is claimed when the
  * workspace is read — and the UI says so rather than implying a background service.
  */
-async function tickSchedules(workspaceId: string) {
+async function tickSchedules(workspaceId: string): Promise<Promise<unknown>[]> {
   const now = new Date();
+  const started: Promise<unknown>[] = [];
   const [ws] = await db.select({ timezone: workspaces.timezone }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
   // Routines saved before this feature have no due time; give them one rather than showing "not scheduled".
   const unanchored = await db.select().from(routines).where(and(eq(routines.workspaceId, workspaceId), eq(routines.enabled, true), isNull(routines.nextRunAt))).limit(10);
@@ -142,29 +156,99 @@ async function tickSchedules(workspaceId: string) {
   }
   const due = await db.select().from(routines)
     .where(and(eq(routines.workspaceId, workspaceId), eq(routines.enabled, true), lte(routines.nextRunAt, now), sql`${routines.nextRunAt} IS NOT NULL`))
-    .orderBy(routines.nextRunAt).limit(2);
+    .orderBy(routines.nextRunAt).limit(4);
   for (const routine of due) {
     if (inFlight.has(routine.id)) continue;
     // Claim by predicate, not by the value we read. Postgres re-checks the WHERE clause after the
     // row lock, so a second tab that races us finds it no longer due and skips. Comparing the
     // timestamp itself would never match: the column keeps microseconds, a JS Date keeps milliseconds.
-    const next = nextRunAt(routine.schedule, ws?.timezone ?? "UTC", now);
+    const next = nextRunAt(routine.schedule, routine.timezone || ws?.timezone || "UTC", now);
     const [claimed] = await db.update(routines)
       .set({ lastRunAt: now, nextRunAt: next, lastStatus: "RUNNING" })
       .where(and(eq(routines.id, routine.id), lte(routines.nextRunAt, now)))
       .returning();
     if (!claimed) continue;
     inFlight.add(routine.id);
-    void executeRoutine(workspaceId, routine, now, claimed.nextRunAt).finally(() => inFlight.delete(routine.id));
+    started.push(executeRoutine(workspaceId, routine, now, claimed.nextRunAt).catch(error => console.error("Routine failed", error instanceof Error ? error.message : "unknown error")).finally(() => inFlight.delete(routine.id)));
   }
+  return started;
+}
+
+/** A run still RUNNING after this long was cut off by a restart or a crash; no model call lasts this long. */
+const STUCK_RUN_MS = 15 * 60_000;
+
+/** Close runs that a restart orphaned, so a 24/7 scheduler never shows a routine "running" for days. */
+async function reapStuckRuns(): Promise<number> {
+  const cutoff = new Date(Date.now() - STUCK_RUN_MS);
+  const stuck = await db.select().from(runs).where(and(eq(runs.status, "RUNNING"), lte(runs.startedAt, cutoff))).limit(50);
+  for (const run of stuck) {
+    if (run.routineId && inFlight.has(run.routineId)) continue;
+    await db.update(runs).set({ status: "FAILED", completedAt: new Date(), summary: "Interrupted: the server restarted or stopped before this run finished. Nothing further was executed." }).where(eq(runs.id, run.id));
+    await db.insert(runSteps).values({ workspaceId: run.workspaceId, runId: run.id, title: "Interrupted", detail: "Closed by the scheduler after the server stopped mid-run.", status: "FAILED" });
+    if (run.routineId) await db.update(routines).set({ lastStatus: "FAILED" }).where(and(eq(routines.id, run.routineId), eq(routines.lastStatus, "RUNNING")));
+    await audit(run.workspaceId, run.agentId, "run.interrupted", run.title);
+  }
+  return stuck.length;
+}
+
+export type TickSource = "worker" | "cron";
+
+/**
+ * One pass over every workspace. This is what makes the scheduler always-on: the in-process worker
+ * (src/instrumentation.ts) calls it on an interval, and /api/cron calls it for an outside clock.
+ * `wait` is for serverless callers whose process may be frozen the moment the response is sent.
+ */
+export async function tickAllWorkspaces(source: TickSource, options: { wait?: boolean } = {}): Promise<{ workspaces: number; claimed: number; reaped: number }> {
+  let claimed = 0, reaped = 0, failure: string | null = null;
+  let workspaceCount = 0;
+  try {
+    reaped = await reapStuckRuns();
+    const now = new Date();
+    const due = await db.selectDistinct({ workspaceId: routines.workspaceId }).from(routines)
+      .where(and(eq(routines.enabled, true), or(isNull(routines.nextRunAt), lte(routines.nextRunAt, now))));
+    workspaceCount = due.length;
+    const pending: Promise<unknown>[] = [];
+    for (const { workspaceId } of due) {
+      try {
+        const started = await tickSchedules(workspaceId);
+        claimed += started.length;
+        pending.push(...started);
+      } catch (error) {
+        failure = error instanceof Error ? error.message.slice(0, 200) : "unknown error";
+        console.error("Scheduler tick failed", failure);
+      }
+    }
+    if (options.wait) await Promise.allSettled(pending);
+  } catch (error) {
+    failure = error instanceof Error ? error.message.slice(0, 200) : "unknown error";
+    console.error("Scheduler pass failed", failure);
+  }
+  await db.insert(schedulerHeartbeats).values({ source, ticks: 1, lastClaimed: claimed, totalClaimed: claimed, lastError: failure })
+    .onConflictDoUpdate({ target: schedulerHeartbeats.source, set: { lastTickAt: new Date(), ticks: sql`${schedulerHeartbeats.ticks} + 1`, lastClaimed: claimed, totalClaimed: sql`${schedulerHeartbeats.totalClaimed} + ${claimed}`, lastError: failure } })
+    .catch(error => console.error("Heartbeat write failed", error instanceof Error ? error.message : "unknown error"));
+  return { workspaces: workspaceCount, claimed, reaped };
+}
+
+/** Called once when the in-process worker boots so the "since" time on screen is this process's start. */
+export async function markWorkerStarted() {
+  await db.insert(schedulerHeartbeats).values({ source: "worker", ticks: 0 })
+    .onConflictDoUpdate({ target: schedulerHeartbeats.source, set: { startedAt: new Date(), lastTickAt: new Date(), ticks: 0, lastClaimed: 0, lastError: null } });
 }
 
 /** One scheduled execution: a real run, real steps, and the answer posted into the agent's thread. */
-async function executeRoutine(workspaceId: string, routine: typeof routines.$inferSelect, startedAt: Date, nextRun: Date | null) {
-  const [run] = await db.insert(runs).values({ workspaceId, agentId: routine.agentId, routineId: routine.id, title: routine.name, status: "RUNNING", summary: `Scheduled for ${startedAt.toISOString()}`, initiator: "routine", startedAt }).returning();
+async function executeRoutine(workspaceId: string, routine: typeof routines.$inferSelect, startedAt: Date, nextRun: Date | null, manual?: { idempotencyKey: string }): Promise<{ runId: string; status: string; summary: string }> {
+  const [run] = await db.insert(runs).values({ workspaceId, agentId: routine.agentId, routineId: routine.id, title: routine.name, status: "RUNNING", summary: manual ? "Started by you with Run now" : `Scheduled for ${startedAt.toISOString()}`, initiator: manual ? "person" : "routine", idempotencyKey: manual?.idempotencyKey, startedAt }).returning();
+  let outcome = { runId: run.id, status: "RUNNING", summary: "" };
   const step = (title: string, detail = "") => db.insert(runSteps).values({ workspaceId, runId: run.id, title, detail });
-  const finish = async (status: string, summary: string) => {
+  const finish = async (status: string, summary: string): Promise<{ runId: string; status: string; summary: string }> => {
+    outcome = { runId: run.id, status, summary };
     await db.update(runs).set({ status, summary, completedAt: new Date() }).where(eq(runs.id, run.id));
+    if (manual) {
+      // A person pressing Run now neither moves the schedule nor counts toward the fatigue streak.
+      await db.update(routines).set({ lastStatus: status, lastRunAt: new Date() }).where(eq(routines.id, routine.id));
+      await audit(workspaceId, routine.agentId, "routine.ran", `${routine.name}: ${status.toLowerCase()} (run now)`);
+      return outcome;
+    }
     // The fatigue rule: one message on the first failure after a success, silence through the
     // streak, and ten in a row switches the routine off — an expired key fires cleanly forever,
     // and only switching off, and saying so, ends it.
@@ -178,8 +262,9 @@ async function executeRoutine(workspaceId: string, routine: typeof routines.$inf
       await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: `${routine.name} has failed ${f.streak} runs in a row, so it is switched off and nothing more will fire. Last failure: ${summary} Fix what it needs — a paused seat, a missing key, the daily budget — then switch it back on.`, kind: "message", metadata: { fatigue: "final", routineId: routine.id, runId: run.id, scheduled: true } });
       await audit(workspaceId, routine.agentId, "routine.fatigued", `${routine.name}: switched off after ${f.streak} consecutive failures`);
     }
+    return outcome;
   };
-  await step("Claimed", `${routine.schedule} · ${routine.timezone}`);
+  await step(manual ? "Started" : "Claimed", manual ? "Run now" : `${routine.schedule} · ${routine.timezone}`);
   try {
     const agent = await ownedAgent(workspaceId, routine.agentId);
     if (agent.status !== "ACTIVE") return finish("FAILED", `${agent.name} is paused, so the schedule did not run. Resume the agent to continue.`);
@@ -199,12 +284,13 @@ async function executeRoutine(workspaceId: string, routine: typeof routines.$inf
     await recordUsage(workspaceId, profile.name, counted?.input ?? estimateTokens(task), counted?.output ?? estimateTokens(answer), Boolean(counted));
     const said = splitReasoning(answer).rest;
     await step("Answered", `${said.length} characters from ${profile.model}`);
-    await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: answer, kind: "message", metadata: { provider: profile.name, model: profile.model, scheduled: true, routineId: routine.id, runId: run.id } });
+    await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: answer, kind: "message", metadata: { provider: profile.name, model: profile.model, scheduled: !manual, routineId: routine.id, runId: run.id } });
     await finish("COMPLETED", said ? said.slice(0, 280) : "The model returned reasoning only, so there is no answer to show. The stored message keeps exactly what it produced.");
   } catch (error) {
     await step("Failed", error instanceof Error ? error.message.slice(0, 200) : "unknown error");
     await finish("FAILED", error instanceof Error ? error.message.slice(0, 280) : "The scheduled run failed.");
   }
+  return outcome;
 }
 
 export async function GET() {
@@ -1355,7 +1441,7 @@ export async function POST(request: NextRequest) {
       if (planBlocks("create_routine", normaliseCapabilities(agent.capabilities).permissionMode)) throw new Error(`${agent.name} is in plan mode: it can advise and propose, but not save routines. Switch its permission mode to act.`);
       const input = z.object({ name: z.string().trim().min(1).max(100), description: text, schedule: z.string().trim().min(1).max(120) }).parse(body);
       const [routine] = await db.insert(routines).values({ workspaceId, agentId: agent.id, ...input, timezone: workspace.timezone, nextRunAt: nextRunAt(input.schedule, workspace.timezone, new Date()) }).returning();
-      await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "assistant", content: `Done — “${routine.name}” is on your schedule. This workspace does not have a scheduler worker configured, so scheduled execution is not active yet. You can still use Run Now to inspect readiness.` });
+      await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "assistant", content: `Done — “${routine.name}” is on your schedule (${routine.schedule}). ${workerEnabled() ? "The always-on scheduler checks for due routines every " + schedulerIntervalSeconds() + " seconds while this server is running." : "The in-process scheduler is switched off on this server, so it fires only when an outside clock calls /api/cron or when you open the workspace."} Run now executes it immediately.` });
       await audit(workspaceId, agent.id, "routine.created", routine.name);
     } else if (["toggleRoutine", "deleteRoutine", "runRoutine"].includes(action)) {
       const routineId = uuid.parse(body.routineId);
@@ -1375,12 +1461,16 @@ export async function POST(request: NextRequest) {
         const key = request.headers.get("Idempotency-Key") || crypto.randomUUID();
         const [existing] = await db.select().from(runs).where(and(eq(runs.workspaceId, workspaceId), eq(runs.idempotencyKey, key))).limit(1);
         if (existing) result = { runId: existing.id };
+        else if (inFlight.has(routine.id)) throw new Error(`${routine.name} is already running. Wait for it to finish.`);
         else {
-          const [run] = await db.insert(runs).values({ workspaceId, agentId: routine.agentId, routineId: routine.id, title: routine.name, status: "WAITING_FOR_TOOL", summary: "Execution needs a configured workflow worker and any required tool connections. No external actions were performed.", idempotencyKey: key }).returning();
-          await db.insert(runSteps).values([{ workspaceId, runId: run.id, title: "Run requested", detail: `Manual run of ${routine.name}` }, { workspaceId, runId: run.id, title: "Waiting for runtime", detail: "Connect the required tools and configure a workflow worker before execution.", status: "WAITING_FOR_TOOL" }]);
-          await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: `I received the Run Now request for “${routine.name}”. It’s waiting for a configured workflow runtime and tools; I haven’t performed any external actions. Check Runs for details.`, kind: "execution_result" });
-          await audit(workspaceId, routine.agentId, "routine.run.requested", routine.name);
-          result = { runId: run.id };
+          // Real execution: the same code path the scheduler uses, held open until the model answers so the
+          // run row, the thread message and the board you get back all show the true outcome.
+          inFlight.add(routine.id);
+          try {
+            await audit(workspaceId, routine.agentId, "routine.run.requested", routine.name);
+            const outcome = await executeRoutine(workspaceId, routine, new Date(), routine.nextRunAt, { idempotencyKey: key });
+            result = { runId: outcome.runId, status: outcome.status };
+          } finally { inFlight.delete(routine.id); }
         }
       }
     } else if (action === "cancelRun") {

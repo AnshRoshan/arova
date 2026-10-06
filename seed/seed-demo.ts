@@ -55,7 +55,7 @@ async function main() {
   const workspace = await pickWorkspace();
   if (!workspace) throw new Error("No workspaces exist. Open the app once, or pass --new.");
 
-  const existing = await db.select({ id: agents.id }).from(agents).where(and(eq(agents.workspaceId, workspace.id), desc(agents.createdAt))).limit(1);
+  const existing = await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, workspace.id)).limit(1);
   if (existing.length && !has("force")) {
     throw new Error(`Workspace ${workspace.id} already has agents. Pass --force to add the sample set anyway, or --new for a clean one.`);
   }

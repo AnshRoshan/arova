@@ -11,6 +11,8 @@ import { SKILL_REGISTRY, resolveSkills } from "@/lib/skills";
 import { parseMarkdown, splitReasoning, type Block, type Inline as MdInline } from "@/lib/markdown";
 import { hueFor, hueVars } from "@/lib/identity";
 import { describeSchedule } from "@/lib/scheduler";
+import { AlwaysOn, type SchedulerInfo } from "./AlwaysOn";
+import { ScheduleBuilder } from "./ScheduleBuilder";
 import { orgTree, type OrgNode } from "@/lib/org";
 import { resolveLead, summonCeiling } from "@/lib/channel";
 
@@ -46,6 +48,7 @@ type Board = {
   auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
+  scheduler: SchedulerInfo;
 };
 type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel";
 type Tone = "ran" | "waiting" | "fault" | "idle";
@@ -59,7 +62,7 @@ const toolCatalog = [
   { name: "Notion", slug: "notion", category: "Productivity", description: "Turn pages into working context." },
   { name: "Browser", slug: "browser", category: "Browser", description: "Work a site inside an isolated session." },
 ];
-const zones = ["America/New_York", "America/Chicago", "America/Los_Angeles", "Europe/London", "Europe/Paris", "Asia/Kolkata", "Asia/Tokyo", "Australia/Sydney", "UTC"];
+const zones = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Africa/Lagos", "Asia/Dubai", "Asia/Kolkata", "Asia/Dhaka", "Asia/Singapore", "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland", "UTC"];
 
 const clock = (s: string) => new Date(s).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 const stamp = (s: string) => `${new Date(s).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit" })} ${new Date(s).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false })}`;
@@ -190,7 +193,7 @@ export default function Workbench() {
   const [agentTab, setAgentTab] = useState<"all" | "active" | "paused">("all");
   const [orgTab, setOrgTab] = useState<"teams" | "bench">("teams");
   const [orgSel, setOrgSel] = useState<string | null>(null);
-  const [autoTab, setAutoTab] = useState<"routines" | "runs">("routines");
+  const [autoTab, setAutoTab] = useState<"routines" | "runs" | "always-on">("routines");
   const [toolsTab, setToolsTab] = useState<"connectors" | "mcp">("connectors");
   const [settingsTab, setSettingsTab] = useState<"workspace" | "models" | "limits">("workspace");
   const [teamForm, setTeamForm] = useState({ name: "", brief: "" });
@@ -233,6 +236,15 @@ export default function Workbench() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  /** New workspaces default to New York. Adopt the browser's zone once so "8:00 AM" means the reader's 8:00 AM. */
+  useEffect(() => {
+    if (!data || data.routines.length || localStorage.getItem("arova_tz_synced")) return;
+    localStorage.setItem("arova_tz_synced", "1");
+    const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (local && local !== data.workspace.timezone && data.workspace.timezone === "America/New_York") {
+      void fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "updateWorkspace", timezone: local }) }).then(() => load());
+    }
+  }, [data, load]);
   /** A scheduled run finishes after the page loaded, so keep looking while anything is RUNNING. */
   const executing = !!data && (data.runs.some(r => r.status === "RUNNING") || data.routines.some(r => r.lastStatus === "RUNNING"));
   useEffect(() => { if (!executing) return; const t = setInterval(() => { void load(); }, 5000); return () => clearInterval(t); }, [executing, load]);
@@ -522,8 +534,8 @@ export default function Workbench() {
     if (!data) return [];
     return data.runs.filter(r => ["WAITING_FOR_TOOL", "QUEUED", "RUNNING"].includes(r.status)).map(r => ({
       run: r, tone: toneOf(r.status, isSample(r)) as Tone,
-      note: r.status === "RUNNING" ? r.routineId ? "executing now — the scheduler claimed it when this workspace was read" : "a brief is being answered in its channel right now"
-        : r.status === "WAITING_FOR_TOOL" ? r.routineId ? "there is no worker on this server, so it stays waiting" : "the daily model budget stopped this brief part-way"
+      note: r.status === "RUNNING" ? r.routineId ? "executing now — the scheduler claimed it and is waiting on the model" : "a brief is being answered in its channel right now"
+        : r.status === "WAITING_FOR_TOOL" ? r.routineId ? "the daily model budget was reached, so it waited instead of spending more" : "the daily model budget stopped this brief part-way"
         : "queued behind the worker",
     }));
   }, [data]);
@@ -698,7 +710,7 @@ export default function Workbench() {
       </>}
 
       {section === "scheduler" && <>
-        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }]} />
+        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "always-on", label: "24/7" }]} />
         <div className="sp-scroll">
           {autoTab === "routines" && <>
             {!data.routines.length && <p className="bench-none">No routines yet. Use + to add one.</p>}
@@ -708,6 +720,12 @@ export default function Workbench() {
               <span className={`sp-dot ${r.enabled ? "ran" : ""}`} title={r.enabled ? "enabled" : "paused"} />
             </button>)}
           </>}
+          {autoTab === "always-on" && <div className="sp-live">
+            <span className={`sp-live-dot ${data.scheduler.headline}`} />
+            <b>{data.scheduler.headline === "always-on" ? "Always on" : data.scheduler.headline === "degraded" ? "Went silent" : "Runs on open"}</b>
+            <em>{data.scheduler.headline === "always-on" ? "Routines fire on time, with nobody in the app." : "Open the control room to see why and how to fix it."}</em>
+            <button className="ghost" onClick={() => setPane("scheduler")}>Open control room</button>
+          </div>}
           {autoTab === "runs" && <>
             {!data.runs.length && <p className="bench-none">No runs recorded yet.</p>}
             {data.runs.slice(0, 40).map(r => <button key={r.id} className="sp-item" onClick={() => { setAutoTab("runs"); setPane("scheduler"); setRail(false); setDialog(r); }}>
@@ -791,12 +809,24 @@ export default function Workbench() {
       <div className="sheet-body" ref={bodyRef}>
         {pane === "overview" && <div className="overview-page">
           <div className="overview-content">
+            {!data.agents.length && <section className="welcome" aria-labelledby="welcome-h">
+              <span className="ao-kicker">Welcome to Arova</span>
+              <h2 id="welcome-h">Hire your first AI teammate</h2>
+              <p>Give an agent a name and a job, talk to it, then put it on a schedule so the work happens while you are away.</p>
+              <ol className="welcome-steps">
+                <li><button onClick={() => setDialog("agent")}><b>1</b><span><strong>Create an agent</strong>Name it, describe its role, pick a model.</span></button></li>
+                <li><button onClick={() => { setAutoTab("routines"); setPane("scheduler"); }}><b>2</b><span><strong>Add a time trigger</strong>Daily, weekdays, weekly or every few minutes.</span></button></li>
+                <li><button onClick={() => { setAutoTab("always-on"); setPane("scheduler"); }}><b>3</b><span><strong>Keep it running 24/7</strong>See live whether the scheduler is ticking.</span></button></li>
+              </ol>
+              <div className="welcome-actions"><button className="primary" onClick={() => setDialog("agent")}><Plus size={15} />Create your first agent</button></div>
+            </section>}
             <div className="overview-section-head"><div><h2>Workspace pulse</h2></div><span className="section-aside"><span className="pulse on" /> Live from your workspace</span></div>
             <div className="pulse-strip">
               <span><b>{data.overview.activeAgents}</b> of {data.agents.length} seats active</span>
               <span><b>{data.overview.enabledRoutines}</b> automation{data.overview.enabledRoutines === 1 ? "" : "s"} on schedule</span>
               <span><b>{data.overview.completedRuns}</b> run{data.overview.completedRuns === 1 ? "" : "s"} completed <span className="muted">· real rows, not samples</span></span>
               <span><b>{data.overview.pendingApprovals}</b> waiting on you</span>
+              <button className="pulse-sched" onClick={() => { setAutoTab("always-on"); setPane("scheduler"); }} title="Open the 24/7 control room"><span className={`pulse ${data.scheduler.headline === "always-on" ? "on" : ""}`} />scheduler <b className={data.scheduler.headline}>{data.scheduler.headline === "always-on" ? "live" : data.scheduler.headline === "degraded" ? "silent" : "on open"}</b></button>
               <span className="push mono">{callsToday} of {data.limits.dailyModelCalls || "no"} model calls today</span>
             </div>
             <div className="overview-section-head agent-heading"><div><h2>Meet your agents <span className="subtle-count">{data.agents.length}</span></h2></div><button className="section-action" onClick={() => setDialog("agent")}>Add an agent <Plus size={16} /></button></div>
@@ -848,7 +878,7 @@ export default function Workbench() {
             </div>)}
           </div>}
           {triggerOpen && <div className="memory-panel">
-            <p className="hint">Something outside this app can brief {channel.name} by posting to it. There is no worker here, so the work runs when the call arrives and its report lands in this channel — nothing keeps going after the caller hangs up.</p>
+            <p className="hint">Something outside this app can brief {channel.name} by posting to it. The work runs to completion inside the call and its report lands in this channel.</p>
             <form className="memory-add" onSubmit={async e => { e.preventDefault(); const label = triggerLabel.trim(); if (label.length < 2 || busy) return; if (await act("createTrigger", { teamId: channel.id, label }, "Trigger created — copy the call line")) setTriggerLabel(""); }}>
               <input aria-label="Trigger name" value={triggerLabel} maxLength={60} placeholder="Name it (e.g. nightly build report)" onChange={e => setTriggerLabel(e.target.value)} />
               <button className="primary" type="submit" disabled={busy || triggerLabel.trim().length < 2}><Plus size={13} />Create trigger</button>
@@ -1024,14 +1054,17 @@ export default function Workbench() {
         </div>}
 
         {pane === "scheduler" && <div className="pane">
-          <div className="pane-head"><div><h1>Scheduler</h1><p>A due routine runs the next time this workspace is opened — there is no background daemon on this server, so a routine that fell due while the laptop was closed fires once on the next open and is marked late.</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
+          <div className="pane-head"><div><h1>Automations</h1><p>{data.scheduler.headline === "always-on" ? "Your scheduler is live: due routines fire on time, even with nobody in the app." : "Routines fire only while something is watching the clock. Open the 24/7 tab to make it permanent."}</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
+          <div className="pane-tabs"><Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "always-on", label: "24/7 control room" }]} /></div>
+          {autoTab === "always-on" && <AlwaysOn info={data.scheduler} origin={origin} routineCount={data.routines.length} enabledCount={data.routines.filter(r => r.enabled).length} onRefresh={() => { void load(); }}
+            onPreset={schedule => { setRoutineForm({ name: "", description: "", schedule, agentId: agent?.id ?? data.agents[0]?.id ?? "" }); setDialog("routine"); }} />}
           {autoTab === "routines" && <><h2 className="pane-h2">Routines<span className="mono">{data.routines.length}</span></h2>
           {data.routines.length ? <div className="rows">{data.routines.map(r => <div className="row" key={r.id}>
             <span className="row-face"><CalendarDays size={15} /></span>
             <span className="row-main"><strong>{r.name}</strong><span>{r.description} · {byId(r.agentId)?.name}</span><span className="row-when">{r.enabled ? <>next {r.nextRunAt ? `${dayLabel(r.nextRunAt)} ${clock(r.nextRunAt)}` : "not scheduled"} · {describeSchedule(r.schedule, r.timezone)}{r.failStreak > 0 ? ` · ${r.failStreak} failed in a row` : ""}</> : <>{r.failStreak >= 10 ? `switched off after ${r.failStreak} failures` : "paused"} · {r.schedule}</>}</span></span>
             <span className="row-actions">
               <span className="row-side">{r.lastStatus ? <State status={r.lastStatus} /> : null}</span>
-              <button className="ghost" disabled={busy} onClick={() => act("runRoutine", { routineId: r.id }, "Run started")}><Play size={14} />Run now</button>
+              <button className="ghost" disabled={busy} onClick={() => act("runRoutine", { routineId: r.id }, "Run finished — see Runs for the result")}><Play size={14} />Run now</button>
               <button className="icon-btn" title={r.enabled ? "Pause" : "Resume"} disabled={busy} onClick={() => act("toggleRoutine", { routineId: r.id })}>{r.enabled ? <Pause size={15} /> : <Play size={15} />}</button>
               <button className="icon-btn" title="Delete" disabled={busy} onClick={() => setAskDelete({ kind: "routine", id: r.id, name: r.name })}><Trash2 size={15} /></button>
             </span>
@@ -1071,7 +1104,7 @@ export default function Workbench() {
             <div className={`block ${settingsTab !== "workspace" ? "is-hidden" : ""}`}>
               <h2>Workspace</h2><p>Your personal space. Identified by a browser cookie, not an account.</p>
               <div className="field"><label htmlFor="ws">Name</label><input id="ws" key={data.workspace.name} defaultValue={data.workspace.name} maxLength={60} onBlur={e => { const name = e.target.value.trim(); if (name && name !== data.workspace.name) void act("renameWorkspace", { name }, "Workspace renamed"); }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /><span className="hint">Edit and press Enter or click away to save.</span></div>
-              <div className="field"><label htmlFor="tz">Time zone</label><select id="tz" value={data.workspace.timezone} onChange={e => act("updateWorkspace", { timezone: e.target.value }, "Time zone saved")}>{zones.map(z => <option key={z}>{z}</option>)}</select><span className="hint">Applied when a routine is saved.</span></div>
+              <div className="field"><label htmlFor="tz">Time zone</label><select id="tz" value={data.workspace.timezone} onChange={e => act("updateWorkspace", { timezone: e.target.value }, "Time zone saved")}>{[...new Set([data.workspace.timezone, ...zones])].map(z => <option key={z}>{z}</option>)}</select><span className="hint">Applied when a routine is saved.</span></div>
               <div className="field"><label htmlFor="creator">Creator seat</label><select id="creator" value={data.workspace.creatorAgentId ?? ""} disabled={busy} onChange={e => act("assignCreator", { agentId: e.target.value || null }, e.target.value ? `${byId(e.target.value)?.name} may now found organisations` : "Creator designation cleared")}>
                 <option value="">None designated · any seat may propose an organisation</option>
                 {data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}
@@ -1090,7 +1123,7 @@ export default function Workbench() {
             <div className={`block ${settingsTab !== "limits" ? "is-hidden" : ""}`}>
               <h2>What cannot run here</h2><p>Limits of this deployment, not switches for you to find.</p>
               <div className="kv"><span>Sign-in</span><span className="push"><span className="chip idle"><i />cookie demo{data.auth.providers.length ? ` · ${data.auth.providers.map(p => p.label).join(", ")} env-ready, flow pending` : data.auth.incomplete.length ? ` · ${data.auth.incomplete.map(i => `${i.name} missing ${i.missing.join("/")}`).join("; ")}` : ""}</span></span></div>
-              <div className="kv"><span>Scheduler</span><span className="push"><span className="chip waiting"><i />runs on open</span></span></div>
+              <div className="kv"><span>Scheduler</span><span className="push"><span className={`chip ${data.scheduler.headline === "always-on" ? "ran" : data.scheduler.headline === "degraded" ? "fault" : "waiting"}`}><i />{data.scheduler.headline === "always-on" ? "always on" : data.scheduler.headline === "degraded" ? "went silent" : "runs on open"}</span></span></div>
               <div className="kv"><span>Tool connectors</span><span className="push"><span className="chip idle"><i />not configured</span></span></div>
               <div className="kv"><span>Computer / browser</span><span className="push"><span className="chip idle"><i />{data.sandboxProvider}</span></span></div>
             </div>
@@ -1199,7 +1232,7 @@ export default function Workbench() {
         </div>
       </div>
       <div className="board-foot">
-        <span>No background worker: due work executes when this workspace is read.</span>
+        <span className={`board-sched ${data.scheduler.headline}`}><i />{data.scheduler.headline === "always-on" ? "Scheduler live · fires on time" : data.scheduler.headline === "degraded" ? "Scheduler went silent" : "Scheduler runs on open"}</span>
         <span className="board-usage mono">{callsToday} of {data.limits.dailyModelCalls || "no"} model calls today</span>
       </div>
     </aside>
@@ -1221,7 +1254,7 @@ export default function Workbench() {
         <div className="field"><label htmlFor="rn">Name</label><input id="rn" required placeholder="Morning briefing" value={routineForm.name} onChange={e => setRoutineForm({ ...routineForm, name: e.target.value })} /></div>
         <div className="field"><label htmlFor="ra">Agent</label><select id="ra" value={routineForm.agentId} onChange={e => setRoutineForm({ ...routineForm, agentId: e.target.value })}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select></div>
         <div className="field"><label htmlFor="rd">What should they do?</label><textarea id="rd" required rows={3} value={routineForm.description} onChange={e => setRoutineForm({ ...routineForm, description: e.target.value })} /></div>
-        <div className="field"><label htmlFor="rs">Schedule</label><select id="rs" value={routineForm.schedule} onChange={e => setRoutineForm({ ...routineForm, schedule: e.target.value })}>{["Every day at 8:00 AM", "Weekdays at 8:00 AM", "Every Monday at 9:00 AM", "Every Friday at 4:00 PM", "Every week"].map(s => <option key={s}>{s}</option>)}</select><span className="hint">A due routine executes the next time this workspace is opened; nothing fires while the app is closed.</span></div>
+        <div className="field"><label>Schedule</label><ScheduleBuilder value={routineForm.schedule} timezone={data.workspace.timezone} onChange={schedule => setRoutineForm({ ...routineForm, schedule })} /><span className="hint">{data.scheduler.headline === "always-on" ? "The scheduler is live, so this fires on time." : "Fires while a worker or outside clock is running — see the 24/7 tab."}</span></div>
         <div className="dialog-actions"><button type="button" className="ghost" onClick={() => setDialog(null)}>Cancel</button><button className="primary" disabled={busy}>Save routine</button></div>
       </form>}
 

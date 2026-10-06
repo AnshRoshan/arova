@@ -1,0 +1,22 @@
+# systemd unit — keeps Arova (and its scheduler worker) running across crashes and reboots.
+#   sudo cp deploy/arova.service /etc/systemd/system/arova.service
+#   sudo nano /etc/systemd/system/arova.service      # set User, WorkingDirectory, EnvironmentFile
+#   sudo systemctl daemon-reload && sudo systemctl enable --now arova
+#   journalctl -u arova -f                            # look for: [arova] scheduler worker started
+[Unit]
+Description=Arova agent workspace
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arova
+WorkingDirectory=/opt/arova
+EnvironmentFile=/opt/arova/.env
+Environment=NODE_ENV=production PORT=3000
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
