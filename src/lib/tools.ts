@@ -9,7 +9,7 @@
 
 import { normaliseSkills } from "./skills.ts";
 
-export type ToolKind = "delegation" | "workspace" | "external";
+export type ToolKind = "delegation" | "workspace" | "local" | "external";
 
 export type ToolSpec = {
   id: string;
@@ -30,6 +30,10 @@ export const TOOL_REGISTRY: ToolSpec[] = [
   { id: "build_org", label: "Propose an organisation", description: "Propose a set of agents with reporting lines for the user to confirm before any of them exist.", kind: "workspace", writes: true, available: true },
   
   { id: "save_note", label: "Record org memory", description: "Write a durable note into this organisation's memory, attributed to this seat and readable only inside it.", kind: "workspace", writes: true, available: true },
+  { id: "calc", label: "Calculator", description: "Evaluate an arithmetic expression exactly as written, in this process.", kind: "local", writes: false, available: true },
+  { id: "now_in_timezone", label: "World clock", description: "Read an instant through a named IANA time zone.", kind: "local", writes: false, available: true },
+  { id: "json_transform", label: "JSON transform", description: "Pretty-print a JSON document or select one value by dotted path.", kind: "local", writes: false, available: true },
+  { id: "checksum", label: "Checksum", description: "Hash text with a named algorithm from node:crypto (sha256 by default).", kind: "local", writes: false, available: true },
   { id: "web_fetch", label: "Fetch a URL", description: "Read a web page the user names.", kind: "external", writes: false, available: false, whyUnavailable: "No network tool is enabled in this deployment; it needs an allow-listed fetch policy first." },
   { id: "web_search", label: "Web search", description: "Search the public web.", kind: "external", writes: false, available: false, whyUnavailable: "No search provider is configured, and results would need a source to be citable." },
   { id: "browser", label: "Browser", description: "Operate a page in an isolated session.", kind: "external", writes: false, available: false, whyUnavailable: "No sandbox provider is wired, so nothing can host a browser session." },
@@ -114,12 +118,15 @@ export function normaliseCapabilities(raw: unknown): Capabilities {
     .map(s => ({ name: str((s as Record<string, unknown>)?.name).slice(0, 40), transport: str((s as Record<string, unknown>)?.transport) as McpTransport }))
     .filter(s => s.name)
     .map(s => ({ name: s.name, transport: s.transport === "http" ? "http" as const : "stdio" as const }));
-  const inheritance: McpInheritance = o.mcpInheritance === "all" || o.mcpInheritance === "none" ? o.mcpInheritance
-    : (o.mcpInheritance && typeof o.mcpInheritance === "object") ? (o.mcpInheritance as McpInheritance)
+  const rawInheritance = o.mcpInheritance;
+  const objectForm = rawInheritance && typeof rawInheritance === "object" ? rawInheritance as Record<string, unknown> : null;
+  const inheritance: McpInheritance = rawInheritance === "all" || rawInheritance === "none" ? rawInheritance
+    : objectForm && Array.isArray(objectForm.named) ? { named: list(objectForm.named) }
+    : objectForm && Array.isArray(objectForm.except) ? { except: list(objectForm.except) }
     : DEFAULT_CAPABILITIES.mcpInheritance;
 
   return {
-    tools: tools.length ? Array.from(new Set(tools)) : [...DEFAULT_CAPABILITIES.tools],
+    tools: Array.isArray(o.tools) ? Array.from(new Set(tools)) : [...DEFAULT_CAPABILITIES.tools],
     deniedTools: Array.from(new Set(denied)),
     permissionMode,
     canConsult: Array.isArray(o.canConsult) ? list(o.canConsult) : [...DEFAULT_CAPABILITIES.canConsult],

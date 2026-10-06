@@ -293,3 +293,9 @@ test("a reasoning block that mentions the shapes is not read as the decision", (
   assert.equal(t.consult, null, "a consult mentioned in reasoning is not a consult");
   assert.equal(t.text, "I will answer this myself.");
 });
+
+test("peer resolution: the closest name wins, not the first in the roster", () => {
+  const roster = [{ id: "s1", name: "Scout" }, { id: "s2", name: "Scout 2" }, { id: "p1", name: "Pixel" }];
+  assert.equal(resolvePeer("Scout 2x", roster, "p1")?.id, "s2", "a prefixed request must not collide onto plain Scout");
+  assert.equal(resolvePeer("Scout", roster, "p1")?.id, "s1", "an exact match still beats the later seat");
+});

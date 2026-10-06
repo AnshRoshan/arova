@@ -35,3 +35,22 @@ export function hueFor(key: string | null | undefined): Hue {
 export function hueVars(hue: Hue): Record<string, string> {
   return { "--h-ink": hue.ink, "--h-tile": hue.tile, "--h-glyph": hue.glyph, "--h-wash": hue.wash, "--h-line": hue.line };
 }
+
+/**
+ * Section colour for the chrome — a different problem from identity, so it has a different budget.
+ * Identity marks *which seat* and may never be confused with state; the rail marks *which room*,
+ * and it sits far from any status dot. The three identity tints double as section colours for
+ * the rooms whose subject they fit; azure stays the interactive default everywhere else.
+ */
+export const SECTION_COLORS: Record<string, string> = {
+  overview: "#8b9bff", /* azure — the default, so Overview keeps the interaction colour */
+  agents: "#a8d98a",   /* sage — the bench is where identities live */
+  org: "#70d2db",      /* aqua — the chart */
+  scheduler: "#e6b455",/* amber — time; a rail mark, never a status dot */
+  tools: "#b78ff2",    /* violet — integrations */
+  settings: "#f08cb8", /* rose — the last room; rose on a rail is not a fault dot */
+};
+
+export function sectionColor(section: string | undefined): string {
+  return SECTION_COLORS[section ?? ""] ?? SECTION_COLORS.overview;
+}
