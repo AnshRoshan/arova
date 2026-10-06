@@ -33,7 +33,7 @@ function Snippet({ title, hint, code }: { title: string; hint?: string; code: st
   useEffect(() => { if (!done) return; const t = setTimeout(() => setDone(false), 1600); return () => clearTimeout(t); }, [done]);
   return <div className="ao-snippet">
     <div className="ao-snippet-head"><b>{title}</b>{hint && <span>{hint}</span>}
-      <button type="button" className="ghost" onClick={() => { void navigator.clipboard?.writeText(code).then(() => setDone(true)); }}>{done ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button>
+      <button type="button" className="ghost" onClick={async () => { try { await navigator.clipboard?.writeText(code); setDone(true); } catch { setDone(false); } }}>{done ? <><Check size={13} />Copied</> : <><Copy size={13} />Copy</>}</button>
     </div>
     <pre><code>{code}</code></pre>
   </div>;
