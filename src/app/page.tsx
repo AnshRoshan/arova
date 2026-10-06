@@ -4,12 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import {
   Activity, ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bot, CalendarDays, Check, CircleHelp, Compass, Copy,
   Globe2, LayoutDashboard, Menu, Network, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun,
-  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, type LucideIcon,
+  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, Pencil, type LucideIcon,
 } from "lucide-react";
 import { TOOL_REGISTRY, mcpSummary, resolveTools, tokenBudgetFor, type Capabilities as ToolCaps } from "@/lib/tools";
 import { SKILL_REGISTRY, resolveSkills } from "@/lib/skills";
 import { parseMarkdown, splitReasoning, type Block, type Inline as MdInline } from "@/lib/markdown";
-import { hueFor, hueVars } from "@/lib/identity";
+import { hueFor, hueVars, sectionColor } from "@/lib/identity";
 import { describeSchedule } from "@/lib/scheduler";
 import { AlwaysOn, type SchedulerInfo } from "./AlwaysOn";
 import { ScheduleBuilder } from "./ScheduleBuilder";
@@ -54,8 +54,9 @@ type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel";
 type Tone = "ran" | "waiting" | "fault" | "idle";
 
 const faces: Record<string, LucideIcon> = { sparkles: Sparkles, globe: Globe2, palette: WandSparkles, sun: Sun, bot: Bot, zap: Zap };
-const toolCatalog = [
-  { name: "Gmail", slug: "gmail", category: "Communication", description: "Read, draft, and organise your inbox." },
+/** Tools that genuinely execute in the server process — the registry is the only source of this claim. */
+const localToolSpecs = TOOL_REGISTRY.filter(t => t.available && t.kind === "local");
+const toolCatalog = [  { name: "Gmail", slug: "gmail", category: "Communication", description: "Read, draft, and organise your inbox." },
   { name: "Slack", slug: "slack", category: "Communication", description: "Keep channels in sync." },
   { name: "GitHub", slug: "github", category: "Developer", description: "Track repositories, issues and pull requests." },
   { name: "Google Calendar", slug: "calendar", category: "Productivity", description: "Hold meetings and deadlines in order." },
@@ -194,7 +195,11 @@ export default function Workbench() {
   const [orgTab, setOrgTab] = useState<"teams" | "bench">("teams");
   const [orgSel, setOrgSel] = useState<string | null>(null);
   const [autoTab, setAutoTab] = useState<"routines" | "runs" | "always-on">("routines");
-  const [toolsTab, setToolsTab] = useState<"connectors" | "mcp">("connectors");
+  const [toolsTab, setToolsTab] = useState<"connectors" | "local" | "mcp">("connectors");
+  const [consoleTool, setConsoleTool] = useState("calc");
+  const [consoleAgent, setConsoleAgent] = useState("");
+  const [consoleInput, setConsoleInput] = useState("");
+  const [toolRuns, setToolRuns] = useState<Record<string, { ok: boolean; output?: string; error?: string }>>({});
   const [settingsTab, setSettingsTab] = useState<"workspace" | "models" | "limits">("workspace");
   const [teamForm, setTeamForm] = useState({ name: "", brief: "" });
   const [activity, setActivity] = useState(false);
@@ -208,6 +213,7 @@ export default function Workbench() {
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState({ text: "", kind: "decision" as "note" | "decision" | "glossary" });
+  const [memoryEdit, setMemoryEdit] = useState<{ id: string; text: string } | null>(null);
   const [proposals, setProposals] = useState<{ kind: "note" | "decision" | "glossary"; text: string }[]>([]);
   const [triggerOpen, setTriggerOpen] = useState(false);
   const [triggerLabel, setTriggerLabel] = useState("");
@@ -226,10 +232,12 @@ export default function Workbench() {
   const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    if (abortRef.current) return; // a poll must never clobber a reply or brief that is still streaming
     try {
       const r = await fetch("/api/board", { cache: "no-store" });
+      if (!r.ok) throw new Error(`The workspace could not be loaded (${r.status}).`);
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error);
+      if (abortRef.current) return; // the stream settled while this response was in flight
       setData(j);
     } catch (e) { setToast(e instanceof Error ? e.message : "Could not load your workspace"); }
     finally { setLoading(false); }
@@ -283,8 +291,9 @@ export default function Workbench() {
     setBusy(true);
     try {
       const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json", ...(action === "runRoutine" ? { "Idempotency-Key": crypto.randomUUID() } : {}) }, body: JSON.stringify({ action, ...payload }) });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || "Something went wrong");
+      // Read the status before parsing: a 500 rendered as HTML must surface the server's sentence, not a JSON error.
+      const j = await r.json().catch(() => ({})) as { error?: string; board: Board; [key: string]: any };
+      if (!r.ok) throw new Error(j.error || `The action failed (${r.status})`);
       setData(j.board);
       if (say) setToast(say);
       return j;
@@ -361,11 +370,6 @@ export default function Workbench() {
     finally { abortRef.current = null; setBusy(false); setPending(null); setStream(""); setConsulting(null); }
   }
 
-  const answerChars = (board: Board, targetId: string) => {
-    const last = [...board.messages].reverse().find(m => m.agentId === targetId && m.role === "assistant");
-    return last ? splitReasoning(last.content).answer.length : 0;
-  };
-
   const stop = () => abortRef.current?.abort();
 
   /**
@@ -421,7 +425,9 @@ export default function Workbench() {
       }
       setToast(e instanceof Error ? e.message : "Something went wrong"); return false;
     }
-    finally { abortRef.current = null; setBusy(false); setPending(null); setStream(""); setConsulting(null); }
+    // Stop or failure must not leave the client copies of posts still on screen — the stored rows
+    // arrive through the board; the live copies are duplicates by then.
+    finally { abortRef.current = null; setBusy(false); setPending(null); setStream(""); setConsulting(null); setLivePosts([]); }
   }
 
   const submitBrief = async (e: FormEvent<HTMLFormElement>) => {
@@ -438,8 +444,18 @@ export default function Workbench() {
   const channelSeats = useMemo(() => (data && channel ? data.agents.filter(a => a.teamId === channel.id) : []), [data, channel]);
   /** The same rule the server applies, imported rather than restated: the UI must not name a lead a brief would not reach. */
   const briefLead = useMemo(() => (channel ? resolveLead(channelSeats, channel.leadAgentId) ?? null : null), [channel, channelSeats]);
-  /** Stored posts, plus the ones this brief has already landed before the board refresh arrives. */
-  const channelFeed = useMemo(() => (data && channel ? [...data.messages.filter(m => m.teamId === channel.id), ...livePosts] : []), [data, channel, livePosts]);
+  /** Stored posts, plus the ones this brief has already landed before the board refresh arrives —
+   * deduplicated by id, because the 5s poll can deliver a post the SSE frame already showed. */
+  /** The exact stored notes the server recorded as used for a reply — the block is shown, not paraphrased. */
+  const memoriesUsed = (metadata: Record<string, unknown> | undefined) => {
+    const ids = (metadata?.memory as { ids?: string[] } | undefined)?.ids ?? [];
+    return ids.map(id => (data?.memories ?? []).find(mm => mm.id === id)).filter((mm): mm is NonNullable<typeof mm> => Boolean(mm));
+  };
+  const channelFeed = useMemo(() => {    if (!data || !channel) return [];
+    const stored = data.messages.filter(m => m.teamId === channel.id);
+    const known = new Set(stored.map(m => m.id));
+    return [...stored, ...livePosts.filter(p => !known.has(p.id))];
+  }, [data, channel, livePosts]);
   /** The ceiling the server will actually apply to this lead, so the bar never promises a summons it would refuse. */
   const leadCeiling = summonCeiling({ envMax: data?.limits.maxDelegations ?? 0, seatMaxTurns: briefLead?.capabilities?.maxTurns ?? null });
   const orgMemories = useMemo(() => (data && channel ? data.memories.filter(m => m.teamId === channel.id) : []), [data, channel]);
@@ -458,6 +474,7 @@ export default function Workbench() {
     ? null
     : providerName === "auto" ? data.profiles.find(p => p.configured) ?? null : data.profiles.find(p => p.name === providerName) ?? null);
   const answering = profileOf(agent?.provider);
+  const consoleSpec = localToolSpecs.find(t => t.id === consoleTool) ?? localToolSpecs[0];
   const leadAnswering = profileOf(briefLead?.provider);
 
   const pendingApprovals = data?.approvals.filter(a => a.status === "PENDING") ?? [];
@@ -486,7 +503,19 @@ export default function Workbench() {
       const cur = map.get(id);
       if (!cur || order.indexOf(tone) < order.indexOf(cur)) map.set(id, tone);
     };
-    for (const r of data.runs) put(r.agentId, toneOf(r.status, isSample(r)));
+    // Only the seat's most recent run paints the dot: any historic COMPLETED row lighting "a run is
+    // executing" (and any old FAILED one painting it red forever) is the lie this replaces.
+    const latestRun = new Map<string, Run>();
+    for (const r of data.runs) {
+      const cur = latestRun.get(r.agentId);
+      if (!cur || r.startedAt > cur.startedAt) latestRun.set(r.agentId, r);
+    }
+    for (const r of latestRun.values()) {
+      if (isSample(r)) continue;
+      if (r.status === "RUNNING" || r.status === "QUEUED") put(r.agentId, "ran");
+      else if (r.status === "WAITING_FOR_TOOL") put(r.agentId, "waiting");
+      else if (["FAILED", "CANCELLED", "TIMED_OUT"].includes(r.status)) put(r.agentId, "fault");
+    }
     for (const a of data.approvals) if (a.status === "PENDING" && !a.detail.includes("Sample approval")) put(a.agentId, "waiting");
     for (const rt of dueRoutines) put(rt.agentId, "waiting");
     return map;
@@ -607,7 +636,7 @@ export default function Workbench() {
       const post = d.messageId ? data.messages.find(m => m.id === d.messageId) : undefined;
       recordRows.push({ id: `d${d.id}`, label: `${asked} asked ${peer}`, note: d.question, tone: "idle", time: d.createdAt, open: () => { if (post?.teamId) openChannel(post.teamId); else openSeat(d.fromAgentId); } });
     }
-    for (const e of data.events.filter(x => ["org.created", "org.briefed", "org.lead", "team.created", "run.cancelled", "approval.requested", "routine.created", "agent.created"].includes(x.type))) {
+    for (const e of data.events.filter(x => ["org.created", "org.briefed", "org.lead", "team.created", "run.cancelled", "run.interrupted", "approval.requested", "approval.withheld", "routine.created", "routine.fatigued", "trigger.created", "trigger.revoked", "memory.saved", "memory.distilled", "agent.created"].includes(x.type))) {
       recordRows.push({ id: `e${e.id}`, label: e.type.replace(/\./g, " · ").replace(/_/g, " "), note: e.detail, tone: "idle", time: e.createdAt });
     }
     for (const a of data.approvals) {
@@ -618,11 +647,11 @@ export default function Workbench() {
     recordRows.sort((x, y) => y.time.localeCompare(x.time));
   }
 
-  return <div className={`workbench ${activity ? "show-activity" : ""} ${panelOpen ? "" : "panel-closed"} ${rail ? "mpanel" : ""}`}>
+  return <div className={`workbench ${activity ? "show-activity" : ""} ${panelOpen ? "" : "panel-closed"} ${rail ? "mpanel" : ""}`} data-section={section} style={{ ["--sec" as string]: sectionColor(section) }}>
     <nav className="iconrail" aria-label="Sections">
       <button className="rail-logo" title={`Arova · ${data.workspace.name}`} onClick={() => { setPane("overview"); setPanelOpen(true); setRail(false); }}><Sparkles size={18} strokeWidth={2.2} /></button>
       <div className="rail-items">
-        {railItems.map(item => <button key={item.id} className={`rail-btn ${section === item.id ? "on" : ""}`} title={item.label} aria-label={item.label} aria-current={section === item.id ? "page" : undefined} onClick={() => goSection(item.id)}>
+        {railItems.map(item => <button key={item.id} className={`rail-btn ${section === item.id ? "on" : ""}`} style={{ ["--sec" as string]: sectionColor(item.id) }} title={item.label} aria-label={item.label} aria-current={section === item.id ? "page" : undefined} onClick={() => goSection(item.id)}>
           <item.icon size={19} strokeWidth={1.8} />
           <span className="rail-label">{item.label.split(" ")[0]}</span>
           {item.badge ? <i className="rail-badge">{item.badge}</i> : null}
@@ -738,12 +767,16 @@ export default function Workbench() {
       </>}
 
       {section === "tools" && <>
-        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
+        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "local", label: "Local tools", count: localToolSpecs.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
         <div className="sp-scroll">
           {toolsTab === "connectors" && [...new Set(toolCatalog.map(t => t.category))].map(cat => <div key={cat}>
             <div className="sp-group">{cat}</div>
             {toolCatalog.filter(t => t.category === cat).map(t => <button key={t.slug} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Compass size={16} /></span><span className="sp-item-main"><b>{t.name}</b><em>not connected</em></span></button>)}
           </div>)}
+          {toolsTab === "local" && <>
+            <div className="sp-group">Runs in this process</div>
+            {localToolSpecs.map(t => <button key={t.id} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Zap size={16} /></span><span className="sp-item-main"><b>{t.label}</b><em>no credential needed</em></span></button>)}
+          </>}
           {toolsTab === "mcp" && <>
             {!mcpCount && <p className="bench-none">No MCP server configured. Add one in an agent’s capabilities.</p>}
             {data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <button key={`${a.id}-${i}`} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Link2 size={16} /></span><span className="sp-item-main"><b>{srv.name || "unnamed"}</b><em>{a.name} · {srv.transport}</em></span></button>))}
@@ -785,6 +818,7 @@ export default function Workbench() {
           {pane !== "overview" && <button className="icon-btn" onClick={() => setPane("overview")} aria-label="Back to overview"><ArrowLeft size={16} /></button>}
           <div className="page-heading"><h1>{pane === "overview" ? "Overview" : pane === "org" ? "Organisation" : pane === "scheduler" ? "Automations" : pane === "tools" ? "Integrations" : "Settings"}</h1></div>
           <div className="push" />
+          {pane !== "overview" && <button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button>}
           {pane === "overview" && <><span className="header-date">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span><button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button><button className="header-create" onClick={() => setDialog("agent")}><Plus size={16} /> New agent</button></>}
         </> : agent && <>
           <div className="ident" style={hue}>
@@ -861,20 +895,29 @@ export default function Workbench() {
             {proposals.length > 0 && <div className="memory-propose">
               <p className="hint">Proposed from the last posts. Nothing is remembered until you save it — a sentence nobody has read is a rumour.</p>
               {proposals.map((p, i) => <div className="memory-row propose" key={`${p.text}-${i}`}>
-                <span className="memory-kind">{p.kind}</span>
+                <span className="memory-kind" data-kind={p.kind}>{p.kind}</span>
                 <span className="memory-main"><b>{p.text}</b></span>
                 <button className="ghost" type="button" disabled={busy} onClick={async () => { if (await act("saveMemory", { teamId: channel.id, text: p.text, kind: p.kind }, "Saved to this organisation's memory")) setProposals(list => list.filter((_, j) => j !== i)); }}><Check size={13} />Save</button>
               </div>)}
             </div>}
             {!orgMemories.length && <p className="bench-none">Nothing recorded yet. What is saved here is shown only to seats inside {channel.name}, and never to another organisation.</p>}
             {orgMemories.map(m => <div className={`memory-row ${m.pinned ? "pinned" : ""} ${staleMemoryIds.has(m.id) ? "stale" : ""}`} key={m.id}>
-              <span className="memory-kind">{m.kind}</span>
+              <span className="memory-kind" data-kind={m.kind}>{m.kind}</span>
               <span className="memory-main">
-                <b>{m.text}</b>
-                <em>{m.agentId ? byId(m.agentId)?.name ?? "a removed seat" : "you"} · {stamp(m.createdAt)} · used {m.hits} {m.hits === 1 ? "time" : "times"}{m.lastUsedAt ? ` (${ago(m.lastUsedAt)})` : " · never"}{m.sourceIds.length ? ` · from ${m.sourceIds.length} post(s)` : ""}{staleMemoryIds.has(m.id) ? " · superseded" : ""}</em>
+                {memoryEdit?.id === m.id
+                  ? <span className="memory-editrow">
+                    <input autoFocus aria-label="Rewrite this note" value={memoryEdit.text} maxLength={1200} onChange={e => setMemoryEdit({ id: m.id, text: e.target.value })} onKeyDown={e => { if (e.key === "Escape") setMemoryEdit(null); }} />
+                    <button className="primary" type="button" disabled={busy || memoryEdit.text.trim().length < 3} onClick={async () => { if (await act("updateMemory", { memoryId: m.id, text: memoryEdit.text.trim() }, "Rewritten")) setMemoryEdit(null); }}><Check size={13} />Save</button>
+                    <button className="ghost" type="button" onClick={() => setMemoryEdit(null)}>Cancel</button>
+                  </span>
+                  : <b>{m.text}</b>}
+                <em>{m.agentId ? byId(m.agentId)?.name ?? "a removed seat" : "you"} · {stamp(m.createdAt)} · used {m.hits} {m.hits === 1 ? "time" : "times"}{m.lastUsedAt ? ` (${ago(m.lastUsedAt)})` : " · never"}{m.sourceIds.length ? <> · <button type="button" className="mem-src" title="Jump to the posts this was distilled from" onClick={() => { const el = m.sourceIds.map(id => document.getElementById(`post-${id}`)).find(Boolean); const box = bodyRef.current; if (el && box) box.scrollTop = el.offsetTop - box.offsetTop - 16; }}>from {m.sourceIds.length} post(s)</button></> : ""}{staleMemoryIds.has(m.id) ? " · superseded" : ""}</em>
               </span>
-              <button className="icon-btn" type="button" title={m.pinned ? "Unpin this note" : "Pin: always offered, whatever the question"} disabled={busy} onClick={() => void act("updateMemory", { memoryId: m.id, pinned: !m.pinned }, m.pinned ? "Unpinned" : "Pinned first")}>{m.pinned ? <PinOff size={14} /> : <Pin size={14} />}</button>
-              <button className="icon-btn" type="button" title="Forget this note" disabled={busy} onClick={() => void act("deleteMemory", { memoryId: m.id }, "Forgotten")}><Trash2 size={14} /></button>
+              {memoryEdit?.id !== m.id && <>
+                <button className="icon-btn" type="button" title="Rewrite this note" disabled={busy} onClick={() => setMemoryEdit({ id: m.id, text: m.text })}><Pencil size={14} /></button>
+                <button className="icon-btn" type="button" title={m.pinned ? "Unpin this note" : "Pin: always offered, whatever the question"} disabled={busy} onClick={() => void act("updateMemory", { memoryId: m.id, pinned: !m.pinned }, m.pinned ? "Unpinned" : "Pinned first")}>{m.pinned ? <PinOff size={14} /> : <Pin size={14} />}</button>
+                <button className="icon-btn" type="button" title="Forget this note" disabled={busy} onClick={() => void act("deleteMemory", { memoryId: m.id }, "Forgotten")}><Trash2 size={14} /></button>
+              </>}
             </div>)}
           </div>}
           {triggerOpen && <div className="memory-panel">
@@ -915,7 +958,7 @@ export default function Workbench() {
               const bad = m.kind === "provider_error" || m.kind === "channel_gap";
               const kind = m.kind === "channel_summary" ? "report" : m.kind === "channel_post" ? "teammate post" : m.kind === "channel_memory" ? "memory" : m.kind === "channel_opened" || m.kind === "channel_lead" || m.kind === "channel_seat" ? "notice" : "";
               const r = splitReasoning(m.content);
-              return <div key={m.id}>
+              return <div key={m.id} id={`post-${m.id}`}>
                 {(i === 0 || dayLabel(channelFeed[i - 1].createdAt) !== dayLabel(m.createdAt)) && <div className="rule-day"><span>{dayLabel(m.createdAt)}</span><i /></div>}
                 <div className={`entry ${human ? "entry-user" : "entry-assistant"} ${bad ? "entry-fault" : ""}`} style={human ? undefined : hueOf(authorId)}>
                   <span className="entry-face">{human ? <User size={15} /> : author ? <FaceIcon agent={author} /> : <Network size={15} />}</span>
@@ -930,8 +973,9 @@ export default function Workbench() {
                     {question && <div className="consult"><div className="consult-head"><ArrowDownLeft size={13} /><span><b>{askedBy}</b> asked{author ? <> <b>{author.name}</b></> : null}</span></div><p className="consult-q">{question}</p></div>}
                     <ReasoningFold text={m.content} model={model ?? undefined} truncated={Boolean(m.metadata?.truncated)} />
                     <div className="entry-text">{r.answer || state ? <RichText text={r.answer} /> : <span className="muted">This post carries no answer text.</span>}</div>
-                    {(model || run) && <div className="post-foot mono">
+                    {(model || run || memoriesUsed(m.metadata).length > 0) && <div className="post-foot mono">
                       {model && <span>{model} · {r.answer.length} chars{r.reasoning ? ` · ${r.reasoning.length} reasoning` : ""} · {est(r.answer)} tokens (est.){memoryNote(m.metadata)}</span>}
+                      {memoriesUsed(m.metadata).length > 0 && <details className="mem-used"><summary>what it was given</summary>{memoriesUsed(m.metadata).map(n => <p key={n.id}><b>{n.kind}</b> · {n.text}</p>)}</details>}
                       {run && <button className="ghost push" type="button" onClick={() => setDialog(run)}><Gauge size={13} />Run steps</button>}
                     </div>}
                   </div>
@@ -1033,6 +1077,7 @@ export default function Workbench() {
                       <span className="push prov-mono">{provenance.r.answer.length} chars{provenance.r.reasoning ? ` · ${provenance.r.reasoning.length} reasoning` : ""}{provenance.model ? ` · ${est(provenance.r.answer)} tokens (est.)` : ""}{memoryNote(lastReply?.metadata)} · saved {provenance.saved}</span>
                     </summary>
                     <p className="prov-note">{provenance.fault ? "No model answer exists for this turn. Nothing was invented to fill it." : provenance.state === "stopped by you" ? "You stopped this one. What is here is everything that had arrived; it was not replayed." : provenance.state === "partial" ? "The connection died mid-reply. What is here is what arrived; it was not replayed, because replaying would duplicate text you already watched." : provenance.state === "budget reached" ? "The provider stopped at the output budget, which this server sets per agent. The reasoning that filled it is kept verbatim; nothing was invented to close the sentence." : provenance.state === "reasoning only" ? "The model streamed reasoning and then stopped. The stored row is exactly that, and the thread says so rather than showing a blank bubble." : "Stored in PostgreSQL. Reloading shows the same text."}</p>
+                    {memoriesUsed(lastReply?.metadata).length > 0 && <div className="mem-used">{memoriesUsed(lastReply?.metadata).map(n => <p key={n.id}><b>{n.kind}</b> · {n.text}</p>)}</div>}
                   </details>}
                 </div>
               </div>
@@ -1083,13 +1128,36 @@ export default function Workbench() {
           onDraft={() => { const lead = agent ?? data.agents[0]; if (!lead) return; openSeat(lead.id); setDraft("Build me an organisation for "); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 80); }} />}
 
         {pane === "tools" && <div className="pane">
-          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has a browser, files, or an external account. Per-agent grants live in Agent › Capabilities.</p></div></div>
+          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has a browser, files, or an external account. Four tools do run inside the server itself — open Local tools. Per-agent grants live in Agent › Capabilities.</p></div></div>
           <div className={`rows ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <div className="row" key={t.slug}>
             <span className="row-face"><Compass size={15} /></span>
             <span className="row-main"><strong>{t.name}</strong><span>{t.description} · {t.category}</span></span>
             <span className="row-side"><span className="chip idle"><i />not connected</span></span>
-            <span className="row-actions"><button className="ghost" disabled={busy} onClick={() => act("connectTool", { agentId: agent?.id, slug: t.slug })}>Connect</button></span>
+            <span className="row-actions"><span className="dormant">Connect needs OAuth credentials on the server — until then this row states what is true.</span></span>
           </div>)}</div>
+          {toolsTab === "local" && <div className="local-console">
+            <h2 className="pane-h2">Local tools<span className="mono">{localToolSpecs.length}</span></h2>
+            <p className="hint">These execute right now, inside the server process, with no credential and no sandbox. The calculator is a hand-written arithmetic parser, so an expression cannot execute the app. Each run is stored as a real run with a step — nothing here is a mock.</p>
+            <div className="lc-runner">
+              <label className="lc-seat" htmlFor="lc-agent">Run as</label>
+              <select id="lc-agent" value={consoleAgent || agent?.id || ""} onChange={e => setConsoleAgent(e.target.value)} disabled={!data.agents.length}>
+                {data.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+              <input value={consoleInput} onChange={e => setConsoleInput(e.target.value)} placeholder={consoleSpec?.id === "calc" ? "2 * (3 + 4) - 1" : consoleSpec?.id === "now_in_timezone" ? "Europe/Berlin or UTC @ 2026-10-06T12:00:00Z" : consoleSpec?.id === "json_transform" ? "name.first::{\"name\":{\"first\":\"Ada\"}}" : "sha256::hello world or plain text"} aria-label="Tool input" disabled={!data.agents.length} />
+              <button className="primary" type="button" disabled={busy || !data.agents.length || !consoleInput.trim()} onClick={async () => {
+                const r = await act("runTool", { agentId: consoleAgent || agent?.id, toolId: consoleSpec.id, toolInput: consoleInput });
+                if (r?.tool) setToolRuns(prev => ({ ...prev, [consoleSpec.id]: r.tool }));
+              }}>{busy ? "Running" : "Run"}</button>
+            </div>
+            {!data.agents.length && <p className="hint">No seat exists yet, so there is nothing to run these as. Create an agent first.</p>}
+            <div className="rows">{localToolSpecs.map(t => <div className={`row ${consoleTool === t.id ? "on" : ""}`} key={t.id}>
+              <span className="row-face"><WandSparkles size={15} /></span>
+              <span className="row-main"><strong>{t.label}<span className="mono">{t.id}</span></strong><span>{t.description}</span></span>
+              <span className="row-side"><span className="chip ran"><i />runs here</span></span>
+              {toolRuns[t.id] && <span className="row-actions"><span className={`lc-out ${toolRuns[t.id].ok ? "ok" : "bad"}`} title={toolRuns[t.id].ok ? toolRuns[t.id].output : toolRuns[t.id].error}>{(toolRuns[t.id].ok ? toolRuns[t.id].output : toolRuns[t.id].error)?.slice(0, 120) ?? ""}</span></span>}
+              <span className="row-actions"><button className="ghost" type="button" onClick={() => setConsoleTool(t.id)}>{consoleTool === t.id ? "in the runner" : "use"}</button></span>
+            </div>)}</div>
+          </div>}
           <div className={toolsTab === "mcp" ? "" : "is-hidden"}><h2 className="pane-h2">MCP servers<span className="mono">{mcpCount}</span></h2>
           {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
             <span className="row-face"><Settings2 size={15} /></span>

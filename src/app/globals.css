@@ -332,6 +332,11 @@ button.node:hover { background: #1a1e2d; }
 .memory-main { display: grid; gap: 3px; min-width: 0; }
 .memory-main b { font-size: 13.5px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 .memory-main em { font-style: normal; font-size: 11px; color: var(--ink-3); }
+.mem-src { border: 0; background: none; padding: 0; font: inherit; color: var(--azure-bright); text-decoration: underline; cursor: pointer; }
+.memory-editrow { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.memory-editrow input { flex: 1 1 220px; min-width: 0; }
+.mem-used { display: grid; gap: 3px; margin: 5px 0 0; padding: 7px 9px; border: 1px solid var(--rule); border-radius: var(--r-sm); background: var(--sunken); font-size: 11.5px; color: var(--ink-2); }
+.mem-used summary { cursor: pointer; font-size: 11px; color: var(--ink-3); }
 .memory-row.pinned .memory-kind { border-color: var(--azure-line); color: var(--azure-bright); }
 .memory-row.stale .memory-main b { text-decoration: line-through; color: var(--ink-3); }
 .memory-propose { margin: 2px 0 8px; padding: 9px 10px; border: 1px dashed var(--rule-2); border-radius: var(--r-sm); background: var(--sunken); }
@@ -478,6 +483,16 @@ button.row:hover { background: #232842; }
 .tool-row + .tool-row { border-top: 1px solid var(--rule); }
 .tool-row.off { opacity: .6; }
 .tool-row.dormant { opacity: .85; }
+.row-actions .dormant { font-size: 10.5px; color: var(--ink-3); max-width: 220px; text-align: right; line-height: 1.45; }
+.local-console { margin-top: 4px; }
+.lc-runner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 14px; padding: 11px 12px; border: 1px solid var(--rule-2); border-radius: var(--r-sm); background: var(--sunken); }
+.lc-seat { font-size: 10.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+.lc-runner select { max-width: 170px; }
+.lc-runner input { flex: 1 1 260px; min-width: 0; font-family: var(--font-mono), monospace; font-size: 12px; }
+.row.on { background: var(--h-wash); border-radius: var(--r-sm); }
+.lc-out { display: block; max-width: 240px; padding: 3px 8px; border-radius: 6px; font-family: var(--font-mono), monospace; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; text-align: right; }
+.lc-out.ok { background: var(--ran-wash); color: var(--ran); }
+.lc-out.bad { background: var(--fault-wash); color: var(--fault); }
 .tool-row-main { display: grid; min-width: 0; }
 .tool-row-main b { font-size: 13px; font-weight: 600; }
 .tool-row-main em { font-style: normal; font-size: 11.5px; color: var(--ink-2); }
@@ -509,7 +524,7 @@ button.row:hover { background: #232842; }
 .agent-card-name { font-weight: 700; font-size: 15px; line-height: 1.2; }
 .agent-card-role { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .agent-card-divider { border-top: 1px solid var(--rule); margin-top: auto; width: 100%; padding-top: 11px; }
-.agent-card-bottom { width: 100%; display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--ink-3); }
+.agent-card-bottom { width: 100%; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 2px 10px; font-size: 10.5px; color: var(--ink-3); }
 .agent-card-bottom > span:first-child { display: flex; align-items: center; gap: 5px; color: var(--ran); }
 .agent-live { width: 6px; height: 6px; border-radius: 50%; background: var(--ran); }
 .agent-live.paused { background: var(--ink-3); }
@@ -834,3 +849,38 @@ button.row:hover, .row:hover { background: rgba(139, 155, 255, .045); }
 .pulse-sched b { font-family: var(--font-body), sans-serif; -webkit-text-fill-color: currentColor; background: none; font-size: 12.5px; }
 .pulse-sched b.always-on { color: var(--ran); } .pulse-sched b.degraded { color: var(--fault); } .pulse-sched b.on-open { color: var(--waiting); }
 @media (max-width: 720px) { .welcome { padding: 24px 20px; } .welcome h2 { font-size: 26px; } }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SECTION COLOUR — each room wears its own hue, and the rail is a colour bar.
+   --sec is set per rail button (its own colour) and at the workbench (the open
+   room's colour). Identity tints stay three (state semantics keep theirs);
+   colour here marks *where you are*, never *what happened*.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.rail-btn { color: color-mix(in srgb, var(--sec) 52%, var(--ink-3)); }
+.rail-btn:hover { background: color-mix(in srgb, var(--sec) 10%, transparent); color: color-mix(in srgb, var(--sec) 85%, white); }
+.rail-btn.on { background: color-mix(in srgb, var(--sec) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec) 32%, transparent), 0 6px 20px -8px color-mix(in srgb, var(--sec) 60%, transparent); color: color-mix(in srgb, var(--sec) 92%, white); }
+.rail-btn.on::before { background: var(--sec); box-shadow: 0 0 12px var(--sec); }
+.rail-btn.on .rail-label { color: inherit; }
+.iconrail { border-right-color: color-mix(in srgb, #8b9bff 6%, transparent); }
+.sidepanel { border-right-color: color-mix(in srgb, var(--sec) 14%, transparent); }
+.sp-title h2 { color: color-mix(in srgb, var(--sec) 90%, white); }
+.sp-group { color: color-mix(in srgb, var(--sec) 55%, var(--ink-3)); }
+.sp-item-icon { color: color-mix(in srgb, var(--sec) 78%, var(--ink-2)); }
+.sp-icon:hover { background: color-mix(in srgb, var(--sec) 14%, transparent); border-color: color-mix(in srgb, var(--sec) 45%, transparent); color: color-mix(in srgb, var(--sec) 92%, white); }
+.sp-tabs button.on { background: color-mix(in srgb, var(--sec) 12%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec) 30%, transparent); color: color-mix(in srgb, var(--sec) 92%, white); }
+.pane-h2 { color: color-mix(in srgb, var(--sec) 62%, var(--ink-3)); }
+.pane-h2 .mono { color: color-mix(in srgb, var(--sec) 85%, var(--ink)); }
+.sheet-bar { border-bottom-color: color-mix(in srgb, var(--sec) 14%, transparent); }
+.ident-role, .page-heading h1 { color: color-mix(in srgb, var(--sec) 40%, var(--ink)); }
+.blank h3 { color: color-mix(in srgb, var(--sec) 80%, var(--ink)); }
+.node.on { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec) 35%, transparent); }
+button.sp-item:hover, button.node:hover { background: color-mix(in srgb, var(--sec) 8%, transparent); }
+
+/* memory kinds carry their own hues — the same three tints the bench uses */
+.memory-kind[data-kind="decision"] { border-color: var(--azure-line); color: var(--azure-bright); }
+.memory-kind[data-kind="note"] { border-color: #4c5c47; color: #a8d98a; }
+.memory-kind[data-kind="glossary"] { border-color: #3b5a5f; color: #70d2db; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .rail-btn, .rail-btn::before { transition: background .2s var(--ease), color .2s var(--ease), box-shadow .2s var(--ease); }
+}
