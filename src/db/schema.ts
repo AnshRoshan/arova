@@ -40,3 +40,18 @@ export const memories = pgTable("memories", { id: id(), workspaceId: uuid("works
  * loop spending the whole day's model budget.
  */
 export const triggers = pgTable("triggers", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }), token: text("token").notNull(), label: text("label").notNull().default("trigger"), enabled: boolean("enabled").notNull().default(true), lastFiredAt: timestamp("last_fired_at", { withTimezone: true }), hits: integer("hits").notNull().default(0), createdAt: created() }, t => [uniqueIndex("triggers_token_unique").on(t.token), index("triggers_team_index").on(t.teamId)]);
+
+/**
+ * Proof of life for whatever drives the scheduler. One row per driver ("worker" = the in-process loop
+ * started by instrumentation, "cron" = an outside caller hitting /api/cron). The UI reads these rows to
+ * say whether routines are really being watched right now, instead of claiming it.
+ */
+export const schedulerHeartbeats = pgTable("scheduler_heartbeats", {
+  source: text("source").primaryKey(),
+  startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(),
+  lastTickAt: timestamp("last_tick_at", { withTimezone: true }).defaultNow().notNull(),
+  ticks: integer("ticks").notNull().default(0),
+  lastClaimed: integer("last_claimed").notNull().default(0),
+  totalClaimed: integer("total_claimed").notNull().default(0),
+  lastError: text("last_error"),
+});

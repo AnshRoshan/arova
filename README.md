@@ -10,6 +10,10 @@ Arova is an agent workspace built with Next.js, PostgreSQL, Drizzle ORM, and Tai
 
 First visit creates an empty personal workspace. You add the first agent yourself, and every number on the overview is then something you did. Agent creation/editing/pausing/deletion, persisted chat, natural-language routine proposals, routine creation/toggling/deletion, manual run requests, run cancellation, approval decisions, timezone changes, and audit events are backed by PostgreSQL.
 
+## Running 24/7
+
+Routines fire while something is awake: the built-in worker (on by default, `SCHEDULER_WORKER=off` to disable) or an outside clock calling `POST /api/cron` with `Authorization: Bearer $CRON_SECRET`. Docker Compose, systemd and GitHub Actions files live in `deploy/` and `.github/workflows/`; the full guide is [docs/ALWAYS-ON.md](docs/ALWAYS-ON.md).
+
 ## Sample content (optional, and never automatic)
 
 A demo, a screenshot session or a walkthrough may want three agents and some history. That content lives in `seed/fixtures.json` and is inserted by a script the app never imports:
@@ -76,7 +80,7 @@ Delegation is model-to-model. It is not a connector: no agent here can read your
 
 - **Authentication:** The demo uses a random, HTTP-only workspace cookie for separation. This is **not production authentication**. Add Google/GitHub OAuth, authenticated user-to-workspace membership, CSRF protection, and session rotation before a public deployment.
 - **Tools:** The catalog is present, but OAuth providers are not configured. Connect buttons fail safely and do not pretend to connect accounts.
-- **Scheduling:** Routines execute. A due routine runs the next time the workspace is opened — there is no background daemon in this deployment, so a routine that fell due while the machine was off fires once on the next open and is marked late. Each execution creates a real run with steps and posts the answer into that agent's thread, under the same daily model-call budget as chat.
+- **Scheduling:** Routines execute, and now on their own. A worker started with the server (`src/instrumentation.ts`) claims due routines every 30 s, and `/api/cron` lets any outside clock do the same. Each execution creates a real run with steps and posts the answer into that agent's thread, under the same daily model-call budget as chat. **Run now** executes immediately. The Automations → 24/7 control room shows live whether a worker or an outside clock is really ticking; if the server is off, nothing fires and the app says so. See [docs/ALWAYS-ON.md](docs/ALWAYS-ON.md).
 - **Runs:** Run Now and the scheduler both execute the agent and record the outcome. A run still cannot touch anything outside the workspace, because no browser, files or connectors exist here. Runs inserted by the seed script are labelled as sample activity and excluded from the overview counters.
 - **Computer:** `SandboxProvider` is defined in `src/lib/sandbox.ts`. The default `UnconfiguredSandboxProvider` deliberately rejects start and execute requests. It does not execute host commands or pretend to provide a browser. Integrate an isolated Docker/Playwright or hosted provider through this contract before enabling it.
 - **Approvals:** A fresh workspace has no pending approvals; one exists only if you seeded sample content. Resolving an approval records a decision; it does not trigger an external write.

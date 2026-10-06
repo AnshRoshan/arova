@@ -1,0 +1,31 @@
+# docker compose -f deploy/docker-compose.yml up -d --build
+# Reads secrets from ./.env (copy .env.example). `restart: unless-stopped` is what makes it 24/7:
+# the container comes back after a crash or a host reboot, and the scheduler worker comes back with it.
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: arova
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-arova-change-me}
+      POSTGRES_DB: arova
+    volumes: [arova-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arova -d arova"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    restart: unless-stopped
+    depends_on: { db: { condition: service_healthy } }
+    env_file: [../.env]
+    environment:
+      # overrides any DATABASE_URL in .env so the app talks to the bundled database
+      DATABASE_URL: postgresql://arova:${POSTGRES_PASSWORD:-arova-change-me}@db:5432/arova
+      SCHEDULER_WORKER: "on"
+    ports: ["3000:3000"]
+
+volumes:
+  arova-db:

@@ -1,0 +1,18 @@
+# A free outside clock. GitHub calls your deployed Arova every five minutes (its minimum interval), which
+# claims and runs any routine that has come due — useful on hosts that sleep (Vercel, Render free, etc.).
+# Setup: repo → Settings → Secrets and variables → Actions → add
+#   ARO_URL      e.g. https://arova.example.com   (no trailing slash)
+#   CRON_SECRET  the same value as CRON_SECRET on the server
+name: arova-cron
+on:
+  schedule: [{ cron: "*/5 * * * *" }]
+  workflow_dispatch:
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Tick the scheduler
+        run: |
+          if [ -z "${{ secrets.ARO_URL }}" ] || [ -z "${{ secrets.CRON_SECRET }}" ]; then echo "ARO_URL / CRON_SECRET not set — skipping"; exit 0; fi
+          curl -fsS --max-time 300 -X POST "${{ secrets.ARO_URL }}/api/cron" -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
