@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { agents, events, messages, teams, triggers } from "@/db/schema";
@@ -14,11 +14,9 @@ const COOLDOWN_MS = 60_000;
 /**
  * An event outside the app briefing one organisation.
  *
- * `POST /api/trigger` with `Authorization: Bearer <token>` and `{"text":"…"}`. There is no worker in
- * this deployment, so this is the honest half of "always-on": the work starts when something calls in,
- * it runs to completion inside the request, and the answer is posted in that org's channel with the
- * trigger named as its author. The token is scoped to one org and revocable; nothing here implies a
- * daemon that keeps working after the caller hangs up.
+ * `POST /api/trigger` with `Authorization: Bearer <token>` and `{"text":"…"}`. The work starts when
+ * something calls in, it runs to completion inside the request, and the answer is posted in that
+ * org's channel with the trigger named as its author. The token is scoped to one org and revocable.
  */
 export async function POST(request: NextRequest) {
   const bearer = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
@@ -43,9 +41,17 @@ export async function POST(request: NextRequest) {
   if (!leadRow) return NextResponse.json({ error: `${team.name} has no seats, so there is nobody to brief.` }, { status: 409 });
   if (leadRow.status !== "ACTIVE") return NextResponse.json({ error: `${leadRow.name} is paused, so ${team.name} cannot be briefed. Resume the lead.` }, { status: 409 });
 
+  // The cooldown is claimed atomically: two webhooks arriving together both pass the cheap check
+  // above, and only the one whose UPDATE matches the pre-cooldown window may run the brief.
+  const cutoff = new Date(Date.now() - COOLDOWN_MS);
+  const [claimed] = await db.update(triggers)
+    .set({ lastFiredAt: new Date(), hits: sql`${triggers.hits} + 1` })
+    .where(and(eq(triggers.id, trigger.id), or(isNull(triggers.lastFiredAt), lt(triggers.lastFiredAt, cutoff))))
+    .returning({ id: triggers.id });
+  if (!claimed) return NextResponse.json({ error: `This trigger fired ${Math.round((Date.now() - new Date(trigger.lastFiredAt ?? 0).getTime()) / 1000)}s ago; the cooldown is ${COOLDOWN_MS / 1000}s.` }, { status: 429 });
+
   // The trigger is the author of the ask, and the record says so — not "you".
   await db.insert(messages).values({ workspaceId: trigger.workspaceId, teamId: team.id, role: "user", content: input.data.text, kind: "message", metadata: { viaTrigger: trigger.label, triggerId: trigger.id } });
-  await db.update(triggers).set({ lastFiredAt: new Date(), hits: trigger.hits + 1 }).where(eq(triggers.id, trigger.id));
   await db.insert(events).values({ workspaceId: trigger.workspaceId, agentId: leadRow.id, type: "trigger.fired", detail: `${trigger.label} → ${team.name}: ${input.data.text.slice(0, 120)}` });
 
   const outcome = await runBrief(trigger.workspaceId, team, leadRow, input.data.text, () => {}, () => false, "trigger");
