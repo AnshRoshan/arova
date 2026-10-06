@@ -1,6 +1,6 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { and, desc, eq, gt, lte, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, lt, lte, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { agents, approvals, connections, delegations, events, memories, messages, modelUsage, routines, runs, runSteps, sandboxes, schedulerHeartbeats, teams, triggers, workspaces } from "@/db/schema";
@@ -10,18 +10,26 @@ import { DEFAULT_RESERVE_TOKENS, completionText, estimateTokens, finishReason, l
 import { ORG_SYSTEM, buildPeerPrompt, decollide, extractJsonObject, extractRoster, fallbackRoster, isOrgIntent, mentionConsult, isTeamIntent, normaliseRoster, parseRouting, parseTurn, resolvePeer, routingPrompt, type Roster, type Routing } from "@/lib/orchestration";
 import { DEFAULT_CAPABILITIES, TOOL_REGISTRY, allowsAction, mcpSummary, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor, type Capabilities } from "@/lib/tools";
 import { runLocalTool } from "@/lib/local-tools";
+import { webFetch } from "@/lib/web-fetch";
 import { MAX_MEMBERS, decollideOrg, normaliseOrg, orgTemplate, type Org } from "@/lib/org";
 import { nextRunAt } from "@/lib/scheduler";
 import { alwaysOn, cronState, driverState, schedulerIntervalSeconds, workerEnabled } from "@/lib/worker-config";
 import { nextFatigue } from "@/lib/fatigue";
 import { withProvenance } from "@/lib/provenance";
 import { loadAuthProviders } from "@/lib/auth-providers";
+import { listPeople, readActor, removePerson, setPersonRole } from "@/lib/auth-sessions";
+import { allowWrite, sameOrigin, type Bucket } from "@/lib/write-guard";
+
+/** The per-process write budget, one bucket per workspace (write-guard.ts states its honest
+ * scope). Pinned to globalThis so a dev-mode recompile of this module cannot hand every request
+ * a fresh full bucket; in production there is one instance anyway. */
+const writeBuckets: Map<string, Bucket> = ((globalThis as { __arovaWriteBuckets?: Map<string, Bucket> }).__arovaWriteBuckets ??= new Map());
 import { splitReasoning } from "@/lib/markdown";
 import { budgetStopRow, channelSubject, denialBreaker, hermeticPeers, mayFoundOrg, mayStaffOrg, noReportStopRow, requestedOrgName, resolveLead, summarisePost, summonCeiling, type ApprovalOutcome } from "@/lib/channel";
 import { memoryProvenance, renderMemoryBlock, selectMemories, type MemoryKind, type MemoryRow } from "@/lib/memory";
 
 export const dynamic = "force-dynamic";
-const cookieName = "arova_workspace";
+export const cookieName = "arova_workspace";
 const uuid = z.string().uuid();
 const text = z.string().trim().min(1).max(4000);
 
@@ -61,6 +69,12 @@ async function usageToday(workspaceId: string) {
 }
 
 async function initialize() {
+  // A live session outranks the anonymous cookie: the workspace it names is the one it belongs to.
+  const actor = await readActor();
+  if (actor) {
+    const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, actor.workspaceId)).limit(1);
+    if (workspace) return { workspace, isNew: false };
+  }
   const existing = (await cookies()).get(cookieName)?.value;
   if (existing && uuid.safeParse(existing).success) {
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, existing)).limit(1);
@@ -81,13 +95,17 @@ function publicProfiles(profiles: ProviderProfile[]) {
 async function board(workspaceId: string) {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
   const profiles = loadProfiles();
-  const [agentList, messageList, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats] = await Promise.all([
+  // The message window is the newest rows; older history stays in Postgres and opens through the
+  // loadEarlier action. The completed-runs total is counted in SQL over ALL rows, so windowing the
+  // payload never changes a number the board claims.
+  const MESSAGE_WINDOW = 200, RUN_WINDOW = 60, STEP_WINDOW = 300, APPROVAL_WINDOW = 60;
+  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, totalsRows] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
-    db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(messages.createdAt),
+    db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt)).limit(MESSAGE_WINDOW + 1),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
-    db.select().from(runs).where(eq(runs.workspaceId, workspaceId)).orderBy(desc(runs.startedAt)),
-    db.select().from(runSteps).where(eq(runSteps.workspaceId, workspaceId)).orderBy(runSteps.createdAt),
-    db.select().from(approvals).where(eq(approvals.workspaceId, workspaceId)).orderBy(desc(approvals.createdAt)),
+    db.select().from(runs).where(eq(runs.workspaceId, workspaceId)).orderBy(desc(runs.startedAt)).limit(RUN_WINDOW),
+    db.select().from(runSteps).where(eq(runSteps.workspaceId, workspaceId)).orderBy(desc(runSteps.createdAt)).limit(STEP_WINDOW),
+    db.select().from(approvals).where(eq(approvals.workspaceId, workspaceId)).orderBy(desc(approvals.createdAt)).limit(APPROVAL_WINDOW),
     db.select().from(connections).where(eq(connections.workspaceId, workspaceId)),
     db.select().from(sandboxes).where(eq(sandboxes.workspaceId, workspaceId)),
     db.select().from(events).where(eq(events.workspaceId, workspaceId)).orderBy(desc(events.createdAt)).limit(30),
@@ -96,7 +114,17 @@ async function board(workspaceId: string) {
     db.select().from(memories).where(eq(memories.workspaceId, workspaceId)).orderBy(desc(memories.createdAt)),
     db.select().from(triggers).where(eq(triggers.workspaceId, workspaceId)).orderBy(desc(triggers.createdAt)),
     db.select().from(schedulerHeartbeats),
+    db.select({
+      n: sql<number>`(select count(*)::int from runs where workspace_id = ${workspaceId} and status = 'COMPLETED' and summary not like 'Sample run:%')`,
+      today: sql<number>`(select count(*)::int from messages where workspace_id = ${workspaceId} and role = 'user' and created_at >= date_trunc('day', now() at time zone 'utc'))`,
+      pending: sql<number>`(select count(*)::int from approvals where workspace_id = ${workspaceId} and status = 'PENDING' and detail not like 'Sample approval%')`,
+    }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1),
   ]);
+  const olderMessages = messagePage.length > MESSAGE_WINDOW;
+  const messageList = (olderMessages ? messagePage.slice(0, MESSAGE_WINDOW) : messagePage).reverse();
+  const completedRunsCount = totalsRows[0]?.n ?? 0;
+  const messagesTodayCount = totalsRows[0]?.today ?? 0;
+  const pendingApprovalsCount = totalsRows[0]?.pending ?? 0;
   // A consult card must still show the peer's answer the day after it happened. The day window is
   // there to keep the index's "today" list small — it was never meant to erase stored evidence.
   const startOfUtcDay = new Date(new Date().toISOString().slice(0, 10));
@@ -106,12 +134,13 @@ async function board(workspaceId: string) {
     .orderBy(desc(delegations.createdAt)).limit(80);
   return {
     workspace,
+    olderMessages,
     overview: {
       activeAgents: agentList.filter(a => a.status === "ACTIVE").length,
       enabledRoutines: routineList.filter(r => r.enabled).length,
-      completedRuns: runList.filter(r => r.status === "COMPLETED" && !r.summary.startsWith("Sample run:")).length,
-      pendingApprovals: approvalList.filter(a => a.status === "PENDING" && !a.detail.includes("Sample approval")).length,
-      messagesToday: messageList.filter(m => m.createdAt >= startOfUtcDay && m.role === "user").length,
+      completedRuns: completedRunsCount,
+      pendingApprovals: pendingApprovalsCount,
+      messagesToday: messagesTodayCount,
     },
     agents: agentList.map(a => ({ ...a, capabilities: normaliseCapabilities(a.capabilities) })), messages: messageList, routines: routineList, runs: runList, steps: stepList, approvals: approvalList, connections: connectionList, sandboxes: sandboxList, events: eventList, memories: memoryList, triggers: triggerList,
     scheduler: (() => {
@@ -135,6 +164,14 @@ async function board(workspaceId: string) {
     // Names only: what the sign-in screen would build itself from, and what a half-configured
     // provider is missing. A secret never appears here — this whole payload goes to the browser.
     auth: (() => { const d = loadAuthProviders(process.env); return { providers: d.providers.map(p => ({ name: p.name, label: p.label })), incomplete: d.incomplete }; })(),
+    // Who the request is, and — for the owner — who else is in. The people list carries no tokens,
+    // no issuers' raw subjects beyond an opaque id, and reaches only the member whose role is owner.
+    identity: await (async () => {
+      const actor = await readActor();
+      if (!actor) return { signedIn: null, people: [] as { id: string; name: string; email: string; role: string; addedAt: string; lastSeenAt: string | null; sessions: number }[] };
+      const people = actor.role === "owner" ? (await listPeople(workspaceId)).map(p => ({ id: p.id, name: p.name, email: p.email, role: p.role, addedAt: p.addedAt.toISOString(), lastSeenAt: p.lastSeenAt?.toISOString() ?? null, sessions: p.sessions })) : [];
+      return { signedIn: { name: actor.name, email: actor.email, role: actor.role }, people };
+    })(),
   };
 }
 
@@ -1129,8 +1166,12 @@ function streamBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked:
 
 export async function POST(request: NextRequest) {
   try {
-    const workspaceId = (await cookies()).get(cookieName)?.value;
+    if (!sameOrigin(request.headers.get("origin"), request.nextUrl.host)) return NextResponse.json({ error: "Cross-origin writes are refused." }, { status: 403 });
+    const actor = await readActor();
+    const workspaceId = actor?.workspaceId ?? (await cookies()).get(cookieName)?.value;
     if (!workspaceId || !uuid.safeParse(workspaceId).success) return NextResponse.json({ error: "Workspace session missing. Refresh the page." }, { status: 401 });
+    const budget = allowWrite(writeBuckets, workspaceId, { burst: 40, perMinute: 600 });
+    if (!budget.ok) return NextResponse.json({ error: `That is a lot of actions at once — try again in ${budget.retrySeconds}s.` }, { status: 429 });
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (!workspace) return NextResponse.json({ error: "Workspace not found" }, { status: 401 });
     const body = await request.json();
@@ -1509,6 +1550,24 @@ export async function POST(request: NextRequest) {
       const name = z.string().trim().min(2).max(60).parse(body.name);
       await db.update(workspaces).set({ name }).where(eq(workspaces.id, workspaceId));
       await audit(workspaceId, null, "workspace.renamed", `Workspace renamed to ${name}`);
+    } else if (action === "removePerson") {
+      const input = z.object({ userId: uuid }).parse(body);
+      if (!actor || actor.role !== "owner") throw new Error("Only the owner can remove people.");
+      if (input.userId === actor.userId) throw new Error("You cannot remove yourself. Promote another owner first.");
+      const outcome = await removePerson(workspaceId, input.userId);
+      if (!outcome.ok) throw new Error(outcome.error ?? "That person could not be removed.");
+    } else if (action === "setPersonRole") {
+      const input = z.object({ userId: uuid, role: z.enum(["owner", "member"]) }).parse(body);
+      if (!actor) throw new Error("Sign in first.");
+      const outcome = await setPersonRole(workspaceId, actor, input.userId, input.role);
+      if (!outcome.ok) throw new Error(outcome.error ?? "That role could not be set.");
+    } else if (action === "loadEarlier") {
+      // One page of older history for the windowed board: 100 messages before the oldest loaded.
+      const input = z.object({ before: z.string().min(10).max(40) }).parse(body);
+      const beforeDate = new Date(input.before);
+      if (Number.isNaN(beforeDate.getTime())) throw new Error("The point in time to page from could not be read.");
+      const older = await db.select().from(messages).where(and(eq(messages.workspaceId, workspaceId), lt(messages.createdAt, beforeDate))).orderBy(desc(messages.createdAt)).limit(100);
+      result = { earlier: older.reverse() };
     } else if (action === "updateWorkspace") {
       const timezone = z.string().min(1).max(100).parse(body.timezone);
       try { Intl.DateTimeFormat(undefined, { timeZone: timezone }); } catch { throw new Error("Invalid timezone"); }
@@ -1526,12 +1585,12 @@ export async function POST(request: NextRequest) {
       // The seat's grant list still decides — a tool a seat was not given cannot be run through it.
       const input = z.object({ agentId: uuid, toolId: z.string().trim().min(1).max(40), toolInput: z.string().min(1).max(20_000) }).parse(body);
       const runner = await ownedAgent(workspaceId, input.agentId);
-      const spec = TOOL_REGISTRY.find(t => t.id === input.toolId && t.available && t.kind === "local");
+      const spec = TOOL_REGISTRY.find(t => t.id === input.toolId && t.available && (t.kind === "local" || t.id === "web_fetch"));
       if (!spec) throw new Error(`"${input.toolId}" is not a tool this deployment can genuinely run.`);
       const caps = normaliseCapabilities(runner.capabilities);
       if (!resolveTools(caps, { hasTeam: true }).includes(spec.id)) throw new Error(`${runner.name} is not granted "${spec.label}". Turn it on in ${runner.name} › Capabilities.`);
       const [toolRun] = await db.insert(runs).values({ workspaceId, agentId: runner.id, title: `Tool · ${spec.label}`, status: "RUNNING", summary: input.toolInput.slice(0, 240), initiator: "person", startedAt: new Date() }).returning();
-      const executed = runLocalTool(spec.id, input.toolInput);
+      const executed = spec.id === "web_fetch" ? await webFetch(input.toolInput) : runLocalTool(spec.id, input.toolInput);
       await db.insert(runSteps).values({ workspaceId, runId: toolRun.id, title: executed.ok ? `${spec.label} ran in this process` : `${spec.label} refused`, detail: (executed.ok ? executed.output ?? "" : executed.error ?? "").slice(0, 4000), status: executed.ok ? "COMPLETED" : "FAILED" });
       await db.update(runs).set({ status: executed.ok ? "COMPLETED" : "FAILED", completedAt: new Date(), summary: executed.ok ? `Ran: ${input.toolInput.slice(0, 100)} → ${String(executed.output).slice(0, 100)}` : `Refused: ${executed.error ?? "unknown"}`.slice(0, 240) }).where(eq(runs.id, toolRun.id));
       await audit(workspaceId, runner.id, "tool.ran", `${spec.label} (${runner.name}): ${executed.ok ? "completed" : "refused"}`);
