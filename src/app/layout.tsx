@@ -1,11 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
-import { DM_Sans, JetBrains_Mono, Manrope } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const bodyFont = DM_Sans({ subsets: ["latin"], variable: "--font-body", display: "swap" });
-const displayFont = Manrope({ subsets: ["latin"], variable: "--font-display", display: "swap" });
-const monoFont = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", display: "swap" });
+const bodyFont = localFont({ src: "./fonts/dmsans.woff2", variable: "--font-body", display: "swap" });
+const displayFont = localFont({ src: "./fonts/manrope.woff2", variable: "--font-display", display: "swap" });
+const monoFont = localFont({ src: "./fonts/jetbrainsmono.woff2", variable: "--font-mono", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Arova — Your AI workspace",
