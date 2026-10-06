@@ -10,7 +10,7 @@ The default screen is **Overview**: a warm, editorial command center with a live
 
 `src/app/api/board/route.ts` owns workspace initialization, board serialization, streaming chat, agent/team/org actions, routines, execution, approvals, usage, workspace renaming, and tool-connection boundaries. `src/db/schema.ts` defines PostgreSQL storage; `src/lib/` holds model routing, orchestration, markdown, scheduler, tools, skills, and identity logic. Board `overview` totals are derived server-side from workspace-scoped stored rows. Completed-run and pending-approval totals exclude seeded samples. Workspace renaming is a persistent audited action.
 
-Without a configured provider key, chat shows an explicit local-mode notice. Tool connectors and computer sessions require deployment credentials/runtime and must never pretend to have executed. Schedules run on workspace read rather than through a continuously running worker. Do not imply background execution or fabricated outcomes.
+Without a configured provider key, chat shows an explicit local-mode notice. Tool connectors and computer sessions require deployment credentials/runtime and must never pretend to have executed. Schedules execute through the in-process worker (on by default) or an outside clock calling `/api/cron`; board reads also tick due routines. When no driver is actually beating, the UI says so — never imply background execution or fabricated outcomes.
 
 ## Design direction
 

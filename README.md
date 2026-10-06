@@ -4,7 +4,7 @@ Arova is an agent workspace built with Next.js, PostgreSQL, Drizzle ORM, and Tai
 
 ## Run locally
 
-1. Set `DATABASE_URL` in `.env` to a PostgreSQL database.
+1. Copy `.env.example` to `.env.local` and set `DATABASE_URL` to a PostgreSQL database this project owns.
 2. Run `npm install` and `npx drizzle-kit push`.
 3. Run `npm run dev` and open `http://localhost:3000`.
 
@@ -87,4 +87,4 @@ Delegation is model-to-model. It is not a connector: no agent here can read your
 
 ## Operational checklist before production
 
-Add authenticated OAuth accounts, durable scheduler/worker, provider-specific connector adapters, sandbox isolation, encrypted secrets, action-level policy enforcement, usage quotas, provider contract tests, observability, backups, and deployment-specific security controls. Do not expose this demo directly as a multi-tenant public SaaS.
+Add authenticated OAuth accounts, provider-specific connector adapters, sandbox isolation, encrypted secrets, action-level policy enforcement, usage quotas, provider contract tests, observability, backups, and deployment-specific security controls. (The durable scheduler/worker shipped 2026-10-01; hosting guidance is in docs/ALWAYS-ON.md.) Do not expose this demo directly as a multi-tenant public SaaS.

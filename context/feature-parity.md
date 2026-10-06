@@ -85,7 +85,7 @@ matrix; §5 ranks the gaps and §6 turns the top one into a spec. §7 adds a thi
   reason it is off (`run_command`: "commands would run on your machine, so this stays off").
 - **No connectors.** `connectTool` throws the honest sentence; `connections`/`sandboxes` tables exist and
   nothing populates them for real. No OAuth.
-- **No background worker**, so nothing runs while the app is closed.
+- **No background worker**, so nothing runs while the app is closed. *(Corrected 2026-10-06: an in-process worker ships — `src/instrumentation.ts` + `src/lib/worker.ts`, plus `/api/cron` for an outside clock and `/api/trigger` for inbound events; four HTTP routes now. The lines below describe the code as inventoried on 2026-10-01 and are kept as dated history.)*
 - **No persistent agent compute** and no isolated sandbox — no per-agent machine, files or environment.
 - **No per-organisation memory** and no retrieval: context is the transcript inside the token budget.
 - **No multimodality**: no image/audio in or out, no file upload, no image or video generation.
@@ -315,7 +315,7 @@ means the product refuses the feature out loud, in the UI, rather than silently 
 | Connectors/OAuth | 7 named + BYO-MCP | ~4,000 apps | None; `connectTool` refuses | Deliberate; needs your credentials |
 | Web grounding with citations | Yes (web + X firehose) | Via browser/connectors | No search provider; `web_search` off | Gap, external dependency |
 | Scheduled work | Time + **email-triggered**; free on all tiers | NL routines; In progress/Scheduled/Completed | Time-based, timezone-correct, claim-by-predicate (`routines`, `scheduler.ts`) | Ours matches on time; no event triggers |
-| Runs while app is closed | Yes (always-on) | Yes (24/7) | **No** — tick on read, and the UI says so | Deliberate (no worker) |
+| Runs while app is closed | Yes (always-on) | Yes (24/7) | **No** — tick on read, and the UI says so | Deliberate (no worker) — corrected 2026-10-06: Arova now ships a worker; this row is the 2026-10-01 reading |
 | Proactive/idle work | Yes | Yes, fenced read-only | No | Deliberate; needs the worker |
 | Approvals for actions | Diff approval in Grok Build | Custom Rules (allow/ask/block) + reviewer agent | `approvals` rows raised by the agent, decided by the human; `plan` mode blocks writes | Ours matches the *shape*, lacks the reviewer |
 | Denial circuit breaker | Not documented | **3 consecutive / 10-in-50 denials interrupts the turn** | None | **Cheap idea worth stealing — §5.3** |
