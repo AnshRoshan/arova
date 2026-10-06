@@ -82,9 +82,12 @@ async function main() {
     workspaceId: workspace.id, agentId: seat(g.agent), role: "assistant", content: g.content,
   })));
 
+  // Sample routines are switched off: since the always-on worker shipped, a seeded routine left
+  // enabled would genuinely fire at its scheduled time and spend the workspace's model budget on
+  // content the board labels "sample". A human flips it on when they want the work to be real.
   const seededRoutines = await db.insert(routines).values(fixtures.routines.map((r: Record<string, string>) => ({
     workspaceId: workspace.id, agentId: seat(r.agent), name: r.name, description: r.description,
-    schedule: r.schedule, timezone: workspace.timezone, icon: r.icon,
+    schedule: r.schedule, timezone: workspace.timezone, icon: r.icon, enabled: false,
   }))).returning();
   const routineByName = new Map<string, string>(seededRoutines.map(r => [r.name, r.id]));
 
@@ -93,6 +96,7 @@ async function main() {
     const [run] = await db.insert(runs).values({
       workspaceId: workspace.id, agentId: seat(r.agent), routineId: routineIdFor(r.routine),
       title: r.title, status: "COMPLETED", summary: r.summary, startedAt: started,
+      initiator: "routine",
       completedAt: new Date(started.getTime() + r.durationSeconds * 1000),
     }).returning();
     await db.insert(runSteps).values(fixtures.runSteps.map((s: Record<string, string>) => ({
