@@ -212,9 +212,13 @@ export function resolvePeer<T extends Peer>(requested: string, roster: T[], self
   const want = norm(requested);
   if (!want) return null;
   const candidates = roster.filter(p => p.id !== selfId);
-  return candidates.find(p => norm(p.name) === want)
-    ?? candidates.find(p => norm(p.name).startsWith(want) || want.startsWith(norm(p.name)))
-    ?? null;
+  const exact = candidates.find(p => norm(p.name) === want);
+  if (exact) return exact;
+  // Prefix matches go to the most specific seat: "Scout 2" must not collide onto "Scout"
+  // just because "Scout" sits earlier in the roster.
+  const prefixed = candidates.filter(p => { const n = norm(p.name); return n.startsWith(want) || want.startsWith(n); });
+  prefixed.sort((a, b) => Math.min(norm(b.name).length, want.length) - Math.min(norm(a.name).length, want.length));
+  return prefixed[0] ?? null;
 }
 
 export function canConsult(consultedIds: string[], maxHops: number): boolean {

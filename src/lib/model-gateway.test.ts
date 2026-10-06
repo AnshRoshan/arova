@@ -137,3 +137,35 @@ test("stream payload: usage is requested, and only for streams", () => {
   const unary = completionPayload({ profile: { model: "m" }, messages: [{ role: "user", content: "x" }], stream: false });
   assert.equal("stream_options" in unary, false, "a non-stream response already carries usage");
 });
+
+test("usage: keys reported without numbers are 'not reported', never reported zeros", () => {
+  assert.equal(usageFromJson({ usage: { prompt_tokens: null, completion_tokens: null } }), null);
+  assert.equal(usageFromSseLine('data: {"usage":{"prompt_tokens":"","completion_tokens":5}}'), null);
+});
+
+test("profiles: PROVIDERS listing a built-in name does not duplicate the option", () => {
+  const names = loadProfiles({ PROVIDERS: "openai dahl", DAHL_BASE_URL: "https://x/v1", DAHL_MODEL: "m" }).map(p => p.name);
+  assert.equal(names.filter(n => n === "openai").length, 1);
+  assert.ok(names.includes("dahl"));
+});
+
+test("requestCompletion: a server that rejects stream_options is retried once without it", async () => {
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  const seen: boolean[] = [];
+  try {
+    const profile = loadProfiles({ OPENAI_API_KEY: "test-key" }).find(p => p.name === "openai")!;
+    const fakeFetch = async (_url: unknown, init: { body: string }) => {
+      const body = JSON.parse(init.body);
+      seen.push(Boolean(body.stream_options));
+      if (body.stream_options) return new Response("stream_options is not supported", { status: 400 });
+      return new Response("{}", { status: 200 });
+    };
+    const { requestCompletion } = await import("./model-gateway.ts");
+    const res = await requestCompletion({ profile, messages: [{ role: "user", content: "hi" }], stream: true, fetchImpl: fakeFetch as never });
+    assert.equal(res.ok, true, "the message must survive a server that rejects the usage frame");
+    assert.deepEqual(seen, [true, false]);
+  } finally {
+    if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+  }
+});

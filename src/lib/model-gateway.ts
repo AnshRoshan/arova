@@ -65,6 +65,7 @@ export function loadProfiles(env: Env = process.env): ProviderProfile[] {
     .split(/[,\s]+/)
     .map(name => name.trim())
     .filter(Boolean)
+    .filter(name => !BUILT_INS.some(b => b.name === name))
     .map(name => {
       const prefix = envPrefix(name);
       const base = env[`${prefix}_BASE_URL`] || "";
@@ -184,9 +185,12 @@ export function completionPayload(input: { profile: { model: string }; messages:
   };
 }
 
+const strictNumber = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN);
 const tokenPair = (usage: unknown): { input: number; output: number } | null => {
   const u = (usage && typeof usage === "object" ? usage : {}) as Record<string, unknown>;
-  const input = Number(u.prompt_tokens), output = Number(u.completion_tokens);
+  // Number(null) and Number("") are 0 — a server that reports the keys but not the
+  // counts must read as "not reported", or a call gets stored as reported zeros.
+  const input = strictNumber(u.prompt_tokens), output = strictNumber(u.completion_tokens);
   if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0) return null;
   return { input, output };
 };
@@ -233,8 +237,10 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
   let requestUsage = stream;
 
   let lastError = "no attempt made";
+  let forcedWait: number | null = null;
   for (let attempt = 0; attempt <= RETRYABLE_WAIT_MS.length; attempt++) {
-    if (attempt) await wait(RETRYABLE_WAIT_MS[attempt - 1]);
+    if (attempt) await wait(forcedWait ?? RETRYABLE_WAIT_MS[attempt - 1]);
+    forcedWait = null;
     const body = JSON.stringify(completionPayload({ profile, messages, maxTokens, stream, requestUsage }));
     let response: Response;
     try {
@@ -250,12 +256,20 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
     }
     if (response.ok) return response;
     lastError = `HTTP ${response.status}`;
+    // A server that rejects the stream_options field gets one retry of the same request
+    // without it — losing the usage frame, not the user's message.
+    if (requestUsage && (response.status === 400 || response.status === 422)) {
+      requestUsage = false;
+      continue;
+    }
     if (!isRetryableStatus(response.status)) {
       const detail = truncate(await response.text().catch(() => ""));
       throw new Error(`${profile.label} returned ${response.status}${detail ? `: ${detail}` : ""}`);
     }
+    // Honour Retry-After once: the wait for the next attempt is its value, not that plus the fixed
+    // backoff, and an HTTP-date (not a plain number of seconds) falls back to the fixed wait.
     const retryAfter = Number(response.headers.get("retry-after"));
-    if (Number.isFinite(retryAfter) && retryAfter > 0) await wait(Math.min(retryAfter * 1000, 8000));
+    forcedWait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : null;
   }
   throw new Error(`${profile.label} did not respond (${lastError}) after ${RETRYABLE_WAIT_MS.length + 1} attempts.`);
 }

@@ -9,7 +9,9 @@ test("registry: every tool is described, and the available set is exactly what c
   assert.ok(TOOL_REGISTRY.every(t => t.id && t.label && t.description && t.kind));
   const live = TOOL_REGISTRY.filter(t => t.available).map(t => t.id).sort();
   // save_note joined the live set in Feature 12: a seat can now record org memory, and the registry says so.
-  assert.deepEqual(live, ["build_org", "consult_teammate", "create_routine", "handoff", "request_approval", "save_note"]);
+  // The four local tools joined on 2026-10-06: they execute in this process (src/lib/local-tools.ts),
+  // which is exactly the bar this list holds every entry to.
+  assert.deepEqual(live, ["build_org", "calc", "checksum", "consult_teammate", "create_routine", "handoff", "json_transform", "now_in_timezone", "request_approval", "save_note"]);
 });
 
 test("registry: everything unavailable says why", () => {
@@ -77,4 +79,18 @@ test("mcp: configured servers are reported honestly while no transport exists", 
   assert.equal(resolveTools(caps, { hasTeam: true }).includes("mcp:github"), false, "an MCP server must not conjure a tool");
   const inherited = normaliseCapabilities({ mcpServers: [{ name: "a" }, { name: "b" }], mcpInheritance: { except: ["a"] } });
   assert.deepEqual(inherited.mcpServers.map(s => s.name), ["b"]);
+});
+
+test("normalise: an explicit empty tools list revokes everything; only an absent key keeps defaults", () => {
+  assert.deepEqual(normaliseCapabilities({ tools: [] }).tools, [], "revocation must never grant the full default set");
+  assert.deepEqual(normaliseCapabilities({}).tools, [...DEFAULT_CAPABILITIES.tools]);
+});
+
+test("normalise: a malformed mcpInheritance object normalises instead of throwing at read time", () => {
+  const empty = normaliseCapabilities({ mcpServers: [{ name: "a" }], mcpInheritance: {} });
+  assert.equal(empty.mcpInheritance, "all");
+  const brokenNamed = normaliseCapabilities({ mcpInheritance: { named: "github" } });
+  assert.equal(brokenNamed.mcpInheritance, "all");
+  const except = normaliseCapabilities({ mcpServers: [{ name: "a" }, { name: "b" }], mcpInheritance: { except: ["a"] } });
+  assert.deepEqual(except.mcpServers.map(s => s.name), ["b"]);
 });

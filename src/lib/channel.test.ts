@@ -145,3 +145,8 @@ test("the denial breaker trips on a run of refusals or on a hostile window", () 
   // and the window is a window: 60 refusals count as 50
   assert.equal(denialBreaker(Array.from({ length: 60 }, () => "REJECTED") as ("APPROVED" | "REJECTED")[]).considered, 50);
 });
+
+test("summon ceiling: a seat configured for zero turns answers alone", () => {
+  assert.equal(summonCeiling({ envMax: 2, seatMaxTurns: 0 }), 0, "0 is an instruction, not an absent value");
+  assert.equal(summonCeiling({ envMax: 2, seatMaxTurns: 1 }), 0, "one turn leaves no room for a summon");
+});

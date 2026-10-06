@@ -129,7 +129,8 @@ export function noReportStopRow(facts: { author: string; posted: string[]; calls
  */
 export function summonCeiling(facts: { envMax: number; seatMaxTurns: number | null }): number {
   const env = Math.max(0, Math.trunc(facts.envMax));
-  if (!facts.seatMaxTurns) return env;
+  // 0 turns is a real instruction ("answer alone"); only an absent ceiling falls back to the env max.
+  if (facts.seatMaxTurns === null || facts.seatMaxTurns === undefined) return env;
   return Math.min(env, Math.max(0, Math.trunc(facts.seatMaxTurns) - 1));
 }
 
