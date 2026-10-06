@@ -8,7 +8,8 @@ import { sandboxProvider } from "@/lib/sandbox";
 import { skillPrompt } from "@/lib/skills";
 import { DEFAULT_RESERVE_TOKENS, completionText, estimateTokens, finishReason, loadProfiles, requestCompletion, resolveForAgent, sseDelta, trimToTokenBudget, usageFromJson, usageFromSseLine, type ProviderProfile } from "@/lib/model-gateway";
 import { ORG_SYSTEM, buildPeerPrompt, decollide, extractJsonObject, extractRoster, fallbackRoster, isOrgIntent, mentionConsult, isTeamIntent, normaliseRoster, parseRouting, parseTurn, resolvePeer, routingPrompt, type Roster, type Routing } from "@/lib/orchestration";
-import { DEFAULT_CAPABILITIES, allowsAction, mcpSummary, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor, type Capabilities } from "@/lib/tools";
+import { DEFAULT_CAPABILITIES, TOOL_REGISTRY, allowsAction, mcpSummary, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor, type Capabilities } from "@/lib/tools";
+import { runLocalTool } from "@/lib/local-tools";
 import { MAX_MEMBERS, decollideOrg, normaliseOrg, orgTemplate, type Org } from "@/lib/org";
 import { nextRunAt } from "@/lib/scheduler";
 import { alwaysOn, cronState, driverState, schedulerIntervalSeconds, workerEnabled } from "@/lib/worker-config";
@@ -33,7 +34,7 @@ const streamTimeoutMs = () => Math.max(requestTimeoutMs(), num(process.env.MODEL
 const dailyCallLimit = () => num(process.env.DAILY_MODEL_CALLS_LIMIT, 60);
 const utcDay = () => new Date().toISOString().slice(0, 10);
 /** Peer hops one reply may spend. Each hop is extra model calls, so the ceiling is explicit. */
-const maxDelegations = () => num(process.env.MAX_DELEGATIONS, 2);
+const maxDelegations = () => num(process.env.MAX_DELEGATIONS, 1);
 /** A summons answers the question it was asked and does not run a chain of its own. */
 const NO_SUB_CONSULT = Number.MAX_SAFE_INTEGER;
 
@@ -139,6 +140,8 @@ async function board(workspaceId: string) {
 
 /** Routines currently executing in this process, so one tick cannot start the same run twice. */
 const inFlight = new Set<string>();
+/** Brief runs this process is still driving, so the reaper never closes a live brief as interrupted. */
+const liveRuns = new Set<string>();
 
 /**
  * The scheduler tick. There is no daemon in this deployment, so due work is claimed when the
@@ -156,7 +159,10 @@ async function tickSchedules(workspaceId: string): Promise<Promise<unknown>[]> {
   }
   const due = await db.select().from(routines)
     .where(and(eq(routines.workspaceId, workspaceId), eq(routines.enabled, true), lte(routines.nextRunAt, now), sql`${routines.nextRunAt} IS NOT NULL`))
-    .orderBy(routines.nextRunAt).limit(4);
+    .orderBy(routines.nextRunAt).limit(20);
+  // A cold start used to claim the entire overdue backlog of every workspace at once (measured: 157
+  // routines in one tick). The cap above is per workspace; across workspaces the pass below bounds
+  // how many are claimed per tick, so a re-armed server drains the backlog in steps, not in a stampede.
   for (const routine of due) {
     if (inFlight.has(routine.id)) continue;
     // Claim by predicate, not by the value we read. Postgres re-checks the WHERE clause after the
@@ -182,7 +188,7 @@ async function reapStuckRuns(): Promise<number> {
   const cutoff = new Date(Date.now() - STUCK_RUN_MS);
   const stuck = await db.select().from(runs).where(and(eq(runs.status, "RUNNING"), lte(runs.startedAt, cutoff))).limit(50);
   for (const run of stuck) {
-    if (run.routineId && inFlight.has(run.routineId)) continue;
+    if (run.routineId ? inFlight.has(run.routineId) : liveRuns.has(run.id)) continue;
     await db.update(runs).set({ status: "FAILED", completedAt: new Date(), summary: "Interrupted: the server restarted or stopped before this run finished. Nothing further was executed." }).where(eq(runs.id, run.id));
     await db.insert(runSteps).values({ workspaceId: run.workspaceId, runId: run.id, title: "Interrupted", detail: "Closed by the scheduler after the server stopped mid-run.", status: "FAILED" });
     if (run.routineId) await db.update(routines).set({ lastStatus: "FAILED" }).where(and(eq(routines.id, run.routineId), eq(routines.lastStatus, "RUNNING")));
@@ -206,9 +212,12 @@ export async function tickAllWorkspaces(source: TickSource, options: { wait?: bo
     const now = new Date();
     const due = await db.selectDistinct({ workspaceId: routines.workspaceId }).from(routines)
       .where(and(eq(routines.enabled, true), or(isNull(routines.nextRunAt), lte(routines.nextRunAt, now))));
+    // One tick never opens an unbounded number of per-workspace passes. Whatever is left waits for
+    // the next beat, which is what keeps a restart from firing every overdue routine at once.
+    const MAX_TICK_WORKSPACES = 20;
     workspaceCount = due.length;
     const pending: Promise<unknown>[] = [];
-    for (const { workspaceId } of due) {
+    for (const { workspaceId } of due.slice(0, MAX_TICK_WORKSPACES)) {
       try {
         const started = await tickSchedules(workspaceId);
         claimed += started.length;
@@ -298,7 +307,9 @@ export async function GET() {
     const { workspace, isNew } = await initialize();
     // after() runs once the response is flushed: the page load is not held hostage by a model call,
     // and the work is not dropped the way a floating promise is when the request ends.
-    after(() => tickSchedules(workspace.id).catch(error => console.error("Scheduler tick failed", error instanceof Error ? error.message : "unknown error")));
+    after(async () => {
+      try { await reapStuckRuns(); await tickSchedules(workspace.id); } catch (error) { console.error("Scheduler tick failed", error instanceof Error ? error.message : "unknown error"); }
+    });
     const response = NextResponse.json(await board(workspace.id));
     if (isNew) response.cookies.set(cookieName, workspace.id, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", maxAge: 60 * 60 * 24 * 365, path: "/" });
     return response;
@@ -439,12 +450,16 @@ const asMemoryRow = (r: typeof memories.$inferSelect, rank = 0): MemoryRow => ({
 async function recallMemories(workspaceId: string, teamId: string | null, question: string) {
   const empty = { block: "", rows: [] as MemoryRow[], provenance: memoryProvenance([], 0) };
   if (!teamId || !question.trim()) return empty;
+  // A replacement note may live outside this result set, so supersession is excluded in SQL,
+  // not only in the pure selector — otherwise the corrected fact is injected as if current.
+  const notSuperseded = sql`NOT EXISTS (SELECT 1 FROM memories repl WHERE repl.supersedes = ${memories.id})`;
+  const rankSql = sql`ts_rank(to_tsvector('english', ${memories.text}), websearch_to_tsquery('english', ${question}))`;
   const [matched, pinned] = await Promise.all([
-    db.select({ m: memories, rank: sql<number>`ts_rank(to_tsvector('english', ${memories.text}), websearch_to_tsquery('english', ${question}))` })
+    db.select({ m: memories, rank: sql<number>`${rankSql}` })
       .from(memories)
-      .where(and(eq(memories.workspaceId, workspaceId), eq(memories.teamId, teamId), sql`to_tsvector('english', ${memories.text}) @@ websearch_to_tsquery('english', ${question})`))
-      .orderBy(sql`2 desc`).limit(8),
-    db.select().from(memories).where(and(eq(memories.workspaceId, workspaceId), eq(memories.teamId, teamId), eq(memories.pinned, true))).orderBy(desc(memories.createdAt)).limit(8),
+      .where(and(eq(memories.workspaceId, workspaceId), eq(memories.teamId, teamId), notSuperseded, sql`to_tsvector('english', ${memories.text}) @@ websearch_to_tsquery('english', ${question})`))
+      .orderBy(sql`${rankSql} DESC`).limit(8),
+    db.select().from(memories).where(and(eq(memories.workspaceId, workspaceId), eq(memories.teamId, teamId), eq(memories.pinned, true), notSuperseded)).orderBy(desc(memories.createdAt)).limit(8),
   ]);
   const byId = new Map<string, MemoryRow>();
   for (const r of matched) byId.set(r.m.id, asMemoryRow(r.m, Number(r.rank)));
@@ -940,12 +955,14 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
   const NL = String.fromCharCode(10);
   const briefId = crypto.randomUUID();
   const [run] = await db.insert(runs).values({ workspaceId, agentId: lead.id, title: `Brief · ${team.name}`, status: "RUNNING", summary: asked.slice(0, 240), initiator, startedAt: new Date() }).returning();
+  liveRuns.add(run.id);
   const step = (title: string, detail = "") => db.insert(runSteps).values({ workspaceId, runId: run.id, title, detail });
   // What the caller is told when it is not a browser: a trigger needs an outcome to answer with.
   const outcome = { runId: run.id, status: "RUNNING" as string, summary: "" };
   const finishRun = async (status: string, summary: string) => {
     outcome.status = status;
     outcome.summary = summary;
+    liveRuns.delete(run.id);
     await db.update(runs).set({ status, summary, completedAt: new Date() }).where(eq(runs.id, run.id));
   };
   const post = async (reply: Reply, author: { id: string; name: string }) => {
@@ -1496,10 +1513,29 @@ export async function POST(request: NextRequest) {
       const timezone = z.string().min(1).max(100).parse(body.timezone);
       try { Intl.DateTimeFormat(undefined, { timeZone: timezone }); } catch { throw new Error("Invalid timezone"); }
       await db.update(workspaces).set({ timezone }).where(eq(workspaces.id, workspaceId));
+      // Routines arm from the workspace zone when they carry none of their own; clearing the due
+      // time makes the next tick re-anchor every schedule to the new clock instead of lying until
+      // the stale time passes.
+      await db.update(routines).set({ nextRunAt: null }).where(eq(routines.workspaceId, workspaceId));
       await audit(workspaceId, null, "workspace.updated", `Timezone: ${timezone}`);
     } else if (action === "sandboxAction") {
       await ownedAgent(workspaceId, body.agentId);
       throw new Error("Computer runtime is not configured. No sandbox was started. Configure a provider before using computer tasks.");
+    } else if (action === "runTool") {
+      // A real execution, started by a person, recorded as a real run with a real step.
+      // The seat's grant list still decides — a tool a seat was not given cannot be run through it.
+      const input = z.object({ agentId: uuid, toolId: z.string().trim().min(1).max(40), toolInput: z.string().min(1).max(20_000) }).parse(body);
+      const runner = await ownedAgent(workspaceId, input.agentId);
+      const spec = TOOL_REGISTRY.find(t => t.id === input.toolId && t.available && t.kind === "local");
+      if (!spec) throw new Error(`"${input.toolId}" is not a tool this deployment can genuinely run.`);
+      const caps = normaliseCapabilities(runner.capabilities);
+      if (!resolveTools(caps, { hasTeam: true }).includes(spec.id)) throw new Error(`${runner.name} is not granted "${spec.label}". Turn it on in ${runner.name} › Capabilities.`);
+      const [toolRun] = await db.insert(runs).values({ workspaceId, agentId: runner.id, title: `Tool · ${spec.label}`, status: "RUNNING", summary: input.toolInput.slice(0, 240), initiator: "person", startedAt: new Date() }).returning();
+      const executed = runLocalTool(spec.id, input.toolInput);
+      await db.insert(runSteps).values({ workspaceId, runId: toolRun.id, title: executed.ok ? `${spec.label} ran in this process` : `${spec.label} refused`, detail: (executed.ok ? executed.output ?? "" : executed.error ?? "").slice(0, 4000), status: executed.ok ? "COMPLETED" : "FAILED" });
+      await db.update(runs).set({ status: executed.ok ? "COMPLETED" : "FAILED", completedAt: new Date(), summary: executed.ok ? `Ran: ${input.toolInput.slice(0, 100)} → ${String(executed.output).slice(0, 100)}` : `Refused: ${executed.error ?? "unknown"}`.slice(0, 240) }).where(eq(runs.id, toolRun.id));
+      await audit(workspaceId, runner.id, "tool.ran", `${spec.label} (${runner.name}): ${executed.ok ? "completed" : "refused"}`);
+      result = { tool: { id: spec.id, ...executed }, runId: toolRun.id };
     } else if (action === "connectTool") {
       await ownedAgent(workspaceId, body.agentId);
       throw new Error("OAuth is not configured in this deployment. No account was connected. Add provider credentials to enable this integration.");
