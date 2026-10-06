@@ -10,8 +10,10 @@ test("registry: every tool is described, and the available set is exactly what c
   const live = TOOL_REGISTRY.filter(t => t.available).map(t => t.id).sort();
   // save_note joined the live set in Feature 12: a seat can now record org memory, and the registry says so.
   // The four local tools joined on 2026-10-06: they execute in this process (src/lib/local-tools.ts),
-  // which is exactly the bar this list holds every entry to.
-  assert.deepEqual(live, ["build_org", "calc", "checksum", "consult_teammate", "create_routine", "handoff", "json_transform", "now_in_timezone", "request_approval", "save_note"]);
+  // which is exactly the bar this list holds every entry to. web_fetch joined the same day with a
+  // real policy behind it (src/lib/web-fetch.ts) — the registry reason for its absence was the
+  // missing policy, and the policy now exists and is tested.
+  assert.deepEqual(live, ["build_org", "calc", "checksum", "consult_teammate", "create_routine", "handoff", "json_transform", "now_in_timezone", "request_approval", "save_note", "web_fetch"]);
 });
 
 test("registry: everything unavailable says why", () => {
