@@ -25,6 +25,9 @@ services:
       # overrides any DATABASE_URL in .env so the app talks to the bundled database
       DATABASE_URL: postgresql://arova:${POSTGRES_PASSWORD:-arova-change-me}@db:5432/arova
       SCHEDULER_WORKER: "on"
+      # this compose stack owns its database volume, so applying the schema on boot is safe here;
+      # outside compose the image pushes only when DRIZZLE_PUSH=on is set deliberately
+      DRIZZLE_PUSH: "on"
     ports: ["3000:3000"]
 
 volumes:
