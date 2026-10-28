@@ -1,65 +1,117 @@
 # Session handoff
-Current state: **Features 11, 12 and 13 are built, verified and documented (2026-10-01), and nothing is committed.** The public repo still shows `e4ee55c` (the Workbench), so the Graphite Edition, the org channel, organisation memory, the denial breaker and the inbound trigger are all sitting in the working tree.
 
-**Feature 11 — the org channel.** `messages` carries a *subject*: one seat's thread XOR one org's post, enforced by the `messages_addressed_to_one_subject` DB check. A brief to the lead (`briefOrg`) streams a turn where each summon lands as its own attributed channel post (its `delegations` row points at that post), the lead's report names the posts it built on, and the whole turn is a real `runs` + `run_steps` row behind each post's **Run steps** link. Reach is hermetic (cross-org reach used to work and was removed deliberately, D-15.3). Founding requires the designated creator seat; a duplicate org name is refused rather than suffixed; L-11 is closed.
+Current state (2026-10-28): **market brief rev 2 plus the no-credential product slice are built and
+verified.** Channels (generic HTTPS webhook + inbound org token + delivery ledger), the eval harness
+(substring score, honest `SKIPPED`/`ERROR`) and the agent registry (exact SQL aggregates) are live in
+the app. The market research is now thirteen products/agents with pricing, reliability, demand,
+substitutes, positioning and kill criteria. **Nothing is committed.**
 
-**Feature 12 — organisation memory.** `memories` (team-scoped, author-attributed, `supersedes` chain, `source_ids`, `pinned`, `hits`/`last_used_at`) with a GIN expression index on `to_tsvector('english', text)`. `src/lib/memory.ts` holds the pure half (5 tests): score blend (rank + pin + recency), selection (k ≤ 3 inside 900 chars, superseded excluded, dropped counted), the injected block (labelled per line, header says *record, not instruction*), and the provenance the reply prints. Retrieval is scoped by `team_id` in the query. A seat's write is gated three ways: org membership, the now-live `save_note` tool, and plan mode. Distillation is opt-in, one counted call, and lands as proposals a human saves individually. **Keyword, not semantic — because `vector` is not available on this Postgres (probed: 18.3, `pg_trgm` installable), and the UI says so rather than implying recall it does not have.**
+## What changed
 
-**Feature 13 — the boundary and the door.** `denialBreaker` (3 consecutive / 10 of 50 *decided* approvals) behind a single `approvalReply()` used by both reply paths: a fourth request becomes an `approval_withheld` row plus an audit event, never a new queue entry. `POST /api/trigger` takes a per-org bearer token and runs the same `runBrief` inside the request, with 401/404/400/409/410 and a 60s cooldown measured from the **end** of the work; the ask is posted in the channel authored by the trigger. Two controls that lied were removed: `maxTurns` is now the enforced summons ceiling (the channel bar prints the number the server will apply), and `buildReply` reaches the same `approval`/`build` decisions as the streaming path. `streamBrief` became `runBrief(send, isClosed)` plus a thin SSE wrapper.
+- `context/feature-parity.md` is now **Market brief — rev 2** (filename kept for historical links):
+  source tiers A/B/C, dated rows, pricing band, OSWorld 1.0/2.0 and WebVoyager evidence, McKinsey /
+  LangChain demand, substitutes, self-host-first positioning (D-19), a 12-column matrix, gap ranking
+  and a refresh checklist.
+- **Channels** (spec 16, D-20): `channels` + `channel_deliveries`; `src/lib/channels.ts` (SSRF-checked
+  delivery, target redaction, Slack/generic payloads, 8 s timeout); create/update/delete/test actions;
+  `notifyChannels` on routine finish, brief finish and approval request; `POST/GET
+  /api/channels/[token]` with a per-row token and 60 s atomic cooldown, reusing `runBrief`.
+- **Evals** (spec 17, D-21): `eval_tasks` + `eval_results`; `src/lib/evals.ts`; create/delete/run
+  actions; each attempt is a real run + step; pass rate excludes `SKIPPED`/`ERROR`, empty suite = null.
+- **Registry** (spec 18, D-22): `src/lib/registry.ts`; board `registry` field; exact SQL counts for
+  last run/status, run count, pending approvals and enabled routines; Settings → Agent registry.
+- **Docs corrected:** README lists the eleven live tools (not "four") and the new surfaces; PRODUCT.md
+  no longer says the worker is deliberately not working; D-19–D-22 appended.
 
-**The bug worth remembering (L-14).** The JSON and directive parsers read the model's raw text, and MiniMax-M2.7 enumerates the routing shapes *inside its reasoning block* before it answers — so `parseRouting`/`parseTurn`/`extractJsonObject` were reading a hypothetical as the decision. `stripReasoning` now removes a **closed** block before any search (an unclosed one is left alone: a stream cut off mid-thought holds no decision), at five call sites including the org and roster proposals, and `splitReasoning` gained `.rest`. Distillation also needed the stream timeout, not the 45s unary one. A fixture that returns clean JSON cannot catch this class of bug; only a live model can.
+## Verification
 
-**Verification.** 135/135 tests, typegen/tsc/build/health green. **21/21 API checks** on fresh workspaces against the live `dahl` endpoint: memory save/read/provenance/hermetic refusal/supersede/forget, distil → 2 candidates → saved, trigger create→fire→report→429→401→revoke→404, `maxTurns: 1` producing "completed without a teammate", a lead-created seat recorded in the channel. The breaker's live path was proven separately (three `approval_request` replies rejected, then `approval_withheld` naming the reason); in the 21-check pass the router raised nothing on that workspace, so that line passed on its secondary condition — recorded as such in the tracker. Browser: channel, memory and trigger panels at 1440×900 and 390×844, `CONSOLE: []`, no overflow in the document or in `.sheet-body`, stream/settled captures byte-different. Test data was cleaned up afterwards (hex-aq's three probe memories deleted, its trigger revoked).
+- `npm test` **208/208** (17 new), `npx next typegen` ✓, `tsc --noEmit` ✓, `npm run build` ✓,
+  `GET /api/health` ✓. Dev server on :3000.
+- Live: webhook test to `https://httpbin.org/post` → **DELIVERED**; to `https://example.com/hook` →
+  **FAILED: example.com answered 405** (both ledger rows); inbound org channel → local-provider lead
+  failed honestly, second immediate call **429**; eval with no model key → **SKIPPED** with a real
+  `Eval · Says READY` run; registry counts matched the stored runs.
+- UI: Integrations → Channels, Automations → Evals and Settings → Agent registry verified with real
+  rows via the chrome-devtools DOM snapshot. No screenshots saved (the MCP surface does not save them).
+- **Improvement batch 2 (2026-10-28):** `GET /api/export` (spec 20, D-24) returns a sanitized audit JSON
+  (200 with attachment header; no message bodies/targets/tokens; no cookie → 401). Sandbox output is
+  capped at 20k, Reset deletes only the per-agent workspace (runs/audit stay), and the Sandbox tab shows
+  workspace state + recent runs. Channels retry network/5xx twice and never retry a 4xx. **219/219 tests**;
+  live reset left the `Sandbox · Scout` FAILED run intact.
 
-NEXT STEP (the one thing to do): **run the finish review in a fresh context, then commit.** Nothing has been committed since `e4ee55c`, so three features plus a design system sit unreviewed in one working tree — and Feature 10 needed four reviewer rounds that caught two invalid captures and six real defects, so "the author verified it" is not the bar. Capture set: `.impeccable/shots/channel-desktop.png`, `channel-desktop-stream.png`, `channel-desktop-run.png`, `channel-memory.png`, `channel-trigger.png`, `channel-org-pane.png`, `channel-mobile.png`, plus the nine Feature 10 frames in `.impeccable/review/`. Tell the reviewer: `.impeccable/design.json` has **not** been regenerated for the channel/memory/trigger surfaces (the detector will read that as drift), the detector's file mode declines while a dev server is up and its URL mode wants `puppeteer` (not installed — the user's call), and the Next dev badge is tool paint, not the build.
+## The DB fact
 
-Open with the user:
-1. **Commit and push?** Three features are unreviewed and uncommitted; the public repo is behind by all of them.
-2. **The 28-seat "Nexus Labs" org (L-12)** — rename it, delete it (its channel history goes with it and cannot be recovered), or leave it and brief `hex-aq`. Not mine to decide.
-3. **The gaps that need something I do not have:** citations need a search provider and a key; real tool execution needs a sandbox provider and an accepted risk class; a brief that continues past the request needs a worker. Each is an infrastructure decision, and the app currently refuses all three out loud — which is the correct state, not a to-do.
-4. **Dots pricing** is unannounced; the "~$100/mo" figure I repeated once came from a listicle and is corrected in `context/feature-parity.md`.
-5. Reasoning-in-content (L-04) is folded and verbatim. Strip before persisting, or expand by default?
-6. `npm run lint` fails on 3 pre-existing advisory rules (L-01). Fix them, or keep lint out of the gate as AGENTS.md defines it?
+`arova_demo` **did not exist** on the shared PostgreSQL server and the app was configured for it. It
+was created and `drizzle-kit push` applied the new tables. `app_db` belongs to another project and was
+not touched. The schema change is additive.
 
-Operational notes that still hold
-- Start dev with `env -u OPENAI_API_KEY npm run dev`: an ambient `OPENAI_API_KEY` outranks `.env.local` and `auto` would resolve to the broken OpenAI profile instead of dahl. Never read or commit `.env.local` — verify env through the app's own board payload (e.g. `limits.dailyModelCalls`).
-- Local DB is `arova_demo` on a shared Postgres; `app_db` belongs to another project — never `drizzle-kit push` there. `drizzle.config.ts` falls back to `arova_demo` if `DATABASE_URL` is missing.
-- **A running Next dev server serves stale bundles.** Twice this session a change was in the file, in the served chunk after restart, but not in the page — once as byte-identical screenshots, once as a `flex-wrap` the browser still reported `nowrap`. When the DOM contradicts the source: read `.next/dev/lock` for the pid, `taskkill /PID x /F` (single slashes inside `node -e`; `pkill` matches nothing here), restart, re-check. Next 16 refuses a second dev server per directory, so an env-var experiment means stopping the first.
-- The CDP drivers are `.impeccable/cdp-harness.cjs` (shell/seat thread) and `.impeccable/cdp-channel.cjs` (channel, brief streaming, run drill-in, memory and trigger panels; takes a workspace session id and attaches it with `Network.setCookie`, and disables the browser cache). Both delete their outputs at start; a frame is only evidence if its md5 differs from the frame it is meant to be distinct from.
-- Shell quoting destroys backslashes and nested quotes in `node -e`: for anything with regexes or tag literals, write a temp `.cjs` with the Write tool, run it, delete it. Two scripts were wasted before this was learned.
-- The dahl endpoint returns byte-identical replies for a repeated prompt, so a "fresh" streaming test needs a different prompt; prompts mentioning routines or approvals are legitimately classified as those intents.
+## Local OS sandbox (implemented 2026-10-28)
 
-Previous states that still hold: the Graphite Edition shell (D-14) — one 48KB stylesheet, six graphite surface steps, one azure with a dark glyph, three measured identity tints, the icon rail + section panel the user asked to keep. Feature 10's Workbench (D-12, D-13) — inline `.prov` provenance, the four-section printer board, in-world delete confirmation, self-hosted fonts, `threadHasPending`, container-pinned follow-scroll. Features 01–09 built and verified; see `context/feature-specs/` and `context/decisions.md` (through D-16).
+`@anthropic-ai/sandbox-runtime@0.0.81` is a **runtime dependency** (Apache-2.0, Node ≥22.12).
+`src/lib/sandbox.ts` has `UnconfiguredSandboxProvider` (default, refuses) and `LocalOsSandboxProvider`
+(`AROVA_SANDBOX_PROVIDER=local-os`), with `{graphical:false, pty:true, snapshots:false,
+takeover:false, persistentHome:true, multiScreen:false}`. It writes a per-agent `srt-settings.json`,
+runs the packaged CLI through `process.execPath`, denies `.env`/credentials, and starts with an empty
+network allowlist. `runSandboxCommand` is a real run + step + audit; the UI is Integrations → Sandbox.
+Spec 19, D-23.
 
-## Session 2026-10-01 (late) — OpenBot reference, Feature 14 steals, auth foundation
-The user asked to check the linked repo (they said "openclaw" but the URL was `github.com/CopilotKit/openbot` = **OpenBot**, not the `openclaw` lobster assistant — the naming discrepancy was resolved to the URL and said out loud). `context/feature-parity.md` gained a dated **§7** read from OpenBot's repo/docs. Verdict given: neither side is "far better" — OpenBot wins **substrate** (per-Bot gVisor container + browser + shell, a fail-closed CEL policy gateway, real SSO/tenancy, a background worker, generative-UI React components), Arova wins **structure** (orgs, reporting lines, consult/handoff per-hop rows, the durable channel, per-seat budgets, any-endpoint providers); OpenBot has **no agent-to-agent structure**, so the §4 lead survives the third reference. The per-Bot computer was named "far better but not implementable here" (§5.5).
+On this Windows host the provider **fails closed** until the owner runs `npx srt windows-install`
+(one UAC; creates `srt-sandbox` + WFP). Live: Check produced a `Sandbox · Scout` FAILED run, an ERROR
+`sandboxes` row, and the exact REFUSED sentence. A successful command is **not** verified yet. The
+direct WSL2 `bubblewrap` primitive passed (workspace write, network blocked, root read-only, `/etc`
+blocked). Srt-specific checks (empty-allowlist regression, metadata/loopback, concurrency, Chromium)
+remain. The spike script is `.impeccable/srt-spike.mjs`; root D-27 option (e), TASKS 1.9, A-10. The
+package adds a high `zod` advisory; the project's critical advisory is pre-existing Next 16.2.6, not
+the sandbox package.
 
-**Feature 14 — built and verified, the three cheap steals, each test-first.** `src/lib/provenance.ts` (`withProvenance`, appended after seat instructions + skills so no seat forgets it, wired at `systemPrompt` and `buildPeerPrompt`); `src/lib/fatigue.ts` (`nextFatigue`: one message on the first failure after a success, silence 2–9, ten consecutive switch the routine off + `routine.fatigued`; `routines.fail_streak` pushed, a resume resets it; **FLAGGED** decision that `WAITING_FOR_TOOL` counts as a failure to produce — reversible in one line); `runs.initiator` = person|routine|trigger (default person, set at all three run-creation sites, printed in Run rows and the board Record) built as the **seam, not the policy** — recorded honestly as a seam because no headless path reaches a write today.
+## Read-only tool loop (2026-10-28)
 
-**Feature 15 — auth foundation only.** `src/lib/auth-providers.ts` (7 tests, RED-first): env-driven OIDC registry, Google preset, generic issuers expose `discoveryUrl` only, half-configured reports missing **variable names, never values**, http issuers refused. The board payload carries a secret-free `auth` view and the settings line reads it (verified live: :3222 no-auth = identical "cookie demo"; :3223 dummy Google = "env-ready, flow pending"; :3225 = missing `GOOGLE_CLIENT_SECRET`; no secret/id value ever in the API or HTML). **The rest is blocked on the human:** Google OAuth client + the three env vars in `.env.local`, then `users`/`sessions`, the two routes, cookie swap, owner + `/admin/people`.
+The model can now call the seat's granted read-only tools when `Capabilities.toolLoop` is on:
+`calc`, `now_in_timezone`, `json_transform`, `checksum`, `web_fetch`, and `web_search` when a search
+provider is configured and `web_fetch` is granted. `src/lib/tool-loop.ts` is pure and bounded at 4
+steps; `src/lib/web-search.ts` supports SearXNG/Brave/custom with a local-endpoint guard. The final
+answer is non-streamed and carries `toolsUsed`/`sources`; every tool call is a `tool.called` event.
+The UI has the per-agent toggle, a live tool card and a Sources line. **Spec 21, D-25.**
 
-**Verification this session.** 151/151 tests (135 + 9 Feature-14 + 7 auth), typegen/tsc/build/health green, `drizzle-kit push` applied `fail_streak` + `initiator` to `arova_demo`.
+Live proof without a vendor key: `.impeccable/tool-loop-fixture.mjs` (local OpenAI-compatible model +
+search). The SSE produced tool running/completed, a delta with `[1]`, stored sources, audit, and two
+counted calls; the UI showed the answer and Sources link. The default environment still has no model
+key; a real vendor/search endpoint is unverified. **232/232 tests.**
 
-NEXT STEP (the one thing to do): **still nothing is committed** — Features 10–15, two parity sections and a design system now sit unreviewed on `e4ee55c`. Run the finish review in a fresh context, then commit. The user explicitly asked for Google sign-in and said "then whatever you want"; I built everything that does **not** need their credentials and stopped at the hard boundary (I cannot mint an OAuth client or paste a secret, and AGENTS.md forbids describing unconfigured OAuth as working). **The next real move needs the user:** put `AUTH_PROVIDERS=google`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` in `.env.local` (create the client at Cloud Console → redirect URI `http://localhost:3000/api/auth/callback`), then I build + verify the auth vertical slice against the live provider, unit by unit.
+## Traps
 
-Open with the user (carried forward): commit/push decision; the 28-seat Nexus Labs org (L-12); the gaps needing infrastructure I don't have (citations→search key, real tools→sandbox provider + risk class, always-on→worker); Dots pricing is unannounced; reasoning-in-content (L-04); `npm run lint` advisory rules (L-01). Operational notes above (stale dev bundles, `.next/dev/lock` pid, CDP harnesses, dahl byte-identical replies) still hold.
+- **No model key is configured.** `.env.local` has a `dahl` profile but no key, so chat/eval/notification
+  model paths honestly say `SKIPPED`/`not configured`. A live eval `PASS`/`FAIL` has not been exercised.
+- **Outbound HTTPS works through Node fetch, not curl.** example.com answers 405 to POST; httpbin.org
+  works. curl on this host dies on schannel CRL revocation; use `node` fetch or the app.
+- **A channel target is a credential.** It is stored server-side and only the hostname is sent to the
+  browser. There is no at-rest encryption in this build; say so.
+- **Inbound is a brief, not a generic write.** It reaches one org's lead through `runBrief`, with the
+  same budget and refusal sentences; workspace-wide channels are outbound only.
+- **The root OpenDots Phase 1 still precedes any sandbox work.** Do not implement E2B/desktop before
+  the resume/login measurements. Search needs a tool-calling loop, not just a search key.
+- **The name is crowded.** Arova collides with Arova Nexus (enterprise IT-ops AI), Arova Technologies
+  and an AROVA DeFi agent; legal/search check before a public launch.
+- **Operational notes that still hold:** start dev with `env -u OPENAI_API_KEY npm run dev` (an
+  ambient key would outrank `.env.local`); a running Next dev server can serve stale bundles — read
+  `.next/dev/lock` for the pid, `taskkill /PID x /F`, restart; `.impeccable/cdp-harness.cjs` and
+  `cdp-channel.cjs` are the raw-CDP drivers; the dahl endpoint returns byte-identical replies for a
+  repeated prompt; `npm run lint` still has pre-existing advisory errors outside the gate.
 
-## Session 2026-10-01 (night) — relocated to AnshRoshan, demo data out of src
+## NEXT STEP (the one thing to do)
 
-The user asked to bring the work from the old remote into this machine and to stop carrying the work account on it. Both are their own commits; the request was about identity, not authorship. The three commits were rebuilt with `git commit-tree` on identical trees, re-authored as `Ansh Roshan <ianshroshan@gmail.com>` and GPG-signed; `git diff` against the imported branch is empty. Old history kept locally as `imported-from-old-account`. Remote `origin` now points at `AnshRoshan/arova`, and `drizzle.config.json` was restored from the earlier snapshot.
+**Provision srt on this host:** run `npx srt windows-install` (one UAC prompt; on a shared machine
+use `--skip-profile-grant`), restart the dev server, then Integrations → Sandbox → Check. A passing
+check should show `arova-sandbox-ok`. Then run `node .impeccable/srt-spike.mjs` for the eight policy
+checks (empty allowlist, metadata/loopback, filesystem, concurrency, Chromium). If Windows is not the
+target, install Node ≥22.12 + `socat` in WSL2 and run the spike there. The other pending evidence is
+a live eval with a configured model key.
 
-Then the demo-data rule was applied: `initialize()` creates an empty workspace and one audit event, and the named agents, greetings, routines, sample runs, steps, sample approval and auto creator designation left `src` for `seed/fixtures.json` plus `seed/seed-demo.ts`. The dead `demo: true` payload field was removed. The UI already had an empty state, so no screen changed. 151/151 tests, typecheck and build pass; the build used a non-connecting placeholder `DATABASE_URL` because the health route imports the pool at module load.
+## Open with the user
 
-NEXT STEP (the one thing to do): run `node seed/seed-demo.ts --new` against a database this project owns and look at both a fresh empty workspace and a seeded one in a browser, then push `main` to `AnshRoshan/arova`.
-
-Blocked on the user, unchanged: the Google OAuth client and the three `AUTH_*` variables in `.env.local` for Feature 15, and the `DATABASE_URL` credentials for this project's own database. The 28-seat Nexus Labs org (L-12), reasoning-in-content (L-04) and the 18 pre-existing `page.tsx` lint errors also remain open.
-
-## Session 2026-10-06 — audit pass: gates restored, 25+ defects fixed, live-verified
-
-Four parallel audits (API+worker, lib-vs-specs, UI-vs-specs, deploy/docs) against the committed tree (HEAD `5a1d3f4` — the "unreviewed working tree" note was stale). Findings fixed with tests-first where the behavior is pure, then one full gate on the tree: **170/170 tests** (9 new), typegen, tsc, build all green, plus **17/17 live API checks** (`node .audit-live.mjs` on :3000: trigger create→fire→**429 on the second immediate fire** proving the atomic cooldown claim→revoke→404; cron auth both ways; memory round-trip; scheduler heartbeat live). Highlights: `npm test` was missing from package.json despite being the documented gate; `build` was broken on this host by next/font's TLS fetch (fonts self-hosted via next/font/local now); `scheduler_heartbeats` was in schema but not in the DB (pushed); **`tools: []` escalated to every live tool** (spec 05's narrowing rule inverted by a fallback); the stream_options fallback was dead code; superseded memories could resurface (now excluded in SQL, along with a discarded `ts_rank`); the reaper could close a live org brief; the trigger cooldown was TOCTOU; a cold start stamped 157 overdue routines at once (now capped per tick); the restored `drizzle.config.json` pointed `push --force` at **another project's `app_db`** — deleted; the Dockerfile no longer force-pushes on every boot; seed sample routines are inserted disabled (they would otherwise really fire); the dead Connect button is gone; Feature 12's "editable / expandable" memory UI shipped. Stale claims corrected in overview/decisions/feature-parity/spec-06/README (dated, not rewritten).
-
-**Deliberate leaves:** trigger token in the board payload (spec 11 intent under the cookie boundary); no transactions around multi-insert org creation; run-now still executes fatigued routines (human intent); SSE multi-line frames; the 20 pre-existing `react-hooks/*`+unescaped-entities lint errors (lint stays out of the gate). **Owed:** one human look at the redesigned surfaces in a real browser; the Feature 15 OAuth client + env vars (unchanged blocker); push to origin not done — the tree here is uncommitted by request silence; nothing was committed this session.
-
-**Same session, later half:** real tool execution closed the cheap way — four in-process tools (`src/lib/local-tools.ts`: arithmetic parser, IANA clock, JSON path, node:crypto hashes) with a grant-checked `runTool` action, a Local-tools console in Integrations, and real run/step/audit rows; the model still executes nothing on its own. The "monochrome" complaint was answered with rooms, not more accents: `SECTION_COLORS`/`--sec` paint the rail and panel per section while identity stays three tints, state stays green/amber/red, and azure keeps interaction (Room-Colour Rule in DESIGN.md). Verified: 175/175 tests, build green, 17/17 live API checks, and a real-Chrome palette capture (`.impeccable/cdp-palette.cjs`, shots committed) proving each section's colours compute with a clean console. Operational lesson: `cat >>` onto globals.css did not reach the dev bundle — restart and grep the served CSS when a fresh rule seems dead. The audit tree is now five local commits (`b8d5987..6d766e1` + docs), **not pushed**; origin still waits on the user.
-
-**Same session, "all the features" pass:** the last credential-free gaps closed. **Feature 15 is real**: users/memberships/sessions (token hash only), `auth-flow.ts` (PKCE + JWKS RS256 verified iss/aud/exp/nonce), start/callback/signout routes, claim-or-join workspace rule, owner/people roles, Settings › Account UI — proven 14/14 through the actual HTTP routes against `.impeccable/mock-oidc.cjs` (faithful local OIDC: real HTTPS, real signatures; run with `NODE_TLS_REJECT_UNAUTHORIZED=0` and mock env lines, both removed after). **web_fetch** shipped as the first external tool behind a real SSRF policy (https/443-only, public-address DNS check, hop-by-hop redirect revalidation, size/type caps); DNS rebinding is named as the residual in the file header. **Write guards**: SameOrigin 403 + per-workspace token bucket (burst 40, 600/min) on POST /api/board. **Message windowing**: 200-row board window + loadEarlier pages, with completedRuns/pendingApprovals/messagesToday moved to SQL counts — a seeded 250-message workspace proved the window cannot move a total (an earlier iteration proved the opposite when it could: 199 vs 250, caught and fixed). 190/190 tests, build green, 17+7 live checks. Still blocked on the user: Google OAuth client + env vars, sandbox provider, search key, connector OAuth, MCP transport decision.
+1. **Commit and push?** The tree has the pre-existing uncommitted design/auth work plus this pass;
+   nothing has been committed since `b583c9b`.
+2. **Model key** for the live eval and real channel notification.
+3. **D-19 vs root D-30** — self-host first is the working answer; the owner may still choose hosted.
+4. **Name** — Arova is crowded; legal/search check before publishing.
+5. **Channel target storage** — encrypt at rest / secret manager before a public deployment.

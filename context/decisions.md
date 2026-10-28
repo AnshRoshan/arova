@@ -187,3 +187,90 @@ The verdict given to the user: neither side is "far better" — they win opposit
 Options considered (sign-in, asked and answered with the user, not assumed): one workspace + signed-in people / workspace-per-person / identity-labels-the-cookie. Chosen: **one workspace, first person in owns it**, because it keeps the single-space demo story and matches OpenBot's `/admin/people` shape. Providers: **env-driven OIDC with a Google preset** (the `PROVIDERS` doctrine applied to identity — adding Microsoft is an env edit), over Google-only (code edit to extend) and a full SAML/email-domain admin UI (much bigger surface for 80%-of-the-value now). Order: **steals first, sign-in second**, so the big auth feature lands on a calmer tree with a clean session/roles story instead of being mixed with policy changes.
 
 **Hard external boundary the user's "whatever you want" cannot wave away:** real Google login is gated on OAuth credentials only the human can mint (Cloud Console) and paste into `.env.local` (secrets never enter chat — workflow rule; AGENTS.md: never describe unconfigured OAuth as working). So sign-in ships **env-gated**: with no `AUTH_PROVIDERS` the app is byte-for-byte today's demo and the settings panel names the variables that would turn real login on; the moment they exist, the routes activate. `OPENBOT_SINGLE_USER` is the precedent for saying which mode you are in. Spec `15-signed-in-people.md`, not yet built — the foundation is started test-first.
+
+## D-18: Deepen the Midnight look, and end the docs/test drift — 2026-10-06
+Trigger: the user asked for a UI improvement — "colors and other stuff". The audit found two stacked design worlds: the code shipped a "Midnight" palette (rewritten `:root` — void `#07080d`, azure `#8b9bff`, radii 8/12/16 — plus an appended polish layer of aurora, glass, gradients) while DESIGN.md/ui-tokens.md still documented the retired Graphite palette (`#131416`/`#7ba6ef`, radii 6/8/10, flat-by-default), and `identity.test.ts` asserted contrast against the retired hexes — it passed only because the live surfaces are darker, so it no longer measured the shipped palette.
+Options considered: (A) deepen the current Midnight world and sync docs+tests to it; (B) delete the polish layer and restore the documented Graphite world; (C) go bolder — per-room gradient themes across every surface, accepting rule changes. The user chose **A**.
+Why not B: the built world is what the user has been looking at since the always-on session (the palette captures in `.impeccable/shots/` are of it); reverting would be a bigger visual change sold as "improvement", and the Graphite docs described a world the code had already left — the drift was in the docs, not the code.
+Why not C: it spends the colour budget on decoration and reopens the Room-Colour and Three-Mark rules for no legibility gain; A keeps every honesty rule intact.
+What changed (all paint or token plumbing; no layout, no behaviour):
+- **Tokenised the light layer.** The accent and state families were ~40 hardcoded `rgba(139,155,255,…)`-style literals scattered through the polish layer; they are now six `:root` channels (`--azure-rgb`/`--indigo-rgb`/`--violet-rgb`/`--ran-rgb`/`--waiting-rgb`/`--fault-rgb`) consumed as `rgb(var(--azure-rgb) / .12)`. A retint is now one line; `grep` proves zero leftover literals.
+- **Room-coloured stage aurora.** The workbench background's primary radial now mixes the open room's `--sec` (`color-mix(in srgb, var(--sec) 18%, …)`), so each of the six rooms breathes its own hue behind the work surface. This extends the Room-Colour Rule from chrome to stage light — recorded here because it is a rule-relevant change, not a silent one.
+- **State dots glow with their own state colour** (board rows, panel dots, seat nodes, live pulses), matching the chips that already did. The glow inherits the Stored-Row Rule exactly: it appears only where a stored row produced the state.
+- **Gradient meters, inset edges on the sheet-bar/code-bar, wider mobile agent-card gaps** (the "Available2 messages" jam visible in the before-capture), `99px` pills unified (three `999px` stragglers), `--on-azure` referenced instead of four `#0a0d28` literals, the unused `--glass` token deleted, and the orphaned `.sp-kicker`/`.header-eyebrow` rules removed (DESIGN.md already called them orphaned).
+- **Docs and tests re-pointed at the shipped palette.** `identity.test.ts` now parses `src/app/globals.css` for the surface/accent/state hexes it measures (plus a new assertion that the stylesheet declares every token and that no surface equals the accent) — so a palette swap fails the gate until the separation/contrast arithmetic is re-checked deliberately. DESIGN.md was rewritten from the built world (Midnight frontmatter, the light layer's tokens and jurisdictions, the Depth-from-Light Rule replacing Flat-by-Default, the extended Room-Colour Rule, the documented radii ladder) and ui-tokens.md synced to match.
+Cost paid: the "flat by construction" claim is retired — resting raised cards carry `--edge`+`--lift` and chrome uses glass. That was already true in the code; it is now written down rather than contradicted by the authority file.
+Reversibility: every change is inside `globals.css` + `identity.test.ts` + docs; reverting the stylesheet reverts the look with no data or API effect.
+Correctness policy: unchanged — colour still only ever means interaction, a stored state, an identity, or a room; nothing added implies an action the server did not record. Evidence: `.impeccable/shots-before/` vs `.impeccable/shots-after/` (same workspace, per-file md5, `CONSOLE: []`, no overflow at 1440×900 or 390×844).
+
+## D-19: self-host first; do not invent a hosted price — 2026-10-28
+Trigger: the market brief rev 2 (`context/feature-parity.md` §0, §6). Hosted "agent with its own computer" is now a commodity at $15–200/user/mo, and the first agent is usually bundled into a plan the buyer already has (Dots, Duet, Spark, Muse). The unserved position is governed, attributable multi-agent work for a small team that owns the stack; Arova already has the structure and record, and has no billing, no multi-tenant SaaS and no hosted price.
+
+Options considered: (A) **self-host first**, free software plus the operator's model/server cost, no hosted price until a hosted product exists; (B) hosted SaaS now, which needs billing, quotas, row-level isolation, production auth and a support desk before the first customer; (C) both at once, which is two products and one team. Chosen: A.
+
+Why not B: it enters a market where the marginal price of the first agent is zero inside an existing plan, while Arova's substrate (no computer, no connectors) is behind. Why not C: the same focus problem, plus two auth models to keep honest. A is reversible: the app is already a single-operator workspace with a cookie/session boundary, and a hosted pilot can be added later without changing the domain model.
+
+Root `OpenDots` decision D-30 (self-host tool vs hosted service) remains the owner's call; this is the working answer that lets the product move without inventing billing. Reverses when: a paid hosted pilot is requested, or self-host adoption produces a support demand the operator wants to productize, or the kill criteria in §6.5 fire.
+Evidence: market brief §0–§6; `README.md` runbook is already a self-host path; no billing schema or price in the tree.
+
+## D-20: channels are a contract, not an OAuth project — 2026-10-28
+Trigger: the market brief ranks external channels as the first distribution gap. Every hosted competitor has Slack/Teams/WhatsApp/voice; Arova had only the browser.
+
+Options considered: (A) **generic HTTPS webhook + per-channel inbound token**, which Slack incoming webhooks satisfy without an OAuth install; (B) Slack Events API/OAuth install first, which needs an app, credentials and a verification flow; (C) pull-only notifications (the user checks Arova), which does not close the gap. Chosen: A.
+
+Why: it is a real delivery path today, with the same SSRF policy as `web_fetch`, a delivery ledger and a token scoped to one org. Slack/Teams/Telegram/email become adapters behind the contract. Cost: one `channels` table, one `channel_deliveries` ledger, one inbound route, and a best-effort `notifyChannels` hook on routine/brief completion and approval requests. Delivery failure never changes the run's status; it is a row and a `lastError`.
+
+Reversibility: delete the table/route/hook; the run/audit path is unchanged. Evidence: spec 16; `src/lib/channels.ts` 9 tests; live `DELIVERED` (httpbin.org), live `FAILED` (example.com 405), inbound run + 429 cooldown.
+
+## D-21: an eval is a substring check, not a model judge — 2026-10-28
+Trigger: the market brief's reliability evidence (OSWorld 1.0 63.5% vs human 72.36%; OSWorld 2.0 ~44% long-horizon). Arova had no measurement of its own, so "honest" was a design claim.
+
+Options considered: (A) **one prompt, one expected fragment, a case-insensitive substring score**; (B) an LLM judge, which adds a second model call, a second bill and an unreplayable opinion; (C) no harness until a full golden-task suite exists. Chosen: A.
+
+Why: it is cheap, replayable and exactly as narrow as it looks; the UI says "substring check, not a model judge". `SKIPPED` (no provider/budget) and `ERROR` are measured states, excluded from the pass rate; an empty suite reports `null`, not 100%. Every attempt is a real `runs` row and step.
+
+Cost: one `eval_tasks` table, one `eval_results` table, one action, one UI tab. Reversibility: delete the tables/action/UI; no existing path depends on them. Evidence: spec 17; `src/lib/evals.ts` 4 tests; live `SKIPPED` with no model key and a stored audit run.
+
+## D-22: the registry is a read model with exact SQL aggregates — 2026-10-28
+Trigger: Agent 365 proves that observe/govern/secure is a paid layer; Arova had the rows and no view. The board's run/approval windows are 60 rows, which would undercount.
+
+Options considered: (A) **a read model over existing tables with exact group-by aggregates**; (B) reuse the board's 60-row window, which is cheap but lies about counts; (C) a materialized `registry` table, which is a second source of truth and goes stale; (D) a health score, which invents a judgement the data cannot support. Chosen: A.
+
+Why: no new table, no score, no fabricated time — an agent with no run says "no run recorded". Counts come from `max(started_at)`, `array_agg(status …)[1]`, and `count(*)`; the pure `buildRegistry` is testable and the UI filters client-side.
+
+Cost: one pure module, one board query group, one Settings tab. Reversibility: remove the module/query/tab; no write path changes. Evidence: spec 18; `src/lib/registry.ts` 4 tests; live registry matched the runs created by the eval and inbound tests.
+
+## D-23: local-os is an opt-in execution provider, never a desktop — 2026-10-28
+Trigger: the market/sandbox research on Claude Code's `@anthropic-ai/sandbox-runtime`, and the user's "implement all these stuff". The package is Apache-2.0, wraps arbitrary processes with Seatbelt/bubblewrap/WFP, and needs no Docker or VM. It can close the "the agent cannot run anything" gap for a self-hosted Arova without an E2B key.
+
+Options considered: (A) **opt-in `local-os` provider behind the existing `SandboxProvider` slot**, default off, shell/files only; (B) make it the default provider; (C) keep E2B-only until the desktop works; (D) wrap the model's own tool calls in it. Chosen: A.
+
+Why not B: a shell on the host is high risk; enabling it by default would surprise an operator and violate the "refuse rather than pretend" stance. Why not C: it leaves the execution tier empty when the package can be used safely behind an explicit env switch. Why not D: the model has no tool-calling loop yet; a console a human presses is the honest scope, and the model must not be able to toggle its own boundary.
+
+Implementation: `LocalOsSandboxProvider` capabilities `{graphical:false, pty:true, snapshots:false, takeover:false, persistentHome:true, multiScreen:false}`; per-agent workspace under `.arova/sandboxes/<agentId>`; server-side `srt-settings.json`; network allowlist empty by default; `.env`/credentials denied by path; CLI run through `process.execPath`, not a host shell; `browser`/`stream` refuse; `runSandboxCommand` is a real run + step + audit; `AROVA_SANDBOX_PROVIDER=local-os` turns it on.
+
+Why not the library API: the CLI is one process per command and avoids a global `SandboxManager` lifecycle; the provider can move to the library later if concurrency demands it. Why not a browser: srt can wrap a headless Chromium only with its own sandbox disabled, macOS Chromium is currently broken, and Arova's desktop tier needs GUI/view/takeover anyway.
+
+Cost: one module, one action, one Integrations tab, one test file. Reversibility: unset the env var; the provider is inert, and `disable` is a config change. Evidence: spec 19; `src/lib/sandbox.test.ts` 9 tests; live fail-closed refusal on Windows; config schema accepted; direct WSL2 bwrap primitive passed. A successful command on this host is still unverified until the one-time `npx srt windows-install`.
+
+## D-24: audit export is a narrow JSON, not a database dump — 2026-10-28
+Trigger: the registry and run record are visible but not portable; a governance layer must be exportable.
+
+Options considered: (A) **a workspace-scoped JSON of governance rows**, excluding message bodies, channel targets/tokens, keys, session tokens and agent instructions; (B) a full database dump (portable but leaks secrets and content); (C) CSV per table (more files, no provenance links); (D) no export (a dashboard, not a record). Chosen: A.
+
+Why: it is the smallest artifact a human or auditor can read and the exclusions are named in the file and the UI. The 5,000-row cap keeps it from becoming a streaming problem. Content export is a separate decision because message bodies and memory text are the most sensitive rows. Membership, not ownership, governs access: any member who can see the registry can export it, matching the current model.
+
+Cost: one route and one link. Reversibility: remove the route/link; no schema change. Evidence: spec 20; live 200 with the expected keys and no `messages`/`target`/`token`; no cookie → 401.
+
+## D-25: the tool loop is opt-in, read-only and non-streamed — 2026-10-28
+Trigger: search and citations were impossible because chat had no tool-calling loop. The user asked to finish the remaining specs/tasks.
+
+Options considered: (A) **an opt-in per-agent loop over the already-granted read-only tools**, with search as a provider-neutral adapter; (B) always-on tools for every agent; (C) a manual search console only; (D) a loop that also includes shell/write tools. Chosen: A.
+
+Why not B: a model calling `web_fetch`/search changes latency and cost for every reply; the existing token-streamed path must stay available. Why not C: a console does not close the grounding gap; the model cannot use the result. Why not D: the seat's approval/effect ledger does not yet gate model-initiated writes, and a shell is a different risk class; read-only is the honest scope.
+
+Why non-streamed: a tool-call turn has no final answer to stream; a single final `delta` after the loop is more truthful than fake token streaming. The composer says "read-only tool loop on · no shell". The loop is bounded at 4 steps, counts every model turn, audits every tool call as `tool.called`, feeds tool errors back, and carries `toolsUsed`/`sources` in the stored message.
+
+Search is configuration, not code: SearXNG/custom endpoints or Brave, with a local-endpoint guard; `web_search` is offered only when a provider is configured and the seat holds `web_fetch`. Sources are numbered and rendered as links.
+
+Cost: gateway types, one pure loop module, one search adapter, a capability flag, a board branch and UI state. Reversibility: turn the per-agent toggle off; the old streaming path is unchanged. Evidence: spec 21; 13 new tests; 232/232; live fixture loop/search/citations with stored sources and audit; UI Sources line and composer note. A real vendor/search endpoint is still unverified.

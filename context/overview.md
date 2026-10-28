@@ -4,7 +4,16 @@ Arova is a fullstack AI-agent workspace built with Next.js App Router, PostgreSQ
 
 ## Current experience
 
-The default screen is **Overview**: a warm, editorial command center with a live workspace pulse, agent roster, upcoming routines, and activity previews. Selecting an agent opens its persisted chat thread and settings. The left navigation also opens Automations (scheduler and runs), Integrations (tools and MCP), and Settings. The right activity feed prints actual stored events, runs, and approvals; sample records are explicitly labeled. The responsive sidebar and activity feed open as drawers on narrower screens.
+The default screen is **Overview**: a warm, editorial command center with a live workspace pulse, agent roster, upcoming routines, and activity previews. Selecting an agent opens its persisted chat thread and settings. The left navigation also opens Automations (routines, runs, evals, 24/7), Integrations (connectors, local tools, channels, MCP), and Settings (workspace, models, agent registry, deployment limits). The right activity feed prints actual stored events, runs, and approvals; sample records are explicitly labeled. The responsive sidebar and activity feed open as drawers on narrower screens.
+
+## Current slice (2026-10-28)
+
+- **Channels** (Integrations → Channels): a generic HTTPS webhook (Slack incoming webhooks work as-is), an inbound token for an organisation channel, a 60 s inbound cooldown, and a delivery ledger. The target is a credential and only its host is sent to the browser.
+- **Evals** (Automations → Evals): one prompt, one expected fragment, a case-insensitive substring score; `SKIPPED` and `ERROR` are stored states, not passes; every attempt is a real run.
+- **Agent registry** (Settings → Agent registry): every seat with team/manager, provider, tool count, permission mode, last run/status and exact run/pending/routine counts. Read-only; no health score.
+- **Local OS sandbox** (Integrations → Sandbox, opt-in): `AROVA_SANDBOX_PROVIDER=local-os` enables shell/files execution through `@anthropic-ai/sandbox-runtime`. It is fail-closed until the host is provisioned, has no GUI stream/snapshot/takeover, and records every command as a real run. Spec 19, D-23.
+- **Read-only tool loop** (Agent → Capabilities, opt-in): the model may call its granted local tools, `web_fetch`, and `web_search` when a provider is configured; the loop is bounded, audited, and returns numbered sources. Spec 21, D-25.
+- **Market brief rev 2** (`context/feature-parity.md`): thirteen products/agents, dated source tiers, pricing, reliability evidence, demand/security, substitutes, self-host-first positioning (D-19) and kill criteria.
 
 ## Data and behavior
 
