@@ -139,3 +139,8 @@ The Stop button aborted only the browser's read; the tool loop checked nothing b
 **Out of scope, named:** `runBrief` still only polls `isClosed` between steps (a brief reader who leaves keeps the brief running); consult/handoff streams are not aborted.
 
 HEAD after the citation commit is `9c6fb91`; this feature is uncommitted as of this entry (committed in the same turn if the gate passed).
+
+### Same session, continued — briefs stop too (D-28)
+D-27 covered chat; an org brief still only polled `isClosed` between steps, so a reader who left kept paying for the router and every seat call and the report was written afterwards. `streamBrief` now owns the same controller (cancel + `request.signal`), `runBrief` polls `stopped()` before the first summons, each routing pass, each seat call and the report, and the signal reaches `routeDecision` and `consultPeer` recursively. A stopped brief writes one `channel_gap` row with `metadata.stopped`, audits `brief.stopped`, finishes `CANCELLED`, and writes no "did not answer" gap and no `provider_error`; posts already landed stay. `streamText` moved to the gateway as `readSseText`, which calls `reader.cancel()` on stop — partial text kept, provider connection closed.
+
+Verified 244/244 tests; live brief proof `{calls:2, delayed:1, aborted:1}` + stop row + CANCELLED run + one audit (`.impeccable/brief-stop-proof.mjs`); both earlier live proofs re-run. The local fix queue is now empty; remaining blockers are credential/infrastructure ones (OAuth client, sandbox provisioning, vendor/search keys, pgvector).

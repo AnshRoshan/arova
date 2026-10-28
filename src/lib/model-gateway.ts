@@ -159,6 +159,42 @@ export function parseStreamDelta(buffer: string, from = 0): { text: string; curs
 
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+/**
+ * Read an SSE reply until it ends or the reader leaves. On a stop the connection is cancelled —
+ * leaving it open reads tokens nobody will see — while the text already received is kept, because
+ * that is what the reader was shown.
+ */
+export async function readSseText(response: Response, onText: (chunk: string) => void, shouldStop?: () => boolean): Promise<{ text: string; finish: string; usage: { input: number; output: number } | null }> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Provider returned an empty stream");
+  const decoder = new TextDecoder();
+  let raw = "", answer = "", finish = "";
+  let usage: { input: number; output: number } | null = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    raw += decoder.decode(value, { stream: true });
+    const lines = raw.split(String.fromCharCode(10));
+    raw = lines.pop() ?? "";
+    for (const line of lines) {
+      const reason = finishReason(line);
+      if (reason) finish = reason;
+      const counted = usageFromSseLine(line);
+      if (counted) usage = counted;
+      const delta = sseDelta(line);
+      if (!delta) continue;
+      answer += delta;
+      onText(delta);
+    }
+    if (shouldStop?.()) {
+      await reader.cancel().catch(() => {});
+      break;
+    }
+  }
+  if (raw) { const tail = sseDelta(raw); if (tail) { answer += tail; onText(tail); } const t = finishReason(raw); if (t) finish = t; const u = usageFromSseLine(raw); if (u) usage = u; }
+  return { text: answer, finish, usage };
+}
+
 /** "length" means the server stopped writing because of the output budget, which is ours,
  * not the model's. Without this the UI cannot tell a cut-off answer from a finished one. */
 export function finishReason(line: string): string {

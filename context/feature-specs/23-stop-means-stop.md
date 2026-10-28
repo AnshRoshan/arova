@@ -34,10 +34,29 @@ When the loop returns stopped, the route writes **no assistant row** and **no pr
 `chat.stopped · "Stopped by the reader before the tool loop finished; no answer was stored."` The
 outer catch has the same guard, so an abort that surfaces as an exception is not stored as an error.
 
+### The same contract reaches org briefs (`runBrief`)
+`streamBrief` owns the same controller (fed by `cancel()` and `request.signal`) and hands its signal to
+`runBrief`. The brief polls `stopped()` — `isClosed()` **or** the aborted signal — before the first
+summons, before each routing pass, before each seat call, and before the report. The signal reaches the
+router, `consultPeer` (and its nested consults) and the summons themselves, so a seat's unary call is
+aborted rather than left to finish.
+
+A stopped brief is a stop, not a gap: it writes one `channel_gap` row with `metadata.stopped` saying
+when it stopped (before any seat was asked / before any teammate answered / before the report), records
+`brief.stopped`, and finishes the run `CANCELLED`. It never writes the "did not answer" gap row and
+never a `provider_error` row for the abort. Posts that already landed stay — they are the record of
+what was gathered.
+
+### A stopped stream closes its connection
+`streamText` became `readSseText` in the gateway. When `shouldStop` flips it now calls
+`reader.cancel()` before returning: the text already received is kept (and stored as the `stopped`
+partial), but the provider connection is not left reading tokens nobody will see.
+
 ### What is deliberately not aborted
-The token-streamed reply still reads the provider stream and keeps the partial it already showed
-(“what has already arrived is kept”) instead of aborting and losing it. Tool-call fetches keep their
-own 10 s timeout; an abort between turns is enough to stop the loop.
+The token-streamed reply still returns the partial it already showed instead of aborting and losing it
+(“what has already arrived is kept”) — it just stops reading. Tool-call fetches keep their own 10 s
+timeout; an abort between turns is enough to stop the loop. A trigger/inbound caller has no reader, so
+its brief runs to completion by design.
 
 ## Constraints that survive
 - A stop is never stored as a model failure.
@@ -47,15 +66,19 @@ own 10 s timeout; an abort between turns is enough to stop the loop.
 
 ## Verification (2026-10-28)
 - Unit: `runToolLoop` stop test (one model turn, the running tool finishes, `stopped` true, no second
-  turn); gateway abort test (one fetch attempt despite a retryable AbortError).
-- Live, against `.impeccable/tool-loop-fixture.mjs` (its loop turn now waits 1.2 s so a stop has a
-  real window; `/stats` counts calls and aborts): reader aborts on the first `tool` event →
-  fixture `{calls: 3, delayed: 1, aborted: 1}`, no `delta` ever arrived, the agent has only its
-  greeting (no answer, no error row), one `chat.stopped` audit, `calls <= 4`. Script:
-  `.impeccable/stop-proof.mjs`.
-- `npm test`, `next typegen`, `tsc`, `npm run build` green.
+  turn); gateway abort test (one fetch attempt despite a retryable AbortError); `readSseText` stop test
+  (text kept, stream cancelled).
+- Live, tool loop, against `.impeccable/tool-loop-fixture.mjs` (its loop turn waits 1.2 s so a stop has
+  a real window; `/stats` counts calls and aborts): reader aborts on the first `tool` event → fixture
+  `{calls: 3, delayed: 1, aborted: 1}`, no `delta` ever arrived, the agent has only its greeting (no
+  answer, no error row), one `chat.stopped` audit, `calls <= 4`. Script: `.impeccable/stop-proof.mjs`.
+- Live, org brief: reader aborts on the `consult` frame → fixture `{calls: 2, delayed: 1, aborted: 1}`,
+  one channel row with `metadata.stopped` ("The brief was stopped before any teammate answered…"), no
+  peer post, no report, no `provider_error`, run `CANCELLED`, one `brief.stopped` audit. Script:
+  `.impeccable/brief-stop-proof.mjs`.
+- Both earlier proofs (citation ledger, tool-loop stop) re-run on the updated fixture.
+- `npm test` (244), `next typegen`, `tsc`, `npm run build` green.
 
 ## Out of scope (recorded, not implied)
-Aborting the org-brief loop when its browser reader leaves (`runBrief` still only polls `isClosed`
-between steps; a trigger caller has no reader to stop); aborting an in-flight consult/handoff stream;
-provider-side billing for tokens already generated before the abort arrived.
+An inbound trigger/channel caller that disconnects (it has no reader to stop); provider-side billing
+for tokens already generated before the abort arrived; cancelling a sandbox command a human started.

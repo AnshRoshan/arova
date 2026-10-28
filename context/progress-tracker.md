@@ -218,3 +218,21 @@ their partial (`what has already arrived is kept`).
 **Verified.** Two new tests; live fixture with a 1.2 s loop turn: reader stops on the first tool event →
 `{calls:3, delayed:1, aborted:1}`, no delta, only the greeting stored, one stop audit
 (`.impeccable/stop-proof.mjs`). Full gate follows. Spec 23, D-27.
+
+## Session 2026-10-28 (later) — briefs stop, and stopped streams close the connection
+**Complete.** D-27 covered chat; an org brief still polled `isClosed` only between steps, so a reader who
+left kept paying for the router and every seat call and the report was written after them. `streamBrief`
+now owns the same controller (cancel + request signal), `runBrief` polls `stopped()` before the first
+summons, each routing pass, each seat call and the report, and the signal reaches `routeDecision` and
+`consultPeer` recursively. A stopped brief writes one `channel_gap` row with `metadata.stopped`, audits
+`brief.stopped`, finishes `CANCELLED`, and writes neither a "did not answer" gap nor a `provider_error`;
+posts already landed stay. `streamText` moved to the gateway as `readSseText`, which cancels the reader
+when stopped — keeping the partial text but not the connection.
+
+**Verified.** 244/244 tests (new: `readSseText` cancels and keeps text). Live brief proof: abort on the
+`consult` frame → fixture `{calls:2, delayed:1, aborted:1}`, stop row, no peer post/report/error, run
+CANCELLED, one audit (`.impeccable/brief-stop-proof.mjs`). Tool-loop stop and citation proofs re-run on
+the updated fixture. Spec 23 (extended), D-28.
+
+**Next:** the remaining sweep is documentation-level; the queue of local code fixes is now empty. The
+credential-bound items stay blocked (OAuth client, sandbox provisioning, vendor/search keys, pgvector).
