@@ -1293,8 +1293,8 @@ export default function Workbench() {
             </div>)}</div>
           </div>}
           <div className={toolsTab === "sandbox" ? "" : "is-hidden"}>
-            <h2 className="pane-h2">Local OS sandbox<span className="mono">{data.sandbox.provider}</span></h2>
-            <p className="hint">An opt-in shell on this host: filesystem allowlist, default-deny network, no Docker and no VM. It has no desktop, browser stream, snapshot or takeover.{data.sandbox.provider === "local-os" ? <> On Windows the runtime needs a one-time <span className="mono">npx srt windows-install --skip-profile-grant</span>.</> : data.sandbox.provider === "wsl" ? <> Commands run in bubblewrap inside WSL with all networking off.</> : null}</p>
+            <h2 className="pane-h2">{data.sandbox.provider === "wsl" ? "WSL sandbox" : "Local OS sandbox"}<span className="mono">{data.sandbox.provider}</span></h2>
+            <p className="hint">An opt-in shell on this host: a filesystem allowlist and no network by default, no Docker and no VM. It has no desktop, browser stream, snapshot or takeover.{data.sandbox.provider === "local-os" ? <> On Windows the runtime needs a one-time <span className="mono">npx srt windows-install --skip-profile-grant</span>.</> : data.sandbox.provider === "wsl" ? <> Commands run in bubblewrap inside WSL with all networking off.</> : null}</p>
             <div className="facts">
               <span className={`fact ${data.sandbox.capabilities.pty ? "live" : ""}`}><i className="fact-dot" />pty {data.sandbox.capabilities.pty ? "yes" : "no"}</span>
               <span className="fact">graphical {data.sandbox.capabilities.graphical ? "yes" : "no"}</span>
@@ -1302,7 +1302,7 @@ export default function Workbench() {
               <span className="fact">takeover {data.sandbox.capabilities.takeover ? "yes" : "no"}</span>
               <span className="fact">persistent home {data.sandbox.capabilities.persistentHome ? "yes" : "no"}</span>
             </div>
-            {data.sandbox.provider !== "local-os" && <div className="blank"><h3>Not configured</h3><p>Set <span className="mono">AROVA_SANDBOX_PROVIDER=local-os</span> on the server, install <span className="mono">@anthropic-ai/sandbox-runtime</span>, restart, then run a command below. Until then it refuses without pretending.</p></div>}
+            {data.sandbox.provider === "unconfigured" && <div className="blank"><h3>Not configured</h3><p>Set <span className="mono">AROVA_SANDBOX_PROVIDER=wsl</span> (bubblewrap in WSL2) or <span className="mono">=local-os</span> (host runtime) on the server, restart, then run a command below. Until then it refuses without pretending.</p></div>}
             <div className="local-console">
               <div className="lc-runner">
                 <label className="lc-seat" htmlFor="sb-agent">Run as</label>
@@ -1324,7 +1324,7 @@ export default function Workbench() {
               })()}
               {!data.agents.length && <p className="hint">No seat exists yet, so there is nothing to run this as.</p>}
               {sandboxResult && <div className="code" style={{ marginTop: 12 }}><div className="code-bar"><span className="code-lang">{sandboxResult.ok ? "output" : "refused"}</span><CopyBtn text={sandboxResult.ok ? sandboxResult.output ?? "" : sandboxResult.error ?? ""} label="Copy" /></div><pre><code>{sandboxResult.ok ? sandboxResult.output : sandboxResult.error}</code></pre></div>}
-              <p className="hint">Every command is stored as a real run with its step and audit event. A shell is a high-risk tool; this sandbox reduces blast radius but shares the host kernel. Credentials are denied by path; network starts with an empty allowlist.</p>
+              <p className="hint">Every command is stored as a real run with its step and audit event. A shell is a high-risk tool; this sandbox reduces blast radius but shares the host kernel. {data.sandbox.provider === "wsl" ? "Your Linux home and Windows profile are hidden; network is absent rather than allow-listed." : "Credentials are denied by path; network starts with an empty allowlist."}</p>
             </div>
           </div>
           <div className={toolsTab === "channels" ? "" : "is-hidden"}>

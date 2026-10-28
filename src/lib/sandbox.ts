@@ -50,7 +50,7 @@ export const LOCAL_OS_CAPABILITIES: SandboxCapabilities = {
 export class UnconfiguredSandboxProvider implements SandboxProvider {
   readonly name = "unconfigured";
   readonly capabilities = UNCONFIGURED_CAPABILITIES;
-  private unavailable(): never { throw new Error("Computer runtime is not configured. Set AROVA_SANDBOX_PROVIDER=local-os and install the sandbox runtime, or configure another provider."); }
+  private unavailable(): never { throw new Error("Computer runtime is not configured. Set AROVA_SANDBOX_PROVIDER=wsl or =local-os on the server, or configure another provider."); }
   async create(_input: { workspaceId: string; agentId: string }): Promise<{ id: string; status: SandboxState }> { return this.unavailable(); }
   async get(_id: string): Promise<{ id: string; status: SandboxState }> { return this.unavailable(); }
   async start(_id: string): Promise<void> { return this.unavailable(); }
