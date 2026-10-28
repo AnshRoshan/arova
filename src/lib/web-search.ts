@@ -34,6 +34,8 @@ function buildUrl(profile: SearchProfile, query: string): { url: URL } | { error
   if (base.protocol !== "https:" && base.protocol !== "http:") return { error: "The search endpoint must be http(s)." };
   const local = ["localhost", "127.0.0.1", "::1"].includes(base.hostname.toLowerCase());
   if (local && !profile.allowLocal) return { error: "A local search endpoint needs SEARCH_ALLOW_LOCAL=1." };
+  // A search key and the user's query are not sent over plain http to a remote host.
+  if (base.protocol === "http:" && !local) return { error: "A remote search endpoint must be https; plain http is allowed only for a local endpoint with SEARCH_ALLOW_LOCAL=1." };
   let url: URL;
   if (profile.provider === "searxng") {
     url = base.pathname.replace(/\/+$/, "").endsWith("/search") ? base : new URL("search", base.pathname.endsWith("/") ? base : `${base.toString()}/`);

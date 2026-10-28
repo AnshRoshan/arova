@@ -143,7 +143,7 @@ async function board(workspaceId: string) {
   const MESSAGE_WINDOW = 200, RUN_WINDOW = 60, STEP_WINDOW = 300, APPROVAL_WINDOW = 60;
   const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, runStats, pendingStats, routineStats, totalsRows] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
-    db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt)).limit(MESSAGE_WINDOW + 1),
+    db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt), desc(messages.id)).limit(MESSAGE_WINDOW + 1),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
     db.select().from(runs).where(eq(runs.workspaceId, workspaceId)).orderBy(desc(runs.startedAt)).limit(RUN_WINDOW),
     db.select().from(runSteps).where(eq(runSteps.workspaceId, workspaceId)).orderBy(desc(runSteps.createdAt)).limit(STEP_WINDOW),
@@ -1842,10 +1842,18 @@ export async function POST(request: NextRequest) {
       if (!outcome.ok) throw new Error(outcome.error ?? "That role could not be set.");
     } else if (action === "loadEarlier") {
       // One page of older history for the windowed board: 100 messages before the oldest loaded.
-      const input = z.object({ before: z.string().min(10).max(40) }).parse(body);
+      // The timestamp alone is not a cursor — rows inserted in one statement share it — so the id
+      // breaks the tie and a page boundary can never skip the rest of a tied group.
+      const input = z.object({ before: z.string().min(10).max(40), beforeId: z.string().uuid().optional() }).parse(body);
       const beforeDate = new Date(input.before);
       if (Number.isNaN(beforeDate.getTime())) throw new Error("The point in time to page from could not be read.");
-      const older = await db.select().from(messages).where(and(eq(messages.workspaceId, workspaceId), lt(messages.createdAt, beforeDate))).orderBy(desc(messages.createdAt)).limit(100);
+      const scope = eq(messages.workspaceId, workspaceId);
+      const older = await db.select().from(messages)
+        .where(input.beforeId
+          ? and(scope, or(lt(messages.createdAt, beforeDate), and(eq(messages.createdAt, beforeDate), lt(messages.id, input.beforeId))))
+          : and(scope, lt(messages.createdAt, beforeDate)))
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(100);
       result = { earlier: older.reverse() };
     } else if (action === "updateWorkspace") {
       const timezone = z.string().min(1).max(100).parse(body.timezone);

@@ -414,10 +414,13 @@ export default function Workbench() {
    * more" when the window actually filled, so this button never promises an empty page forever. */
   const [earlierBusy, setEarlierBusy] = useState(false);
   const loadEarlier = async () => {
-    const oldest = (data?.messages ?? []).reduce((min, m) => (!min || m.createdAt < min ? m.createdAt : min), "");
+    // The cursor is (createdAt, id): rows written together share a timestamp, and a timestamp-only
+    // boundary would skip the rest of that group.
+    const oldest = (data?.messages ?? []).reduce<Message | null>((min, m) =>
+      !min || m.createdAt < min.createdAt || (m.createdAt === min.createdAt && m.id < min.id) ? m : min, null);
     if (!oldest || earlierBusy || busy) return;
     setEarlierBusy(true);
-    const r = await act("loadEarlier", { before: oldest });
+    const r = await act("loadEarlier", { before: oldest.createdAt, beforeId: oldest.id });
     const earlier = Array.isArray(r?.earlier) ? (r.earlier as Message[]) : [];
     if (earlier.length) setData(prev => prev ? { ...prev, messages: [...earlier.filter(e => !prev.messages.some(m => m.id === e.id)), ...prev.messages] } : prev);
     setEarlierBusy(false);

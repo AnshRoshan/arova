@@ -146,3 +146,5 @@ D-27 covered chat; an org brief still only polled `isClosed` between steps, so a
 Verified 244/244 tests; live brief proof `{calls:2, delayed:1, aborted:1}` + stop row + CANCELLED run + one audit (`.impeccable/brief-stop-proof.mjs`); both earlier live proofs re-run. The local fix queue is now empty; remaining blockers are credential/infrastructure ones (OAuth client, sandbox provisioning, vendor/search keys, pgvector).
 
 **Also fixed:** the client's Stop toast promised a stored partial for a tool loop, which stores nothing. It now picks the message from what happened (stored partial / streamed-but-landing / nothing streamed) and was verified through the real composer in Chrome (`.impeccable/cdp-stop-toast.mjs`). Uncommitted until the gate passes.
+
+**Sweep fixes (D-29):** history paging now uses `(created_at, id)` — 250 tied rows reproduced the old 0-row page, the pair cursor returned 50 with no overlap (`paging-proof.mjs`, needs the app's DATABASE_URL from `.env.local`, never printed). The search adapter refuses non-local http so a key cannot ride plain http.
