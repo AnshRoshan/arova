@@ -1,15 +1,27 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { HUES, hueFor, hueVars, type Hue } from "./identity.ts";
 
 /*
- * The graphite world. These assertions exist because a hue that read fine on paper does not
+ * The dark world. These assertions exist because a hue that read fine on paper does not
  * read on a dark ground, and because a six-hue identity palette is arithmetically impossible
  * once one azure owns interaction and green/amber/red own state. See D-14.
+ *
+ * The palette constants are read from src/app/globals.css at test time, not copied into this
+ * file: a test that hardcodes the stylesheet's colours measures a world that may no longer
+ * ship (it asserted the retired Graphite hexes for weeks after the Midnight layer landed).
  */
-const SURFACES = { sheet: "#1e2023", card: "#24262a", raised: "#2b2e33", panel: "#191a1d" };
-const ACCENT = "#7ba6ef";
-const STATES = { ran: "#5fce9b", waiting: "#e8b25c", fault: "#f48cab" };
+const CSS = readFileSync(fileURLToPath(new URL("../app/globals.css", import.meta.url)), "utf8");
+const token = (name: string): string => {
+  const m = CSS.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`));
+  assert.ok(m, `--${name} is not declared in src/app/globals.css`);
+  return m![1];
+};
+const SURFACES = { sheet: token("sheet"), card: token("card"), raised: token("raised"), panel: token("panel") };
+const ACCENT = token("azure");
+const STATES = { ran: token("ran"), waiting: token("waiting"), fault: token("fault") };
 
 const lum = (hex: string) => {
   const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
@@ -34,6 +46,15 @@ const separation = (a: string, b: string) => {
   const d = Math.abs(x - y) % 360;
   return Math.min(d, 360 - d);
 };
+
+test("the stylesheet declares every palette token this file measures", () => {
+  // If a token is renamed or dropped, `token()` already failed above; this pins the values
+  // themselves so a silent palette swap in globals.css shows up as a failing expectation.
+  assert.match(SURFACES.sheet, /^#[0-9a-f]{6}$/);
+  assert.match(ACCENT, /^#[0-9a-f]{6}$/);
+  assert.ok([SURFACES.sheet, SURFACES.card, SURFACES.raised, SURFACES.panel].every(s => s !== ACCENT),
+    "a surface and the accent are the same colour; elevation would vanish");
+});
 
 test("the palette is three fully-specified hues, glyph-first", () => {
   assert.equal(HUES.length, 3, "cool-only dark ground has room for three identity tints, not six");
