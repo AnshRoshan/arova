@@ -32,7 +32,61 @@ test("search returns numbered text and sources", async () => {
   });
   assert.equal(result.ok, true);
   assert.match(result.output, /\[1\] A/);
-  assert.deepEqual(result.sources, [{ title: "A", url: "https://a.example", snippet: "alpha" }]);
+  assert.deepEqual(result.sources, [{ index: 1, title: "A", url: "https://a.example" }]);
+});
+
+test("two searches share one numbering, so [3] is the page the model actually read", async () => {
+  const queries: string[] = [];
+  const fetchImpl = async (input: RequestInfo | URL) => {
+    const query = new URL(String(input)).searchParams.get("q");
+    queries.push(String(query));
+    const results = query === "first"
+      ? [{ title: "A", url: "https://a.example", content: "alpha" }, { title: "B", url: "https://b.example", content: "beta" }]
+      : [{ title: "C", url: "https://c.example", content: "gamma" }, { title: "A", url: "https://a.example", content: "alpha again" }];
+    return new Response(JSON.stringify({ results }), { status: 200 });
+  };
+  let turn = 0;
+  const toolOutputs: string[] = [];
+  const result = await runToolLoop({
+    messages: [{ role: "user", content: "research" }],
+    tools: toolDefinitions(["web_search"], true),
+    allowed: ["web_search"],
+    deps: { searchProfile: loadSearchProfile({ SEARCH_PROVIDER: "searxng", SEARCH_BASE_URL: "https://search.example" }), fetchImpl },
+    complete: async messages => {
+      turn++;
+      const last = messages[messages.length - 1];
+      if (last.role === "tool") toolOutputs.push(String(last.content));
+      if (turn === 1) return { content: "", toolCalls: [call("web_search", { query: "first" }, "call-1")] };
+      if (turn === 2) return { content: "", toolCalls: [call("web_search", { query: "second" }, "call-2")] };
+      return { content: "C is the answer [3], A agrees [1], and nothing supports [9].", toolCalls: [] };
+    },
+  });
+  assert.deepEqual(queries, ["first", "second"]);
+  assert.match(toolOutputs[1], /\[3\] C/, "the second search continues the numbering");
+  assert.match(toolOutputs[1], /\[1\] A/, "a page seen before keeps its number");
+  assert.deepEqual(result.sources.map(source => source.url), ["https://a.example", "https://b.example", "https://c.example"]);
+  assert.deepEqual(result.citations, { cited: [1, 3], unresolved: [9], uncited: [2] });
+});
+
+test("a fetched page is a numbered source too, with the URL that was actually read", async () => {
+  let turn = 0;
+  const result = await runToolLoop({
+    messages: [{ role: "user", content: "read it" }],
+    tools: toolDefinitions(["web_fetch"], false),
+    allowed: ["web_fetch"],
+    deps: {
+      lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+      fetchImpl: async () => new Response("<html><title>Doc</title><body>Hello world</body></html>", { status: 200, headers: { "content-type": "text/html" } }),
+    },
+    complete: async () => {
+      turn++;
+      return turn === 1
+        ? { content: "", toolCalls: [call("web_fetch", { url: "https://example.com/doc" })] }
+        : { content: "The page says hello [1].", toolCalls: [] };
+    },
+  });
+  assert.deepEqual(result.sources, [{ index: 1, title: "Doc", url: "https://example.com/doc" }]);
+  assert.deepEqual(result.citations, { cited: [1], unresolved: [], uncited: [] });
 });
 
 test("the loop executes a tool, feeds the result back, then returns the final answer", async () => {

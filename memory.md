@@ -115,3 +115,16 @@ a live eval with a configured model key.
 3. **D-19 vs root D-30** — self-host first is the working answer; the owner may still choose hosted.
 4. **Name** — Arova is crowded; legal/search check before publishing.
 5. **Channel target storage** — encrypt at rest / secret manager before a public deployment.
+
+## Session 2026-10-28 (later) — Feature 22, the citation ledger
+Reading the tool loop for the session's next improvement found a defect, not a wish: every `web_search` numbered its own results from `[1]` while the UI re-numbered the deduped source list from `[1]` again, so a second search made every citation name a page the model had not read. `web_fetch` returned no source at all, and an invented number rendered exactly like a real one.
+
+**Built, test-first.** `src/lib/citations.ts` (7 tests, RED first): `createLedger` / `addSource` (one stable number per unique URL, fragment-stripped, cap 12 — past the cap a source is never numbered) and `citationReport` → `{cited, unresolved, uncited}`, ignoring `[0]` and numbers inside code spans/fences. `executeToolCall` now takes the ledger, so search text and the source list share numbering; `web_fetch` returns its final URL and title, and its output is prefixed with its number. `ToolLoopResult` carries `sources[{index,title,url}]` and `citations`; the report runs on `splitReasoning(content).answer`. Both reply paths store it through one `toolLoopMetadata()` helper. The UI prints each source's own index and a waiting-coloured line for invented citations. The system prompt now says numbers are fixed for the whole reply.
+
+**Verified.** 241/241 tests, `next typegen`, `tsc`, `npm run build` green. Live against `.impeccable/tool-loop-fixture.mjs` (rewritten to do two searches — the second repeats a URL — and answer citing [1], [3] and inventing [9]): stored `sources` indices `[1,2,3]` in discovery order, `citations {cited:[1,3],unresolved:[9],uncited:[2]}`, two `tool.called` audits, report survives reload (`.impeccable/citation-proof.mjs`). Real Chrome at 1440×900 and 390×844: `Sources: [1] Arova docs · [2] Arova notes · [3] Arova pricing`, the [9] warning in `rgb(232,178,92)`, `CONSOLE: []`, no overflow (`.impeccable/cdp-citations.mjs`).
+
+**Not verified.** A real search provider and vendor model (no key), unchanged. No schema change; rows stored before this fall back to list position.
+
+**Uncommitted.** Everything above is in the working tree; HEAD is still `3698c21`.
+
+NEXT STEP (the one thing to do): a finish review in a fresh context, then commit (the last explicit request was "commit these changes" for the previous batch; this batch is new).

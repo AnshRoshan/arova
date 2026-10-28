@@ -86,7 +86,7 @@ const MAX_BYTES = 512_000;
 const MAX_HOPS = 3;
 
 /** Fetch one public web page inside the policy and return a readable excerpt. */
-export async function webFetch(raw: string, deps: FetchPolicy & { fetchImpl?: typeof fetch } = {}): Promise<{ ok: true; output: string } | { ok: false; error: string }> {
+export async function webFetch(raw: string, deps: FetchPolicy & { fetchImpl?: typeof fetch } = {}): Promise<{ ok: true; output: string; title: string; url: string } | { ok: false; error: string }> {
   const doFetch = deps.fetchImpl ?? fetch;
   let next = raw;
   for (let hop = 0; hop <= MAX_HOPS; hop++) {
@@ -111,7 +111,8 @@ export async function webFetch(raw: string, deps: FetchPolicy & { fetchImpl?: ty
     const full = new Uint8Array(await res.arrayBuffer());
     const { title, text } = extractReadable(new TextDecoder().decode(full.subarray(0, MAX_BYTES)));
     if (!text) return { ok: false, error: "The page carried no readable text." };
-    return { ok: true, output: `${title ? `${title} · ` : ""}${res.status} · ${target.url.hostname}\n${text}` };
+    // The final URL is the one a citation must carry: a redirect is still the page that was read.
+    return { ok: true, output: `${title ? `${title} · ` : ""}${res.status} · ${target.url.hostname}\n${text}`, title: title || target.url.hostname, url: target.url.toString() };
   }
   return { ok: false, error: "The fetch ended without an answer." };
 }
