@@ -77,6 +77,9 @@ its brief runs to completion by design.
   peer post, no report, no `provider_error`, run `CANCELLED`, one `brief.stopped` audit. Script:
   `.impeccable/brief-stop-proof.mjs`.
 - Both earlier proofs (citation ledger, tool-loop stop) re-run on the updated fixture.
+- Real Chrome, driven through the actual composer: send, wait for the tool state, press Stop →
+  toast “Stopped before an answer was written. Nothing was stored.”, composer free, only the greeting
+  stored, `CONSOLE: []`. Script: `.impeccable/cdp-stop-toast.mjs`.
 - `npm test` (244), `next typegen`, `tsc`, `npm run build` green.
 
 ## Out of scope (recorded, not implied)
