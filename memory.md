@@ -128,3 +128,14 @@ Reading the tool loop for the session's next improvement found a defect, not a w
 **Uncommitted.** Everything above is in the working tree; HEAD is still `3698c21`.
 
 NEXT STEP (the one thing to do): a finish review in a fresh context, then commit (the last explicit request was "commit these changes" for the previous batch; this batch is new).
+
+## Session 2026-10-28 (evening) — Feature 23, Stop actually stops
+The Stop button aborted only the browser's read; the tool loop checked nothing between turns, kept buying model turns and tool calls, and then stored a complete answer the reader had cancelled. Nothing recorded that a stop happened.
+
+**Built.** `streamReply` owns one `AbortController`; both `cancel()` and `request.signal` call `leave()` (marks closed, aborts). The router and each tool-loop turn get the signal; `requestCompletion` combines it with the timeout and **never retries an abort** (one attempt, then the caller's error). `runToolLoop` polls `shouldStop` before each turn/call — a tool already running finishes, nothing new starts — and returns `stopped`. A stopped loop writes **no assistant row and no provider-error row**, only `chat.stopped` ("Stopped by the reader before the tool loop finished; no answer was stored"). Token-streamed replies are unchanged and still keep their partial.
+
+**Verified.** New tests: one model turn after a stop (+ running tool kept), one fetch attempt after an abort. Live fixture (loop turn delayed 1.2 s, `/stats` counts): reader aborts on the first `tool` event → `{calls:3, delayed:1, aborted:1}`, no delta, only the greeting stored, one stop audit (`.impeccable/stop-proof.mjs`). 243 tests, typegen/tsc/build green. Spec 23, D-27.
+
+**Out of scope, named:** `runBrief` still only polls `isClosed` between steps (a brief reader who leaves keeps the brief running); consult/handoff streams are not aborted.
+
+HEAD after the citation commit is `9c6fb91`; this feature is uncommitted as of this entry (committed in the same turn if the gate passed).

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildEndpoint, completionPayload, estimateTokens, finishReason, usageFromJson, usageFromSseLine, isRetryableStatus, loadProfiles, parseStreamDelta, resolveForAgent, trimToTokenBudget } from "./model-gateway.ts";
+import { buildEndpoint, completionPayload, estimateTokens, finishReason, requestCompletion, usageFromJson, usageFromSseLine, isRetryableStatus, loadProfiles, parseStreamDelta, resolveForAgent, trimToTokenBudget } from "./model-gateway.ts";
 
 
 const dahlProfile = loadProfiles({ PROVIDERS: "dahl", DAHL_BASE_URL: "https://inference.dahl.global/v1", DAHL_MODEL: "MiniMaxAI/MiniMax-M2.7", DAHL_API_KEY: "secret-key", DAHL_MAX_CONTEXT: "32000" }).find(p => p.name === "dahl")!;
@@ -161,11 +161,30 @@ test("requestCompletion: a server that rejects stream_options is retried once wi
       if (body.stream_options) return new Response("stream_options is not supported", { status: 400 });
       return new Response("{}", { status: 200 });
     };
-    const { requestCompletion } = await import("./model-gateway.ts");
     const res = await requestCompletion({ profile, messages: [{ role: "user", content: "hi" }], stream: true, fetchImpl: fakeFetch as never });
     assert.equal(res.ok, true, "the message must survive a server that rejects the usage frame");
     assert.deepEqual(seen, [true, false]);
   } finally {
     if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
   }
+});
+
+test("requestCompletion: a caller who stopped is not retried — one attempt, then their error", async () => {
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  const profile = loadProfiles({ OPENAI_API_KEY: "test-key" }).find(p => p.name === "openai")!;
+  const controller = new AbortController();
+  let attempts = 0;
+  try {
+    await assert.rejects(requestCompletion({
+      profile,
+      messages: [{ role: "user", content: "hi" }],
+      stream: false,
+      signal: controller.signal,
+      fetchImpl: (async () => { attempts++; controller.abort(); throw new DOMException("aborted", "AbortError"); }) as never,
+    }));
+  } finally {
+    if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+  }
+  assert.equal(attempts, 1, "a stop is final, not a transient failure to spend budget on");
 });

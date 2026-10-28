@@ -14,6 +14,8 @@
 import { createServer } from "node:http";
 
 const PORT = 8788;
+const DELAY_MS = 1200;
+const stats = { calls: 0, delayed: 0, aborted: 0 };
 const RESULTS = {
   one: [
     { title: "Arova docs", url: "https://example.com/a", content: "Arova is a workspace for named agents." },
@@ -27,8 +29,10 @@ const RESULTS = {
 const server = createServer((request, response) => {
   const url = new URL(request.url ?? "/", `http://127.0.0.1:${PORT}`);
   if (request.method === "POST" && url.pathname === "/v1/chat/completions") {
+    stats.calls++;
     let body = "";
     request.on("data", chunk => { body += chunk; });
+    request.on("close", () => { if (!response.writableEnded) stats.aborted++; });
     request.on("end", () => {
       let parsed = {};
       try { parsed = JSON.parse(body); } catch { /* the fixture only needs messages */ }
@@ -59,9 +63,25 @@ const server = createServer((request, response) => {
               choices: [{ index: 0, message: { role: "assistant", content: "Arova is a workspace [1]. Pricing is unannounced [3]. Nothing supports [9]." }, finish_reason: "stop" }],
               usage: { prompt_tokens: 140, completion_tokens: 20 },
             };
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(payload));
+      // The loop's later turns wait, so a reader's Stop has a real window to abort one in flight.
+      const reply = () => {
+        if (response.writableEnded) return;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(payload));
+      };
+      if (toolResults > 0) { stats.delayed++; setTimeout(reply, DELAY_MS); } else reply();
     });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/stats") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify(stats));
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/stats/reset") {
+    Object.assign(stats, { calls: 0, delayed: 0, aborted: 0 });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
     return;
   }
   if (request.method === "GET" && url.pathname === "/search") {

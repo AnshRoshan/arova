@@ -15,7 +15,7 @@ import { formatSearchResults, searchWeb, type SearchProfile } from "./web-search
 export const READONLY_TOOL_IDS = ["calc", "now_in_timezone", "json_transform", "checksum", "web_fetch"] as const;
 export type ToolLoopEvent = { type: "tool"; name: string; status: "running" | "completed" | "failed"; detail?: string };
 export type ToolExecution = { ok: boolean; output: string; sources?: CitationSource[] };
-export type ToolLoopResult = { content: string; used: string[]; sources: CitationSource[]; citations: CitationReport; partial: boolean };
+export type ToolLoopResult = { content: string; used: string[]; sources: CitationSource[]; citations: CitationReport; partial: boolean; stopped: boolean };
 export type ToolLoopDeps = { searchProfile?: SearchProfile; fetchImpl?: typeof fetch; lookup?: FetchPolicy["lookup"] };
 export type CompleteTurn = (messages: ModelMessage[], tools: ToolDefinition[]) => Promise<{ content: string; toolCalls: ToolCall[] }>;
 
@@ -97,6 +97,8 @@ export async function runToolLoop(input: {
   audit?: (detail: string) => void;
   deps?: ToolLoopDeps;
   maxSteps?: number;
+  /** Polled between model turns and tool calls: a reader who left must not buy another turn. */
+  shouldStop?: () => boolean;
 }): Promise<ToolLoopResult> {
   const messages = input.messages;
   const used: string[] = [];
@@ -104,21 +106,26 @@ export async function runToolLoop(input: {
   const maxSteps = Math.max(1, Math.min(8, input.maxSteps ?? 4));
   let lastContent = "";
   // The report runs on the answer, not on reasoning: a number mentioned while thinking is not a claim.
-  const finish = (content: string, partial: boolean): ToolLoopResult => ({
+  const finish = (content: string, partial: boolean, stopped = false): ToolLoopResult => ({
     content,
     used,
     sources: ledger.sources,
     citations: citationReport(splitReasoning(content).answer, ledger.sources),
     partial,
+    stopped,
   });
 
   for (let step = 0; step < maxSteps; step++) {
+    if (input.shouldStop?.()) return finish(lastContent, true, true);
     const turn = await input.complete(messages, input.tools);
     lastContent = turn.content;
     if (!turn.toolCalls.length) return finish(lastContent, false);
 
     messages.push({ role: "assistant", content: turn.content || null, tool_calls: turn.toolCalls });
     for (const call of turn.toolCalls) {
+      // A tool already under way is finished — its result is real and half a command is worse than
+      // none — but nothing new is started after the reader leaves.
+      if (input.shouldStop?.()) return finish(lastContent, true, true);
       input.onEvent?.({ type: "tool", name: call.function.name, status: "running" });
       const started = Date.now();
       const result = await executeToolCall(call, input.allowed, input.deps, ledger);

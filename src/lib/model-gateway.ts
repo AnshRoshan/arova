@@ -227,17 +227,21 @@ export type CompletionRequest = {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   tools?: ToolDefinition[];
+  /** Aborted when the reader leaves, so a stopped reply stops spending tokens. */
+  signal?: AbortSignal;
 };
 
 /**
  * Bounded retries for the transient class only (429/5xx/network/timeout). A stream that
  * already started yielding text is never retried: replaying it would duplicate output.
  */
-export async function requestCompletion({ profile, messages, maxTokens = 800, stream, timeoutMs = 45000, fetchImpl, tools }: CompletionRequest): Promise<Response> {
+export async function requestCompletion({ profile, messages, maxTokens = 800, stream, timeoutMs = 45000, fetchImpl, tools, signal }: CompletionRequest): Promise<Response> {
   const doFetch = fetchImpl ?? fetch;
   const key = apiKeyFor(profile.name);
   if (!key) throw new Error(`${profile.label} is selected, but its server API key is not configured.`);
   const endpoint = buildEndpoint(profile.base);
+  const deadline = AbortSignal.timeout(timeoutMs);
+  const stopSignal = signal ? AbortSignal.any([deadline, signal]) : deadline;
   // Some compatible servers reject an unknown stream_options field. Fall back to streaming without
   // the usage frame rather than failing the user's message.
   let requestUsage = stream;
@@ -246,6 +250,7 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
   let forcedWait: number | null = null;
   for (let attempt = 0; attempt <= RETRYABLE_WAIT_MS.length; attempt++) {
     if (attempt) await wait(forcedWait ?? RETRYABLE_WAIT_MS[attempt - 1]);
+    if (signal?.aborted) throw new Error("The request was stopped before it was sent.");
     forcedWait = null;
     const body = JSON.stringify(completionPayload({ profile, messages, maxTokens, stream, requestUsage, tools }));
     let response: Response;
@@ -254,9 +259,11 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: stream ? "text/event-stream" : "application/json", Authorization: `Bearer ${key}` },
         body,
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: stopSignal,
       });
     } catch (error) {
+      // A stopped caller is not a transient failure: retrying would spend the same budget again.
+      if (signal?.aborted) throw error;
       lastError = error instanceof Error ? error.name : "network error";
       continue;
     }
