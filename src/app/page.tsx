@@ -723,6 +723,7 @@ export default function Workbench() {
         </button>)}
       </div>
       <div className="rail-foot">
+        <button className={`rail-btn ${activity ? "on" : ""}`} title={activity ? "Hide the activity record" : "Show the activity record"} aria-label="Activity record" aria-pressed={activity} onClick={() => { setActivity(a => !a); setRail(false); }}><Activity size={18} strokeWidth={1.8} /></button>
         <button className="rail-btn" title={panelOpen ? "Hide the section panel" : "Show the section panel"} aria-label="Toggle section panel" onClick={() => setPanelOpen(o => !o)}>{panelOpen ? <PanelLeftClose size={18} strokeWidth={1.8} /> : <PanelLeftOpen size={18} strokeWidth={1.8} />}</button>
         <button className="rail-status" title={data.modelConfigured ? "A model is ready" : "No model key configured"} onClick={() => { setSettingsTab("models"); setPane("settings"); setPanelOpen(true); }}><span className={`pulse ${data.modelConfigured ? "on" : ""}`} /></button>
       </div>
@@ -839,36 +840,22 @@ export default function Workbench() {
         </div>
       </>}
 
-      {section === "tools" && <>
-        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "local", label: "Local tools", count: localToolSpecs.length }, { id: "channels", label: "Channels", count: data.channels.length }, { id: "sandbox", label: "Sandbox", count: data.sandboxes.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
-        <div className="sp-scroll">
-          {toolsTab === "connectors" && [...new Set(toolCatalog.map(t => t.category))].map(cat => <div key={cat}>
-            <div className="sp-group">{cat}</div>
-            {toolCatalog.filter(t => t.category === cat).map(t => <button key={t.slug} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Compass size={16} /></span><span className="sp-item-main"><b>{t.name}</b><em>not connected</em></span></button>)}
-          </div>)}
-          {toolsTab === "local" && <>
-            <div className="sp-group">Runs for real here</div>
-            {localToolSpecs.map(t => <button key={t.id} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Zap size={16} /></span><span className="sp-item-main"><b>{t.label}</b><em>no credential needed</em></span></button>)}
-          </>}
-          {toolsTab === "sandbox" && <button className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}>
-            <span className="sp-item-icon"><Cpu size={16} /></span>
-            <span className="sp-item-main"><b>Sandbox</b><em>{data.sandbox.provider === "local-os" ? "local-os · shell and files" : "not configured"}</em></span>
-            <span className={`sp-dot ${data.sandbox.provider === "local-os" ? "ran" : ""}`} />
-          </button>}
-          {toolsTab === "channels" && <>
-            {!data.channels.length && <p className="bench-none">No channel yet. Add a Slack incoming webhook or any HTTPS endpoint.</p>}
-            {data.channels.map(c => <button key={c.id} className="sp-item" onClick={() => { setToolsTab("channels"); setPane("tools"); setRail(false); }}>
-              <span className="sp-item-icon"><Webhook size={16} /></span>
-              <span className="sp-item-main"><b>{c.name}</b><em>{c.kind} · {c.targetHost} · {c.enabled ? `${c.delivered} delivered` : "disabled"}</em></span>
-              <span className={`sp-dot ${c.enabled ? "ran" : ""}`} title={c.enabled ? "enabled" : "disabled"} />
-            </button>)}
-          </>}
-          {toolsTab === "mcp" && <>
-            {!mcpCount && <p className="bench-none">No MCP server configured. Add one in an agent’s capabilities.</p>}
-            {data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <button key={`${a.id}-${i}`} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Link2 size={16} /></span><span className="sp-item-main"><b>{srv.name || "unnamed"}</b><em>{a.name} · {srv.transport}</em></span></button>))}
-          </>}
-        </div>
-      </>}
+      {section === "tools" && <div className="sp-scroll">
+        <div className="sp-group">Surfaces</div>
+        {([
+          { id: "connectors", label: "Connectors", note: "OAuth apps", icon: Compass, count: toolCatalog.length },
+          { id: "local", label: "Local tools", note: "no key needed", icon: Zap, count: localToolSpecs.length },
+          { id: "channels", label: "Channels", note: "delivery + inbound", icon: Webhook, count: data.channels.length },
+          { id: "sandbox", label: "Sandbox", note: data.sandbox.provider === "wsl" ? "WSL · no network" : data.sandbox.provider === "local-os" ? "host runtime" : "not configured", icon: Cpu, count: data.sandboxes.length },
+          { id: "mcp", label: "MCP servers", note: "configured per seat", icon: Link2, count: mcpCount },
+        ] as const).map(item => <button key={item.id} className={`sp-item ${toolsTab === item.id ? "on" : ""}`} aria-current={toolsTab === item.id ? "page" : undefined} onClick={() => { setToolsTab(item.id); setPane("tools"); setRail(false); }}>
+          <span className="sp-item-icon"><item.icon size={16} /></span>
+          <span className="sp-item-main"><b>{item.label}</b><em>{item.note}</em></span>
+          {item.count > 0 && <span className="sp-count">{item.count}</span>}
+        </button>)}
+        <div className="sp-group">The rule</div>
+        <p className="sp-note">Nothing is shown as connected until a credential exists on the server. Per-seat grants live in Agent › Capabilities.</p>
+      </div>}
 
       {section === "settings" && <div className="sp-scroll">
         <div className="sp-group">Preferences</div>
@@ -952,7 +939,22 @@ export default function Workbench() {
             </div>
             <div className="overview-section-head agent-heading"><div><h2>Meet your agents <span className="subtle-count">{data.agents.length}</span></h2></div><button className="section-action" onClick={() => setDialog("agent")}>Add an agent <Plus size={16} /></button></div>
             <div className="agent-grid">{data.agents.map((a) => <button className="agent-card" key={a.id} onClick={() => openSeat(a.id)} style={hueOf(a.id)}><span className="agent-card-top"><span className="agent-avatar"><FaceIcon agent={a} size={23} /></span><ArrowUpRight size={17} className="agent-go" /></span><span className="agent-card-name">{a.name}</span><span className="agent-card-role">{a.role}</span><span className="agent-card-divider"/><span className="agent-card-bottom"><span><span className={`agent-live ${a.status !== "ACTIVE" ? "paused" : ""}`} />{a.status === "ACTIVE" ? "Available" : "Paused"}</span><span>{messageCountOf(a.id)} message{messageCountOf(a.id) === 1 ? "" : "s"}</span></span></button>)}<button className="agent-card agent-card-add" onClick={() => setDialog("agent")}><span className="agent-add-icon"><Plus size={25} strokeWidth={1.4} /></span><span className="agent-card-name">Make room for more</span><span className="agent-card-role">Build an agent for any kind of work.</span><span className="agent-add-bottom">Create agent <ArrowRight size={16} /></span></button></div>
-          </div></div>}
+          </div>
+          <aside className="overview-aside" aria-label="Schedule and recent work">
+            <section className="ov-card">
+              <div className="ov-head"><h3>Up next</h3><button onClick={() => { setAutoTab("routines"); setPane("scheduler"); }}>All routines</button></div>
+              {upcoming.length ? upcoming.map(r => <button className="ov-row" key={r.id} onClick={() => { setAutoTab("routines"); setPane("scheduler"); }}>
+                <b>{r.name}</b><span>{byId(r.agentId)?.name ?? "removed seat"} · {dayLabel(r.nextRunAt!)} {clock(r.nextRunAt!)}</span>
+              </button>) : <p className="ov-none">No routine is scheduled. Nothing runs while you are away.</p>}
+            </section>
+            <section className="ov-card">
+              <div className="ov-head"><h3>Recent work</h3><button onClick={() => { setAutoTab("runs"); setPane("scheduler"); }}>All runs</button></div>
+              {data.runs.length ? data.runs.slice(0, 4).map(r => <button className="ov-row" key={r.id} onClick={() => setDialog(r)}>
+                <b>{r.title}</b><span>{byId(r.agentId)?.name ?? "removed seat"} · {stamp(r.startedAt)} · {r.status.toLowerCase()}</span>
+              </button>) : <p className="ov-none">No run recorded yet. Only stored rows appear here.</p>}
+            </section>
+          </aside>
+        </div>}
         {pane === "channel" && channel && <>
           <div className="channel-head">
             <p className="channel-brief">{channel.brief || "No brief was written when this organisation was founded."}</p>
@@ -1262,16 +1264,17 @@ export default function Workbench() {
           onDraft={() => { const lead = agent ?? data.agents[0]; if (!lead) return; openSeat(lead.id); setDraft("Build me an organisation for "); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 80); }} />}
 
         {pane === "tools" && <div className="pane">
-          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has an external account. The local tools and one public web page run for real; Channels delivers results; Sandbox is an opt-in shell/files runtime with no GUI. Per-agent grants live in Agent › Capabilities.</p></div></div>
-          <div className={`rows ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <div className="row" key={t.slug}>
-            <span className="row-face"><Compass size={15} /></span>
-            <span className="row-main"><strong>{t.name}</strong><span>{t.description} · {t.category}</span></span>
-            <span className="row-side"><span className="chip idle"><i />not connected</span></span>
-            <span className="row-actions"><span className="dormant">Connect needs OAuth credentials on the server — until then this row states what is true.</span></span>
-          </div>)}</div>
+          <div className="pane-head"><div>
+            <h1>{toolsTab === "connectors" ? "Connectors" : toolsTab === "local" ? "Local tools" : toolsTab === "channels" ? "Channels" : toolsTab === "sandbox" ? (data.sandbox.provider === "wsl" ? "WSL sandbox" : "Local OS sandbox") : "MCP servers"}</h1>
+            <p>{toolsTab === "connectors" ? "OAuth apps an agent could use. Nothing is authorised on this server, so every card says so." : toolsTab === "local" ? "Tools that run in this process right now — no credential and no sandbox." : toolsTab === "channels" ? "Where a finished run or a pending approval is posted, and how outside work comes in." : toolsTab === "sandbox" ? "An opt-in shell with a filesystem allowlist and no network by default." : "MCP servers are stored per seat. No transport is wired, so none can connect."}</p>
+          </div></div>
+          {toolsTab === "connectors" && <p className="pane-note">None of these can connect: this server has no OAuth client. Each card states the operation it would perform.</p>}
+          <div className={`connector-grid ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <article className="connector-card" key={t.slug}>
+            <header><span className="row-face"><Compass size={15} /></span><div><h3>{t.name}</h3><em>{t.category}</em></div><span className="chip idle"><i />not connected</span></header>
+            <p>{t.description}</p>
+          </article>)}</div>
           {toolsTab === "local" && <div className="local-console">
-            <h2 className="pane-h2">Local tools<span className="mono">{localToolSpecs.length}</span></h2>
-            <p className="hint">These execute right now with no credential and no sandbox: four inside the server process, and the fetch through a public-address-only policy. The calculator is a hand-written arithmetic parser, so an expression cannot execute the app. Each run is stored as a real run with a step — nothing here is a mock.</p>
+            <p className="pane-lede">Four run inside the server process and one fetches a public page through a policy that refuses private addresses. Each run is stored as a real run with a step — nothing here is a mock.</p>
             <div className="lc-runner">
               <label className="lc-seat" htmlFor="lc-agent">Run as</label>
               <select id="lc-agent" value={consoleAgent || agent?.id || ""} onChange={e => setConsoleAgent(e.target.value)} disabled={!data.agents.length}>
@@ -1292,8 +1295,8 @@ export default function Workbench() {
               <span className="row-actions"><button className="ghost" type="button" onClick={() => setConsoleTool(t.id)}>{consoleTool === t.id ? "in the runner" : "use"}</button></span>
             </div>)}</div>
           </div>}
-          <div className={toolsTab === "sandbox" ? "" : "is-hidden"}>
-            <h2 className="pane-h2">{data.sandbox.provider === "wsl" ? "WSL sandbox" : "Local OS sandbox"}<span className="mono">{data.sandbox.provider}</span></h2>
+          <div className={toolsTab === "sandbox" ? "tool-surface" : "is-hidden"}>
+            <p className="pane-lede">Provider <span className="mono">{data.sandbox.provider}</span> · every command is a stored run with its step and audit event.</p>
             <p className="hint">An opt-in shell on this host: a filesystem allowlist and no network by default, no Docker and no VM. It has no desktop, browser stream, snapshot or takeover.{data.sandbox.provider === "local-os" ? <> On Windows the runtime needs a one-time <span className="mono">npx srt windows-install --skip-profile-grant</span>.</> : data.sandbox.provider === "wsl" ? <> Commands run in bubblewrap inside WSL with all networking off.</> : null}</p>
             <div className="facts">
               <span className={`fact ${data.sandbox.capabilities.pty ? "live" : ""}`}><i className="fact-dot" />pty {data.sandbox.capabilities.pty ? "yes" : "no"}</span>
@@ -1327,8 +1330,7 @@ export default function Workbench() {
               <p className="hint">Every command is stored as a real run with its step and audit event. A shell is a high-risk tool; this sandbox reduces blast radius but shares the host kernel. {data.sandbox.provider === "wsl" ? "Your Linux home and Windows profile are hidden; network is absent rather than allow-listed." : "Credentials are denied by path; network starts with an empty allowlist."}</p>
             </div>
           </div>
-          <div className={toolsTab === "channels" ? "" : "is-hidden"}>
-            <h2 className="pane-h2">Channels<span className="mono">{data.channels.length}</span></h2>
+          <div className={toolsTab === "channels" ? "tool-surface" : "is-hidden"}>
             <p className="hint">A finished run or a pending approval can be posted to Slack or any HTTPS endpoint. The target URL is stored server-side and only its host is shown here. A channel attached to an organisation also accepts inbound work at its token URL; a workspace-wide channel is outbound only.</p>
             <div className="stack"><div className="block">
               <h3>Add a channel</h3>
@@ -1357,7 +1359,7 @@ export default function Workbench() {
               <span className="row-side"><span className={`chip ${d.status === "DELIVERED" ? "ran" : d.status === "FAILED" ? "fault" : "waiting"}`}><i />{d.status.toLowerCase()}</span><time className="mono">{stamp(d.createdAt)}</time></span>
             </div>)}</div> : <div className="blank"><h3>No deliveries recorded</h3><p>Test a channel or finish a run; each attempt becomes a row here.</p></div>}
           </div>
-          <div className={toolsTab === "mcp" ? "" : "is-hidden"}><h2 className="pane-h2">MCP servers<span className="mono">{mcpCount}</span></h2>
+          <div className={toolsTab === "mcp" ? "tool-surface" : "is-hidden"}>
           {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
             <span className="row-face"><Settings2 size={15} /></span>
             <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}</span></span>
