@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LocalOsSandboxProvider, UnconfiguredSandboxProvider, buildSrtSettings, parseAllowedDomains, type SrtRunner } from "./sandbox.ts";
+import { LocalOsSandboxProvider, UnconfiguredSandboxProvider, buildSrtSettings, defaultSandboxRoot, parseAllowedDomains, type SrtRunner } from "./sandbox.ts";
 
 const AGENT = "11111111-1111-4111-8111-111111111111";
 
@@ -28,6 +28,12 @@ test("on Windows the home denies are left to the profile grant, which already ex
   assert.ok(linux.filesystem.denyRead.includes("~/.ssh"), "a Linux home is readable by default, so it is denied there");
 });
 
+test("a Windows workspace is outside the user profile, which the sandbox account cannot read", () => {
+  const publicDir = "C:\\Users\\Public";
+  assert.equal(defaultSandboxRoot({ PUBLIC: publicDir }, "win32"), join(publicDir, "arova", "sandboxes"));
+  assert.equal(defaultSandboxRoot({}, "linux"), join(process.cwd(), ".arova", "sandboxes"));
+});
+
 test("the allowlist parser accepts commas and whitespace and drops empties", () => {
   assert.deepEqual(parseAllowedDomains("a.com, b.com  c.com"), ["a.com", "b.com", "c.com"]);
   assert.deepEqual(parseAllowedDomains(undefined), []);
@@ -40,8 +46,8 @@ test("local-os advertises shell/files but no GUI, snapshot or takeover", () => {
 
 test("create writes the settings and execute passes the command to srt, not a host shell", async () => {
   const root = mkdtempSync(join(tmpdir(), "arova-sandbox-"));
-  const seen = { bin: "", args: [] as string[], cwd: "" };
-  const runner: SrtRunner = async (bin, args, opts) => { seen.bin = bin; seen.args = args; seen.cwd = opts.cwd; return { code: 0, stdout: "hello", stderr: "" }; };
+  const seen = { bin: "", args: [] as string[], cwd: "", timeoutMs: 0 };
+  const runner: SrtRunner = async (bin, args, opts) => { seen.bin = bin; seen.args = args; seen.cwd = opts.cwd; seen.timeoutMs = opts.timeoutMs; return { code: 0, stdout: "hello", stderr: "" }; };
   try {
     const p = new LocalOsSandboxProvider({ root, projectRoot: "/app", allowedDomains: ["example.com"], cliPath: "/fake/cli.js", runner });
     const created = await p.create({ workspaceId: "w", agentId: AGENT });
@@ -50,6 +56,7 @@ test("create writes the settings and execute passes the command to srt, not a ho
     assert.deepEqual(settings.network.allowedDomains, ["example.com"]);
     const out = await p.execute(AGENT, { type: "computer", action: "exec", input: { command: "echo hi" } });
     assert.equal(out.output, "hello");
+    assert.equal(seen.timeoutMs, 120_000, "the budget covers initialize's own probe");
     assert.equal(seen.bin, process.execPath);
     assert.ok(seen.args.includes("--settings"));
     assert.ok(seen.args.includes("-c"));

@@ -269,3 +269,15 @@ with `CreateProcessWithLogonW(srt-sandbox): Access is denied (0x80070005)`. Next
 reinstall (`uninstall` + `install --skip-profile-grant`, UAC); if that fails too, the host cannot start
 the sandbox account. **A successful sandbox command is still unverified.** Spec 19 (measured section),
 D-30.
+
+**Same day, after the reinstall.** Two more defects of ours and the host's real limit. (1) With
+`--skip-profile-grant` the sandbox account cannot traverse the user profile, so a workspace in the
+project was reported as `mapped_drive_cwd`; Windows workspaces now default to `%PUBLIC%\arova\sandboxes`
+(`AROVA_SANDBOX_ROOT` still wins). (2) `initialize()`'s own WFP probe has a 30 s budget and retries, so
+our 30 s command cap killed setup and printed "timed out"; the default is 120 s, and the app now prints
+the runtime's typed refusal. (3) The refusal itself: the installer denies `SeDenyRemoteInteractiveLogonRight`
+for `srt-sandbox` (evidenced in the vendored binary), and this session is RDP — `CreateProcessWithLogonW`
+creates the process in the caller's session and the deny right refuses it. A console session should
+work; removing the right in secpol is the user's call. **A successful sandbox command is still
+unverified.** Spec 19 post-reinstall section, D-31, D-32. The Sandbox tab renders in Chrome at
+1440×900 and 390×844 (`.impeccable/cdp-sandbox-tab.mjs`), fourth in the Integrations strip.

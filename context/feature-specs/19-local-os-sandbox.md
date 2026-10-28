@@ -111,3 +111,23 @@ The owner ran `npx srt windows-install`. What that leaves behind, and what the a
   next step; if it still refuses, this host cannot start the sandbox account and the provider stays
   fail-closed. **A successful sandbox command is still unverified here.**
 - The Sandbox tab now states the Windows prerequisite and why the profile grant is skipped.
+
+### After the reinstall: the remaining refusal is a Windows logon right (2026-10-28)
+- **Workspace moved outside the profile.** With `--skip-profile-grant`, the sandbox account cannot
+  traverse `C:\Users\<name>`, so a workspace inside the project was reported as `mapped_drive_cwd`
+  ("C:\ is DRIVE_REMOTE"). The default Windows root is now `%PUBLIC%\arova\sandboxes`; the same
+  command then reached the logon step instead. `AROVA_SANDBOX_ROOT` still overrides.
+- **The command budget must cover `initialize()`.** The runtime's own WFP probe has a 30 s budget and
+  can retry; our 30 s cap killed setup mid-probe and surfaced only "timed out". The default is now
+  120 s (still `AROVA_SANDBOX_TIMEOUT_MS`), so the runtime's typed refusal reaches the UI. Measured
+  refusal now reads: `WFP egress fence could not be verified — … CreateProcessWithLogonW(srt-sandbox):
+  Access is denied (0x80070005) …`.
+- **Why it refuses here, evidenced:** the installer adds `SeDenyNetworkLogonRight`,
+  `SeDenyBatchLogonRight`, `SeDenyServiceLogonRight` and `SeDenyRemoteInteractiveLogonRight` for
+  `srt-sandbox` (strings in the vendored `srt-win.exe`). This session is a Remote Desktop logon
+  (`REMOTE INTERACTIVE LOGON`), and `CreateProcessWithLogonW` creates the process in the caller's
+  session — so the deny right refuses it. Consistent with every symptom; not yet proven by a console-
+  session run. A console session should work without any policy change; removing that right (secpol,
+  elevated) would allow it in RDP at the cost of the installer's hardening.
+- **A successful sandbox command is still unverified on this host.** The provider stays fail-closed
+  and says exactly why.

@@ -1294,7 +1294,7 @@ export default function Workbench() {
           </div>}
           <div className={toolsTab === "sandbox" ? "" : "is-hidden"}>
             <h2 className="pane-h2">Local OS sandbox<span className="mono">{data.sandbox.provider}</span></h2>
-            <p className="hint">An opt-in shell on this host, wrapped by Anthropic's sandbox runtime: filesystem allowlist, default-deny network, no Docker and no VM. It has no desktop, browser stream, snapshot or takeover. On Windows the runtime needs a one-time <span className="mono">npx srt windows-install</span>.</p>
+            <p className="hint">An opt-in shell on this host, wrapped by Anthropic's sandbox runtime: filesystem allowlist, default-deny network, no Docker and no VM. It has no desktop, browser stream, snapshot or takeover. On Windows the runtime needs a one-time <span className="mono">npx srt windows-install --skip-profile-grant</span>.</p>
             <div className="facts">
               <span className={`fact ${data.sandbox.capabilities.pty ? "live" : ""}`}><i className="fact-dot" />pty {data.sandbox.capabilities.pty ? "yes" : "no"}</span>
               <span className="fact">graphical {data.sandbox.capabilities.graphical ? "yes" : "no"}</span>
@@ -1311,7 +1311,7 @@ export default function Workbench() {
                 <button className="primary" type="button" disabled={busy || !data.agents.length || !sandboxCommand.trim()} onClick={async () => { const r = await act("runSandboxCommand", { agentId: sandboxAgent || agent?.id, command: sandboxCommand }); const s = r?.sandbox as { ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | undefined; if (s) setSandboxResult(s); }}>{busy ? "Running" : "Run"}</button>
                 <button className="ghost" type="button" disabled={busy || !data.agents.length} onClick={async () => { const command = "echo arova-sandbox-ok"; setSandboxCommand(command); const r = await act("runSandboxCommand", { agentId: sandboxAgent || agent?.id, command }); const s = r?.sandbox as { ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | undefined; if (s) setSandboxResult(s); }}>Check</button>
               </div>
-              {data.sandbox.provider === "local-os" && <p className="hint">On Windows the host is provisioned once with <span className="mono">npx srt windows-install --skip-profile-grant</span> (UAC) and the Secondary Logon service running. Skipping the profile grant is deliberate: the sandbox does not need your home directory, and granting it rewrites the profile's ACLs. The first command can take longer while the sandbox user's access list is built.</p>}
+              {data.sandbox.provider === "local-os" && <p className="hint">On Windows the host is provisioned once with <span className="mono">npx srt windows-install --skip-profile-grant</span> (UAC) and the Secondary Logon service running; workspaces live under <span className="mono">C:\Users\Public\arova\sandboxes</span>, outside your profile, because the sandbox account cannot read it. The runtime also denies the sandbox account remote logon, so it cannot start inside a Remote Desktop session. Skipping the profile grant is deliberate: the sandbox does not need your home directory, and granting it rewrites the profile's ACLs.</p>}
               {(() => {
                 const seatId = sandboxAgent || agent?.id || "";
                 const row = data.sandboxes.find(s => s.agentId === seatId);

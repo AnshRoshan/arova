@@ -329,3 +329,25 @@ Why not B: a per-command multi-minute ACL walk is not a usable sandbox, and on W
 Design: `buildSrtSettings` takes a `platform` (defaulting to `process.platform`) and emits `~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure` only when not Windows; `.env`/`.env.local` (relative and absolute) stay everywhere. The Sandbox tab states the Windows prerequisite and why the profile grant is skipped.
 
 Cost: one option, one branch, two tests. Reversibility: restore the home entries if a provider ever needs them. Evidence: spec 19's measured section; the debug run showed `acl grant --persistent` completing instantly without the home entries; 10/10 sandbox tests, tsc green. A successful command is still unverified — the host refuses `CreateProcessWithLogonW(srt-sandbox)` with access denied after provisioning.
+
+## D-31: a Windows sandbox workspace lives outside the user profile — 2026-10-28
+Trigger: with the recommended `--skip-profile-grant` install, a command from the project directory failed with srt-win's `mapped_drive_cwd` ("C:\ is DRIVE_REMOTE") instead of running. The project sits inside `C:\Users\Ansh`, which the sandbox account cannot traverse without the profile grant; srt-win reports that access failure as a mapped drive. From `C:\Users\Public` the same command passed that check.
+
+Options considered: (A) **default the sandbox root on Windows to `%PUBLIC%\arova\sandboxes`**; (B) require the profile grant so the workspace can stay in the project; (C) copy the project into the workspace per run; (D) tell the operator to set `AROVA_SANDBOX_ROOT` themselves. Chosen: A.
+
+Why not B: the profile grant is the slow, risky step the recommended install skips, and the sandbox has no need for the home directory. Why not C: a copy is expensive and diverges from the workspace the runs record. Why not D: a default that fails on every stock Windows install is not a default.
+
+Design: `defaultSandboxRoot()` returns `%PUBLIC%\arova\sandboxes` on Windows and the existing `.arova/sandboxes` elsewhere; `AROVA_SANDBOX_ROOT` still overrides. Write containment is unchanged — the write-restricted token's capability SIDs, not the parent directory's ACL, are what let the child write its own workspace. The Sandbox tab states the location.
+
+Cost: one helper, one test, one hint. Reversibility: pass `AROVA_SANDBOX_ROOT`. Evidence: spec 19; 11/11 sandbox tests; the same command's failure changed from `mapped_drive_cwd` to the logon refusal (the remaining host blocker) once run outside the profile.
+
+## D-32: the sandbox budget covers initialize; a remote-logon deny is a host limit — 2026-10-28
+Trigger: with the workspace moved outside the profile, `initialize()` reached the WFP probe and the app reported only "timed out after 30000ms". The probe has its own 30 s budget and retries, so a 30 s cap kills setup mid-probe and hides the runtime's typed refusal. Measured: the same command completes its ACL work in seconds and fails at the probe after ~77 s.
+
+Options considered: (A) **raise the default budget to 120 s and surface the runtime's refusal**; (B) keep 30 s; (C) separate prepare/execute timeouts; (D) hide the failure behind a friendlier message. Chosen: A.
+
+Why not B: it hides the actionable error and leaves half-applied grants. Why not C: a second configuration knob for one host path; 120 s covers initialize plus a normal command. Why not D: the app's contract is to print what refused.
+
+Also recorded: the installer denies `SeDenyRemoteInteractiveLogonRight` for `srt-sandbox` (strings in the vendored binary). In a Remote Desktop session `CreateProcessWithLogonW` creates the process in that session and the deny right makes it fail with access denied — consistent with the measured refusal, to be confirmed on a console session. No code can work around a Windows logon right.
+
+Cost: one default constant, one assertion. Reversibility: `AROVA_SANDBOX_TIMEOUT_MS`. Evidence: spec 19's post-reinstall section; 11/11 sandbox tests; the app now prints the WFP/`CreateProcessWithLogonW` text. A successful sandbox command remains unverified.

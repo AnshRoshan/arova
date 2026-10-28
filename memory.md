@@ -174,3 +174,10 @@ tab states the right install (`--skip-profile-grant`, Secondary Logon).
 `npx srt uninstall` then `npx srt windows-install --skip-profile-grant` (UAC), restart dev from the user's own
 terminal, Check. If it still refuses, this host cannot start the sandbox account; the provider stays
 fail-closed and nothing else is affected. D-30, spec 19.
+
+**After the reinstall (D-31/D-32).** Windows workspaces moved to `%PUBLIC%\arova\sandboxes` because the
+sandbox account cannot read the user profile with `--skip-profile-grant` (srt-win called that
+`mapped_drive_cwd`). The command budget is 120 s because initialize's WFP probe has its own 30 s budget.
+The remaining refusal is the host's: the installer adds `SeDenyRemoteInteractiveLogonRight` for
+`srt-sandbox` (string in the vendored exe) and this is an RDP session, so `CreateProcessWithLogonW` is
+denied. Console session should work; secpol removal is the owner's call. Sandbox command still unverified.
