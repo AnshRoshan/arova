@@ -181,3 +181,13 @@ sandbox account cannot read the user profile with `--skip-profile-grant` (srt-wi
 The remaining refusal is the host's: the installer adds `SeDenyRemoteInteractiveLogonRight` for
 `srt-sandbox` (string in the vendored exe) and this is an RDP session, so `CreateProcessWithLogonW` is
 denied. Console session should work; secpol removal is the owner's call. Sandbox command still unverified.
+
+## Session 2026-10-28 (late night) — a working sandbox via WSL
+The Windows ASRT runtime is blocked by `SeDenyRemoteInteractiveLogonRight` in an RDP session. Added a
+`wsl` provider (`src/lib/sandbox-wsl.ts`, `AROVA_SANDBOX_PROVIDER=wsl`): bubblewrap inside WSL2 with
+`--unshare-all`, read-only root, workspace-only writes, private `/tmp`, cleared env, and both homes
+masked; commands are staged as a script so no argv carries user text. Live proof through the API and the
+real Check button: echo output, profile hidden, network unreachable, `/etc` read-only, empty Linux home,
+runs/audits recorded. Limits stated in the UI: no proxy/allowlist, no seccomp monitor, no snapshot.
+Spec 19 (WSL section), D-33. The Windows path remains for a console session; Node+socat in WSL would
+allow the ASRT runtime there later.

@@ -281,3 +281,17 @@ creates the process in the caller's session and the deny right refuses it. A con
 work; removing the right in secpol is the user's call. **A successful sandbox command is still
 unverified.** Spec 19 post-reinstall section, D-31, D-32. The Sandbox tab renders in Chrome at
 1440×900 and 390×844 (`.impeccable/cdp-sandbox-tab.mjs`), fourth in the Integrations strip.
+
+## Session 2026-10-28 (late night) — WSL sandbox runs through the app
+The Windows runtime is blocked by a Remote Desktop logon right, so a `wsl` provider now runs each
+command through bubblewrap inside the existing WSL2 Ubuntu: `--unshare-all`, read-only `/`, only the
+workspace writable, private `/tmp`, cleared env, and `--tmpfs` over both the Linux home and the Windows
+profile. The command is staged as a script in the workspace, so no shell quoting layer sees user text.
+Root `/var/tmp/arova-sandboxes`, budget 120 s, `AROVA_SANDBOX_PROVIDER=wsl`.
+
+**Verified live through the app:** echo prints its output; the project's `memory.md` is visible on the
+host and `hidden` in the sandbox; `/dev/tcp/1.1.1.1/443` → “Network is unreachable”; `/etc` write →
+“Read-only file system”; `/home/ansh` empty; five commands → five runs (3 COMPLETED, 2 FAILED) and five
+audits. Real Chrome: Integrations → Sandbox → Check prints `arova-sandbox-ok`, `CONSOLE: []`, no
+overflow. 5/5 provider tests. Honest limits in the UI: no proxy/allowlist (network absent), no seccomp
+monitor, no snapshot. Spec 19 WSL section, D-33.

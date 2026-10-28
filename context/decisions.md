@@ -351,3 +351,16 @@ Why not B: it hides the actionable error and leaves half-applied grants. Why not
 Also recorded: the installer denies `SeDenyRemoteInteractiveLogonRight` for `srt-sandbox` (strings in the vendored binary). In a Remote Desktop session `CreateProcessWithLogonW` creates the process in that session and the deny right makes it fail with access denied — consistent with the measured refusal, to be confirmed on a console session. No code can work around a Windows logon right.
 
 Cost: one default constant, one assertion. Reversibility: `AROVA_SANDBOX_TIMEOUT_MS`. Evidence: spec 19's post-reinstall section; 11/11 sandbox tests; the app now prints the WFP/`CreateProcessWithLogonW` text. A successful sandbox command remains unverified.
+
+## D-33: a WSL/bubblewrap provider while the Windows runtime cannot start — 2026-10-28
+Trigger: the owner asked to use WSL after the Windows sandbox was proven blocked by a Remote Desktop logon right (D-32). WSL2 Ubuntu is present with `bwrap`; Node and socat are not, and installing them needs an interactive `sudo`.
+
+Options considered: (A) **a `wsl` provider that runs each command through bubblewrap inside WSL2**; (B) wait for a console session and the ASRT runtime; (C) install Node+socat in WSL and run the ASRT CLI there; (D) a Docker container per command. Chosen: A.
+
+Why not B: it leaves the execution tier unusable on the session the owner actually uses. Why not C: it needs a sudo install and adds the ASRT proxy layer for a sandbox that, on this host, has no allowed domains anyway. Why not D: a container per command is heavier, needs the Docker daemon's cooperation for nested namespaces, and moves the workspace across a volume boundary.
+
+Design: `src/lib/sandbox-wsl.ts` — `wslBwrapArgs` builds `--unshare-all`, read-only `/`, workspace bind, private `/tmp`, `--tmpfs` over the Linux home and the Windows profile, cleared env; the command is staged as a script in the workspace and run as `bash <script>` (no user text on an argv). Workspace root `/var/tmp/arova-sandboxes`; budget 120 s; `AROVA_SANDBOX_PROVIDER=wsl`.
+
+Honest limits, stated in the UI: network is absent rather than allow-listed (no proxy), there is no seccomp monitor and no snapshot, and the command runs as the WSL user in namespaces rather than as a separate account.
+
+Cost: one module, one provider branch, five tests, two live scripts. Reversibility: unset the env var; `local-os` and the unconfigured provider are unchanged. Evidence: 5/5 unit tests; live API proof (echo, profile hidden, network unreachable, read-only root, empty Linux home, five runs/audits); real Chrome Check prints `arova-sandbox-ok` with `CONSOLE: []`.

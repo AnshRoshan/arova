@@ -13,6 +13,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { WslSandboxProvider } from "./sandbox-wsl.ts";
 
 export type SandboxState = "CREATING" | "READY" | "STARTING" | "ACTIVE" | "IDLE" | "PAUSING" | "PAUSED" | "STOPPING" | "STOPPED" | "ERROR" | "DESTROYING" | "DESTROYED";
 export type SandboxCapabilities = {
@@ -226,6 +227,12 @@ export class LocalOsSandboxProvider implements SandboxProvider {
 /** Opt-in: no provider runs commands on the host unless AROVA_SANDBOX_PROVIDER says so. */
 export function providerFromEnv(env: Record<string, string | undefined> = process.env): SandboxProvider {
   const kind = (env.AROVA_SANDBOX_PROVIDER ?? "").trim().toLowerCase();
+  if (kind === "wsl" || kind === "wsl-bwrap") {
+    return new WslSandboxProvider({
+      root: env.AROVA_SANDBOX_ROOT,
+      timeoutMs: Number(env.AROVA_SANDBOX_TIMEOUT_MS) || undefined,
+    });
+  }
   if (kind === "local-os" || kind === "local") {
     return new LocalOsSandboxProvider({
       root: env.AROVA_SANDBOX_ROOT,

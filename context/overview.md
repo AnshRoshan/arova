@@ -34,3 +34,4 @@ Studio Edition: deep aubergine navigation, warm off-white canvas, lilac hero and
 ## Organisation management
 
 Backend actions in `/api/board`: `createEmptyTeam`, `updateTeam`, `deleteTeam` (agents are kept, moved to the bench), `assignAgent` (team + manager; rejects self-management, cross-team managers and reporting loops). The Organisation pane edits team name/brief, shows the chart, sets each seat's "Reports to", adds/removes seats, places benched agents, and can hand off to an agent to draft a full organisation.
+- **WSL sandbox** (Integrations → Sandbox, opt-in): `AROVA_SANDBOX_PROVIDER=wsl` runs each command through bubblewrap inside WSL2 — all networking off, read-only root, only the workspace writable, both the Linux home and the Windows profile hidden. No proxy, seccomp monitor or snapshot, and the panel says so. Spec 19, D-33.
