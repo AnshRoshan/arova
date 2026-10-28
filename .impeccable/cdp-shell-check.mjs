@@ -101,9 +101,17 @@ await sleep(900);
 const settings = await read(`(() => { const stack = document.querySelector('.pane .stack'); return { width: stack ? Math.round(stack.getBoundingClientRect().width) : 0 }; })()`);
 assert.ok(settings.width > 0 && settings.width <= 800, `form measure stays readable (${settings.width}px)`);
 
+await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+await sleep(700);
+const mobile = await read(`(() => ({
+  overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  labels: [...document.querySelectorAll('.rail-label')].filter(el => getComputedStyle(el).display !== 'none').length,
+}))()`);
+assert.equal(mobile.overflow, false, "no horizontal overflow on a phone");
+assert.equal(mobile.labels, 0, "the rail is icon-only on a phone");
 assert.deepEqual(errors, [], "no console errors");
 
-console.log(JSON.stringify({ overview, tabs, integrations, mcp, automations, org, settings, errors }, null, 2));
+console.log(JSON.stringify({ overview, tabs, integrations, mcp, automations, org, settings, mobile, errors }, null, 2));
 console.log("PASS redesigned shell");
 ws.close(); chrome.kill(); await sleep(300);
 try { rmSync(profile, { recursive: true, force: true }); } catch {}

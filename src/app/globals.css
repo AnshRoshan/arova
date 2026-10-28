@@ -657,6 +657,13 @@ button.row:hover { background: #232842; }
 }
 
 @media (max-width: 600px) {
+  .sheet-bar { min-height: 0; padding: 10px 14px; gap: 7px 8px; }
+  .sheet-bar .facts { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
+  .sheet-bar .facts::-webkit-scrollbar { display: none; }
+  .sheet-bar .ghost { padding: 6px 10px; font-size: 12px; }
+  .sheet-bar .ident-tile { width: 32px; height: 32px; }
+  .ident-main h1 { font-size: 20px; }
+  .ident-role { font-size: 11.5px; }
   .agent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .org-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .section-aside { display: none; }
