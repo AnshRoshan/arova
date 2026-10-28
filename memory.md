@@ -4,7 +4,8 @@ Current state (2026-10-28): **market brief rev 2 plus the no-credential product 
 verified.** Channels (generic HTTPS webhook + inbound org token + delivery ledger), the eval harness
 (substring score, honest `SKIPPED`/`ERROR`) and the agent registry (exact SQL aggregates) are live in
 the app. The market research is now thirteen products/agents with pricing, reliability, demand,
-substitutes, positioning and kill criteria. **Nothing is committed.**
+substitutes, positioning and kill criteria. **Committed on `main` as `c7ecb3d` (design), `58c07dc`
+(product), `59a18dc` (docs); not pushed.**
 
 ## What changed
 
@@ -109,8 +110,7 @@ a live eval with a configured model key.
 
 ## Open with the user
 
-1. **Commit and push?** The tree has the pre-existing uncommitted design/auth work plus this pass;
-   nothing has been committed since `b583c9b`.
+1. **Push?** The three commits are local on `main`; nothing has been pushed to `origin`.
 2. **Model key** for the live eval and real channel notification.
 3. **D-19 vs root D-30** — self-host first is the working answer; the owner may still choose hosted.
 4. **Name** — Arova is crowded; legal/search check before publishing.
