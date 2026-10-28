@@ -307,3 +307,14 @@ Why not B: the summons are the expensive part and the user's Stop means them. Wh
 Design: `streamBrief` owns an AbortController fed by `cancel()`/`request.signal`; `runBrief` polls `stopped()` before the first summons, each routing pass, each seat call and the report, and passes the signal to `routeDecision` and `consultPeer` (recursively). A stop writes one `channel_gap` row with `metadata.stopped`, audits `brief.stopped`, finishes the run `CANCELLED`, and writes neither a "did not answer" gap nor a `provider_error`. Posts already landed stay. `streamText` moved to the gateway as `readSseText`, which cancels the reader on stop while keeping the text received.
 
 Cost: one optional signal through the brief path and `consultPeer`, a hoisted `summons`/`routed` so the outer catch can use the same stop helper, one pure reader function + one test. Reversibility: stop passing the signal; the polling-only behaviour returns. Evidence: spec 23; 244/244 tests; live brief proof `{calls:2, delayed:1, aborted:1}`, stop row, run CANCELLED, one audit; both earlier proofs re-run.
+
+## D-29: history pages on (created_at, id), and search refuses plain http — 2026-10-28
+Trigger: the sweep after the stop fixes. Two small gaps with real failure modes. (1) The windowed board paged on `created_at < before` alone; rows inserted in one statement share the timestamp, so at a page boundary the rest of the tied group was unreachable and a seeded thread silently truncated (reproduced: 0 of 50 older rows returned). (2) The search adapter accepted an `http` remote endpoint and would send `SEARCH_API_KEY` as a Bearer header over it.
+
+Options considered: (A) **page on the pair `(created_at, id)` in both query and client, plus refuse non-local http in the search adapter**; (B) add a monotonic sequence column and migrate; (C) page by offset, which is unstable under inserts; (D) leave both. Chosen: A.
+
+Why not B: a sequence is a migration and a second ordering for one edge case; the id is already unique and stable. Why not C: offset paging duplicates or skips rows while new messages arrive, the exact class of bug this windowing already avoids. Why not D: both are silent failures — a truncated thread and a key on the wire.
+
+Design: the window and the pager order by `created_at DESC, id DESC`; the pager predicate is `created_at < before OR (created_at = before AND id < beforeId)`; `beforeId` is optional so an older client still works, and the client computes the oldest row with the same tie-break. The search adapter refuses `http` for any non-local host before any fetch.
+
+Cost: one optional field, one predicate, one client reducer; one line in `buildUrl` and one test. Reversibility: drop `beforeId` (timestamp-only behaviour returns). Evidence: spec 24; `paging-proof.mjs` (200 + 50 = 250 unique, 0 without the id); `web-search.test.ts` proves no fetch on http; 245 tests, typegen/tsc/build green.

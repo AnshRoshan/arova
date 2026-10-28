@@ -238,3 +238,14 @@ the updated fixture. Spec 23 (extended), D-28.
 credential-bound items stay blocked (OAuth client, sandbox provisioning, vendor/search keys, pgvector).
 
 **Same pass, the toast.** The client's abort handler still promised “the server was still writing the partial reply” for a tool loop, which now stores nothing. It now chooses by what actually happened: a stored partial → “Stopped after N characters…”, streamed text with the row still landing → “The partial is still being saved…”, nothing streamed → “Stopped before an answer was written. Nothing was stored.” Verified through the real composer in Chrome (`.impeccable/cdp-stop-toast.mjs`): stop during `using web_search` → that toast, composer free, only the greeting stored, `CONSOLE: []`.
+
+## Session 2026-10-28 (sweep) — history cursor and search transport
+**Complete.** Two silent failures found by the sweep. (1) **Load earlier** paged on the timestamp alone;
+250 messages sharing `created_at` returned 0 older rows, truncating the thread. Pages now use the pair
+`(created_at, id)` (window + pager), `beforeId` is optional so older clients still work, and the client
+computes the oldest row with the same tie-break. (2) The search adapter accepted a plain-`http` remote
+endpoint and would send the API key over it; non-local http is now refused before any fetch.
+
+**Verified.** `paging-proof.mjs` on the live app + DB: window 200, tie-only cursor 0 (the bug), pair
+cursor 50, no overlap, union 250, workspace deleted afterwards. `web-search.test.ts` proves the http
+refusal happens before `fetch`. 245/245 tests, typegen/tsc/build green. Spec 24, D-29.

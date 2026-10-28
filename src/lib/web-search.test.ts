@@ -55,6 +55,15 @@ test("a local endpoint is refused unless SEARCH_ALLOW_LOCAL=1", async () => {
   assert.equal(ok.ok, true);
 });
 
+test("a remote endpoint must be https, so a key and the query never ride plain http", async () => {
+  const profile = loadSearchProfile({ SEARCH_PROVIDER: "custom", SEARCH_BASE_URL: "http://search.example", SEARCH_API_KEY: "secret" });
+  let called = false;
+  const result = await searchWeb("q", profile, { fetchImpl: async () => { called = true; return new Response("{}"); } });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.match(result.error, /https/);
+  assert.equal(called, false, "the request is refused before anything is sent");
+});
+
 test("an HTTP error and an empty result set are refusals, not fabricated answers", async () => {
   const failed = await searchWeb("q", searxng, { fetchImpl: async () => new Response("no", { status: 503 }) });
   assert.equal(failed.ok, false);
