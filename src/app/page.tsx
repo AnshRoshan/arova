@@ -359,6 +359,8 @@ export default function Workbench() {
     const controller = new AbortController();
     abortRef.current = controller;
     const answeredBefore = thread.filter(m => m.role === "assistant").length;
+    // Tracked outside the try so the abort message can say whether anything ever streamed.
+    let streamed = "";
     setBusy(true); setPending(content); setStream(""); setToolState(null);
     try {
       const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sendMessage", agentId: agent.id, content, stream: true }), signal: controller.signal });
@@ -378,7 +380,7 @@ export default function Workbench() {
           if (!line) continue;
           let ev: { type: string; text?: string; board?: Board; error?: string; name?: string; status?: string; detail?: string };
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "delta") { answer += ev.text ?? ""; setStream(answer); setConsulting(null); }
+          if (ev.type === "delta") { answer += ev.text ?? ""; streamed = answer; setStream(answer); setConsulting(null); }
           else if (ev.type === "tool") setToolState({ name: String(ev.name ?? "tool"), status: String(ev.status ?? "running"), detail: ev.detail ? String(ev.detail) : undefined });
           else if (ev.type === "consult") setConsulting({ from: String((ev as { from?: string }).from), to: String((ev as { to?: string }).to), question: String((ev as { question?: string }).question) });
           else if (ev.type === "end") finalBoard = ev.board ?? null;
@@ -392,9 +394,13 @@ export default function Workbench() {
       if (e instanceof Error && e.name === "AbortError") {
         const board = await awaitAssistantRow({ agentId: agent.id }, answeredBefore);
         if (board) setData(board); else void load();
-        setToast(board
-          ? `Stopped after ${lastAnswerChars(board, { agentId: agent.id })} characters. What arrived is saved and marked partial.`
-          : "Stopped. The server was still writing the partial reply — reload to see it.");
+        const chars = board ? lastAnswerChars(board, { agentId: agent.id }) : 0;
+        // A stopped tool loop stores nothing, so the copy must not promise a partial nobody will see.
+        setToast(board && chars
+          ? `Stopped after ${chars} characters. What arrived is saved and marked partial.`
+          : streamed.trim()
+            ? "Stopped. The partial is still being saved — reload in a moment."
+            : "Stopped before an answer was written. Nothing was stored.");
         return true;
       }
       setToast(e instanceof Error ? e.message : "Something went wrong"); return false;
@@ -428,6 +434,8 @@ export default function Workbench() {
     const controller = new AbortController();
     abortRef.current = controller;
     const postedBefore = (data?.messages ?? []).filter(m => m.teamId === channel.id && m.role === "assistant").length;
+    // Tracked outside the try so the abort message can say whether a report ever streamed.
+    let streamed = "";
     setBusy(true); setPending(content); setStream(""); setLivePosts([]); setLiveRunId(null);
     try {
       const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "briefOrg", teamId: channel.id, content }), signal: controller.signal });
@@ -447,7 +455,7 @@ export default function Workbench() {
           if (!line) continue;
           let ev: { type: string; text?: string; board?: Board; error?: string; post?: Message; runId?: string; from?: string; to?: string; question?: string };
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
-          if (ev.type === "delta") { answer += ev.text ?? ""; setStream(answer); setConsulting(null); }
+          if (ev.type === "delta") { answer += ev.text ?? ""; streamed = answer; setStream(answer); setConsulting(null); }
           else if (ev.type === "start") setLiveRunId(ev.runId ?? null);
           else if (ev.type === "consult") setConsulting({ from: String(ev.from), to: String(ev.to), question: String(ev.question) });
           else if (ev.type === "post" && ev.post) { setLivePosts(p => [...p, ev.post!]); setConsulting(null); }
@@ -463,9 +471,16 @@ export default function Workbench() {
       if (e instanceof Error && e.name === "AbortError") {
         const board = await awaitAssistantRow({ teamId: channel.id }, postedBefore);
         if (board) setData(board); else void load();
+        const last = board ? [...rowsFor(board, { teamId: channel.id })].reverse()[0] : null;
+        // The server writes a stop row, not a report, when the brief ends this way — the toast
+        // must not call that row a partial report.
         setToast(board
-          ? `Stopped after ${lastAnswerChars(board, { teamId: channel.id })} characters of the report. What had already been posted stays in the channel.`
-          : "Stopped. The server was still writing the channel rows — reload to see what landed.");
+          ? last?.metadata?.stopped
+            ? "Stopped. The brief ended without a report; the channel records what had already been gathered."
+            : `Stopped after ${lastAnswerChars(board, { teamId: channel.id })} characters of the report. What had already been posted stays in the channel.`
+          : streamed.trim()
+            ? "Stopped. The channel rows are still being written — reload in a moment."
+            : "Stopped before the brief produced anything. Nothing was stored.");
         return true;
       }
       setToast(e instanceof Error ? e.message : "Something went wrong"); return false;

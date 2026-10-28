@@ -236,3 +236,5 @@ the updated fixture. Spec 23 (extended), D-28.
 
 **Next:** the remaining sweep is documentation-level; the queue of local code fixes is now empty. The
 credential-bound items stay blocked (OAuth client, sandbox provisioning, vendor/search keys, pgvector).
+
+**Same pass, the toast.** The client's abort handler still promised “the server was still writing the partial reply” for a tool loop, which now stores nothing. It now chooses by what actually happened: a stored partial → “Stopped after N characters…”, streamed text with the row still landing → “The partial is still being saved…”, nothing streamed → “Stopped before an answer was written. Nothing was stored.” Verified through the real composer in Chrome (`.impeccable/cdp-stop-toast.mjs`): stop during `using web_search` → that toast, composer free, only the greeting stored, `CONSOLE: []`.
