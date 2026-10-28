@@ -208,7 +208,7 @@ components:
 
 **Creative North Star: "The Instrument Panel, after dark"**
 
-Arova is not a dashboard wearing a dark theme; it is an instrument bench. A permanent icon rail owns navigation at the far left, a contextual section panel owns the list you are working through beside it, the fluid work surface carries the single title of whatever you opened — one seat's thread, or one organisation's channel — and the activity board on the right is a printer that only emits rows the server actually stored. The world is graphite: neutral surfaces step toward the reader and ink stays neutral. Colour is rationed to four jobs — one azure family for interaction, green/amber/red for a stored state, a fixed set of identity tints for *which agent*, and one hue per room for *where you are*. Depth is carried by a midnight light layer — aurora, glass, gradient, edge and lift — that sits on top of the graphite steps without replacing them. Nothing implies work that did not happen.
+Arova is not a dashboard wearing a dark theme; it is an instrument bench. A permanent icon rail owns navigation at the far left, a contextual section panel owns the list you are working through beside it, the fluid work surface carries the single title of whatever you opened — one seat's thread, or one organisation's channel — and the activity board — summoned from the rail, closed by default — is a printer that only emits rows the server actually stored. The world is graphite: neutral surfaces step toward the reader and ink stays neutral. Colour is rationed to four jobs — one azure family for interaction, green/amber/red for a stored state, a fixed set of identity tints for *which agent*, and one hue per room for *where you are*. Depth is carried by a midnight light layer — aurora, glass, gradient, edge and lift — that sits on top of the graphite steps without replacing them. Nothing implies work that did not happen.
 
 Density is the aesthetic. This is a working tool read every day by one operator who wants to continue, not tour. The surfaces are dark and close together; hairlines and surface steps do the structural work, and the light layer adds atmosphere without adding furniture. The identity tints are led by the avatar glyph, not the hue — the hue is a secondary marker precisely because there are only three and they cannot carry the whole identity load.
 
@@ -316,7 +316,7 @@ These exist for one specific job. **Rule: a second use promotes the value into `
 
 ## Layout
 
-The bench is a four-column grid defined once as `.workbench`: `68px` icon rail · `276px` section panel · `minmax(0,1fr)` fluid work surface · `320px` activity board, at `100dvh` with internal scroll. The section panel can collapse to `0` (`panel-closed`).
+The bench is a grid defined once as `.workbench`: `64px` icon rail · `244px` section panel · `minmax(0,1fr)` fluid work surface, at `100dvh` with internal scroll. A fourth `300px` activity column exists only while `show-activity` is set (the rail's Activity button), because the record is summoned, not parked. The section panel can collapse to `0` (`panel-closed`). For Integrations the panel is a five-item surface index, never a second copy of the page.
 
 - **Breakpoint 1250px:** the activity board leaves the grid and becomes a right-side overlay drawer (`min(372px,92vw)`, `--shadow-lift`); `.only-narrow` affordances appear.
 - **Breakpoint 860px:** the section panel becomes a full-width step (rail narrows to `60px`, `--gutter` tightens to 18px); the panel slides in as an overlay (`mpanel`); `.sheet-bar` compresses and `.facts` wrap to a third row. `.only-mobile` appears, `.only-wide` hides.
@@ -376,7 +376,7 @@ Form is restrained and mechanical. Radii are three tokens plus pills — `--r-sm
 
 ### Signature: the seat node & activity printer
 - **Seat node** (`.node`): 30px identity tile (glyph-first), a status dot answering "what is this seat doing" from stored rows (glowing in its own state colour), the name, message count in mono, and last-activity relative time; indent scales by reporting depth. Selected fills `h-wash` and inverts the tile to `h-tile`/`h-glyph`.
-- **Activity board** (`.board`): a printer, not a dashboard. Sections In flight / Needs attention / Upcoming / Record, each row one stored run, delegation, event, approval, or a live SSE fact — with a `caret-st` (the shared blink) marking a live row and mono timestamps. The foot states plainly that no background worker exists.
+- **Activity board** (`.board`, closed by default, summoned from the rail): a printer, not a dashboard. Sections In flight / Needs attention / Upcoming / Record, each row one stored run, delegation, event, approval, or a live SSE fact — with a `caret-st` (the shared blink) marking a live row and mono timestamps. The foot states plainly that no background worker exists.
 
 ### The organisation channel (`.thread.channel`)
 - The record of one company's briefed work, not a chat window. `.channel-head` states the stored team brief and the `.channel-seats` roster: pill chips with the seat's glyph tile, its `seatTone` dot, a `lead` marker on the seat a brief actually reaches, and a click that opens that seat's own thread.
