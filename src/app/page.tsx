@@ -1322,7 +1322,7 @@ export default function Workbench() {
                   {history.length > 0 && <div className="rows">{history.map(r => <button className="row" key={r.id} onClick={() => setDialog(r)}><span className="row-face"><Cpu size={14} /></span><span className="row-main"><strong>{r.title}</strong><span>{r.summary}</span></span><span className="row-side"><State status={r.status} /><time>{clock(r.startedAt)}</time></span></button>)}</div>}
                 </>;
               })()}
-              {!data.agents.length && <p className="hint">No seat exists yet, so there is nothing to run this as.</p>}
+              {!data.agents.length && <p className="hint">No seat exists yet, so there is nothing to run this as. <button type="button" className="ghost" onClick={() => setDialog("agent")}>Create a seat</button></p>}
               {sandboxResult && <div className="code" style={{ marginTop: 12 }}><div className="code-bar"><span className="code-lang">{sandboxResult.ok ? "output" : "refused"}</span><CopyBtn text={sandboxResult.ok ? sandboxResult.output ?? "" : sandboxResult.error ?? ""} label="Copy" /></div><pre><code>{sandboxResult.ok ? sandboxResult.output : sandboxResult.error}</code></pre></div>}
               <p className="hint">Every command is stored as a real run with its step and audit event. A shell is a high-risk tool; this sandbox reduces blast radius but shares the host kernel. {data.sandbox.provider === "wsl" ? "Your Linux home and Windows profile are hidden; network is absent rather than allow-listed." : "Credentials are denied by path; network starts with an empty allowlist."}</p>
             </div>
