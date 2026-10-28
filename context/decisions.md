@@ -375,3 +375,14 @@ Why not B: the strip's problem is five surfaces in a 244px track, not label leng
 Design: `.sp-tabs` wraps and each tab has a 72px floor (Agents/Automations keep tabs); Integrations replaces its tabs and duplicated lists with five `.sp-item` entries (icon, label, one-line note, count) and a "The rule" note; the main pane owns the content — connector cards in an auto-fill 300px grid, one page-level note instead of six repeated footers, the sandbox/channel surfaces capped at 880px. The board column is `display:none` unless `show-activity`, toggled by a new rail-foot button; Overview uses the width for a 300px aside (Up next, Recent work) that collapses under 1180px. Radii: `--r-sm` 4, `--r` 7, `--r-lg` 10; rail 9; the polish layer's 11/13/10 overrides follow.
 
 Cost: CSS tokens/grid/tabs, one tools-panel swap, one overview aside, one rail button. Reversibility: restore the old values and the Tabs block; nothing persisted changed. Evidence: `.impeccable/cdp-shell-check.mjs` — aside renders with two cards, board starts hidden and the rail button opens it, four Automation tabs have no overlap and fit the strip, five Integrations surfaces, the connector note is absent on MCP, `CONSOLE: []`; screenshots `redesign-4-*.png`; 252/252 tests.
+
+## D-35: one control per surface, and the thread keeps its measured column — 2026-10-28
+Trigger: unit 2 of the redesign. Automations repeated its four tabs in the panel **and** above the pane; the Organisation page used four paper cards for four numbers; Settings stretched inputs to ~1000px; the agent thread sat left against a dead strip once the activity column stopped being always-on.
+
+Options considered: (A) **keep one control (the pane's segmented control), the panel follows the active tab; org numbers become one inline strip; forms cap at 780px; the thread and composer centre on one 880px measure; the remaining 10–18px radii join the ladder**; (B) leave each surface as is and only tighten spacing; (C) hide the panel tabs entirely; (D) fix only the thread. Chosen: A.
+
+Why not B: duplication is the complaint, not padding. Why not C: the panel must still show what the active tab contains. Why not D: the review covered the whole app.
+
+Design: the Automations panel loses its Tabs and shows a labelled list for `autoTab`; the pane keeps the single segmented control. `.org-strip` replaces `.org-stats` (one hairline-bounded row). `.pane .stack` caps at 780px so fields stop stretching. `.thread` is 960px centred and `.composer` centres its box and bar at 880px. The radii sweep maps every leftover 10→7, 11→7, 12→8, 14→8, 16→8, 18→10, 20→12, 24→12.
+
+Cost: two JSX swaps, one strip, four CSS rules, a radius sweep. Reversibility: restore the Tabs block and the old values. Evidence: `.impeccable/cdp-shell-check.mjs` (one segmented control, no panel tabs, org strip present, form width ≤ 800), screenshots `redesign-9-*.png`, 252/252 tests.

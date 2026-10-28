@@ -194,3 +194,5 @@ allow the ASRT runtime there later.
 
 ## Session 2026-10-28 (redesign unit 1)
 The owner asked for a redesign: use the left chrome or drop it, decompress Integrations, sharpen radii. Unit 1 shipped: Integrations panel is a five-item sub-nav (no duplicate list), main pane owns connector cards in a 300px grid with one page-level note, activity column starts closed with a rail toggle, Overview gained a 300px Up next/Recent aside, radii went 8/12/16 → 4/7/10 (rail 9). Tabs wrap. Verified with `.impeccable/cdp-shell-check.mjs` at 1440 (and shots at 390). Next units: Agents/Organisation/Automations/Settings surfaces against the same rules.
+
+**Redesign unit 2:** one control per surface (Automations panel no longer repeats the tabs), org stats are one inline strip, settings forms cap at 780px, thread/composer centre on 960/880, and all leftovers joined the radius ladder (7/8/9/10/12). Extended `cdp-shell-check.mjs` asserts all of it. Next: the channel surface and the phone header density.
