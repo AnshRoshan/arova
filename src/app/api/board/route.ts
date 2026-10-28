@@ -9,7 +9,7 @@ import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validat
 import { scoreEval, summariseEvalResults } from "@/lib/evals";
 import { buildRegistry, type RegistryStats } from "@/lib/registry";
 import { skillPrompt } from "@/lib/skills";
-import { DEFAULT_RESERVE_TOKENS, completionMessage, completionText, estimateTokens, finishReason, loadProfiles, requestCompletion, resolveForAgent, sseDelta, trimToTokenBudget, usageFromJson, usageFromSseLine, type ModelMessage, type ProviderProfile } from "@/lib/model-gateway";
+import { DEFAULT_RESERVE_TOKENS, completionMessage, completionText, estimateTokens, finishReason, loadProfiles, readSseText, requestCompletion, resolveForAgent, sseDelta, trimToTokenBudget, usageFromJson, usageFromSseLine, type ModelMessage, type ProviderProfile } from "@/lib/model-gateway";
 import { loadSearchProfile } from "@/lib/web-search";
 import { READONLY_TOOL_IDS, runToolLoop, toolDefinitions } from "@/lib/tool-loop";
 import { ORG_SYSTEM, buildPeerPrompt, decollide, extractJsonObject, extractRoster, fallbackRoster, isOrgIntent, mentionConsult, isTeamIntent, normaliseRoster, parseRouting, parseTurn, resolvePeer, routingPrompt, type Roster, type Routing } from "@/lib/orchestration";
@@ -749,34 +749,6 @@ async function planReply(workspaceId: string, agent: ChatAgent, history: Turn[])
 }
 
 /** Stream a provider reply straight to the client, returning the text and why it ended. */
-async function streamText(response: Response, onText: (chunk: string) => void, shouldStop?: () => boolean): Promise<{ text: string; finish: string; usage: { input: number; output: number } | null }> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("Provider returned an empty stream");
-  const decoder = new TextDecoder();
-  let raw = "", answer = "", finish = "";
-  let usage: { input: number; output: number } | null = null;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    raw += decoder.decode(value, { stream: true });
-    const lines = raw.split(String.fromCharCode(10));
-    raw = lines.pop() ?? "";
-    for (const line of lines) {
-      const reason = finishReason(line);
-      if (reason) finish = reason;
-      const counted = usageFromSseLine(line);
-      if (counted) usage = counted;
-      const delta = sseDelta(line);
-      if (!delta) continue;
-      answer += delta;
-      onText(delta);
-    }
-    if (shouldStop?.()) break;
-  }
-  if (raw) { const tail = sseDelta(raw); if (tail) { answer += tail; onText(tail); } const t = finishReason(raw); if (t) finish = t; const u = usageFromSseLine(raw); if (u) usage = u; }
-  return { text: answer, finish, usage };
-}
-
 /**
  * Ask the cheap routing pass what to do. `allowed` carries only the actions the agent is
  * actually granted, so removing a capability in the UI removes the option from the model
@@ -818,7 +790,7 @@ async function consultPeer(
   asker: { id: string; name: string },
   peer: Peer,
   question: string,
-  chain: { depth: number; visited: string[]; send: (payload: Record<string, unknown>) => void },
+  chain: { depth: number; visited: string[]; send: (payload: Record<string, unknown>) => void; signal?: AbortSignal },
 ): Promise<string> {
   const profile = resolveForAgent(peer.provider, loadProfiles());
   if (!profile.configured) throw new Error(`${peer.name} uses ${profile.label}, which has no key on this server`);
@@ -829,7 +801,7 @@ async function consultPeer(
     const below = (await peersOf(workspaceId, { id: peer.id, teamId: peer.teamId ?? null }))
       .filter(p => !chain.visited.includes(p.id) && allowsAction(caps, "consult_teammate", p.id));
     if (below.length) {
-      let decision = await routeDecision(question, below, profile, workspaceId, { consult: true, handoff: false, approval: false, build: false });
+      let decision = await routeDecision(question, below, profile, workspaceId, { consult: true, handoff: false, approval: false, build: false }, chain.signal);
       if (decision.action === "none") {
         const named = mentionConsult(question, below, peer.id);
         if (named) decision = { action: "consult", agent: named.agent, question: named.question };
@@ -837,13 +809,13 @@ async function consultPeer(
       const sub = decision.action === "consult" && decision.question ? resolvePeer(decision.agent ?? "", below, peer.id) : null;
       if (sub && decision.question) {
         chain.send({ type: "consult", from: peer.name, to: sub.name, role: sub.role, question: decision.question });
-        const subAnswer = await consultPeer(workspaceId, { id: peer.id, name: peer.name }, sub, decision.question, { depth: chain.depth + 1, visited: [...chain.visited, sub.id], send: chain.send });
+        const subAnswer = await consultPeer(workspaceId, { id: peer.id, name: peer.name }, sub, decision.question, { depth: chain.depth + 1, visited: [...chain.visited, sub.id], send: chain.send, signal: chain.signal });
         gathered = `${String.fromCharCode(10)}${String.fromCharCode(10)}${sub.name} (${sub.role}) was asked "${decision.question}" and answered: ${subAnswer}. Weigh that against your own seat and disagree if it is wrong.`;
         await db.insert(delegations).values({ workspaceId, fromAgentId: peer.id, toAgentId: sub.id, question: decision.question, answer: subAnswer, model: profile.model, inputTokens: estimateTokens(question), outputTokens: estimateTokens(subAnswer) });
       }
     }
   }
-  const response = await requestCompletion({ profile, messages: [{ role: "system", content: buildPeerPrompt({ name: peer.name, role: peer.role, instructions: peer.instructions }, question, asker.name) + gathered }], maxTokens: 700, stream: false, timeoutMs: requestTimeoutMs() });
+  const response = await requestCompletion({ profile, messages: [{ role: "system", content: buildPeerPrompt({ name: peer.name, role: peer.role, instructions: peer.instructions }, question, asker.name) + gathered }], maxTokens: 700, stream: false, timeoutMs: requestTimeoutMs(), signal: chain.signal });
   const body = await response.json();
   const answer = completionText(body);
   const counted = usageFromJson(body);
@@ -1056,7 +1028,7 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, cli
               ];
               if (targetProfile.configured) {
                 const hResponse = await requestCompletion({ profile: targetProfile, messages: handoffChat, maxTokens: tokenBudgetFor(normaliseCapabilities(target.capabilities)), stream: true, timeoutMs: streamTimeoutMs() });
-                const handed = await streamText(hResponse, text => send({ type: "delta", text }), () => closed);
+                const handed = await readSseText(hResponse, text => send({ type: "delta", text }), () => closed);
                 answer = handed.text; finish = handed.finish; handedUsage = handed.usage;
                 // A reader that went away makes streamText return early, not throw. Without this
                 // check a cut-off answer would be stored as though the model had finished it.
@@ -1076,7 +1048,7 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, cli
           let hop: { peer: Peer; question: string; answer: string } | null = null;
           if (peer && decision.action === "consult" && decision.question) {
             send({ type: "consult", from: agent.name, to: peer.name, role: peer.role, question: decision.question });
-            hop = { peer, question: decision.question, answer: await consultPeer(workspaceId, agent, peer, decision.question, { depth: 1, visited: [agent.id, peer.id], send: () => {} }) };
+            hop = { peer, question: decision.question, answer: await consultPeer(workspaceId, agent, peer, decision.question, { depth: 1, visited: [agent.id, peer.id], send: () => {}, signal: stop.signal }) };
           }
 
           const finalMessages = hop ? integrateMessages(plan.chat, hop.peer, hop.question, hop.answer) : plan.chat;
@@ -1109,7 +1081,7 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, cli
             timeoutMs: streamTimeoutMs(),
           });
           try {
-            const streamed = await streamText(response, text => send({ type: "delta", text }), () => closed);
+            const streamed = await readSseText(response, text => send({ type: "delta", text }), () => closed);
             answer = streamed.text; finish = streamed.finish; streamedUsage = streamed.usage;
           } catch (error) {
             await persist(answer.trim()
@@ -1178,7 +1150,7 @@ const plainLine = (text: string, limit = 280) => {
  * `isClosed` is polled so a reader that went away still gets its partial stored; a trigger
  * passes a no-op sink and never-closed answer, and the same code path serves both.
  */
-export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string, send: (payload: Record<string, unknown>) => void, isClosed: () => boolean, initiator: "person" | "trigger" = "person"): Promise<{ runId: string; status: string; summary: string }> {
+export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string, send: (payload: Record<string, unknown>) => void, isClosed: () => boolean, initiator: "person" | "trigger" = "person", signal?: AbortSignal): Promise<{ runId: string; status: string; summary: string }> {
   const NL = String.fromCharCode(10);
   const briefId = crypto.randomUUID();
   const [run] = await db.insert(runs).values({ workspaceId, agentId: lead.id, title: `Brief · ${team.name}`, status: "RUNNING", summary: asked.slice(0, 240), initiator, startedAt: new Date() }).returning();
@@ -1199,6 +1171,23 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     return row;
   };
   const leadSeat = { id: lead.id, name: lead.name };
+  // A reader who leaves is polled between steps and aborts any unary call already in flight.
+  const stopped = () => isClosed() || Boolean(signal?.aborted);
+  const summons: { peer: Peer; question: string; answer: string }[] = [];
+  let routed = false;
+  /** The reader's stop: what already landed stays, nothing new starts, and the channel says why. */
+  const stopBrief = async () => {
+    const gathered = summons.map(s => s.peer.name);
+    const content = gathered.length
+      ? `The brief was stopped before the report was written. ${gathered.length} teammate post${gathered.length === 1 ? "" : "s"} above (${gathered.join(", ")}) are what was gathered; no further seat was asked.`
+      : routed
+        ? "The brief was stopped before any teammate answered. No report was written."
+        : "The brief was stopped before any seat was asked. No model call was made.";
+    await post({ content, kind: "channel_gap", metadata: { stopped: true, summons: gathered } }, leadSeat);
+    await step("Stopped by the reader", `${gathered.length} post(s) gathered`);
+    await audit(workspaceId, lead.id, "brief.stopped", "Stopped by the reader; work already posted stays.");
+    await finishRun("CANCELLED", "The reader stopped the brief.");
+  };
 
   try {
     const profile = resolveForAgent(lead.provider, loadProfiles());
@@ -1221,9 +1210,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     const memory = await recallMemories(workspaceId, team.id, asked);
     const chat = chatMessages(lead, await channelTurns(workspaceId, team.id), profile, consultPeers, team.name, memory.block || undefined);
     const ceiling = summonCeiling({ envMax: maxDelegations(), seatMaxTurns: caps.maxTurns });
-    const summons: { peer: Peer; question: string; answer: string }[] = [];
     let remaining = consultPeers;
-    let routed = false;
 
     /** The row that admits the brief was cut short, then the stop. */
     const stopShort = async (unasked: Peer[]) => {
@@ -1245,12 +1232,15 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
       await finishRun("WAITING_FOR_TOOL", "The daily model budget stopped the brief before the report was written.");
     };
 
+    if (stopped()) { await stopBrief(); return outcome; }
+
     for (let hop = 0; hop < ceiling && remaining.length; hop++) {
+      if (stopped()) { await stopBrief(); return outcome; }
       if (await overQuota(workspaceId, profile)) { await stopShort(remaining); return outcome; }
       // A second pass sees what the first teammate already said, so it must earn a new name.
       const question = hop === 0 ? asked : `${asked}${NL}${NL}Already gathered from ${summons.map(s => s.peer.name).join(" and ")}: ${summons[summons.length - 1].answer.slice(0, 600)}${NL}Consult again only if another seat's judgement is genuinely still missing.`;
       routed = true;
-      let decision = await routeDecision(question, remaining, profile, workspaceId, { consult: true, handoff: false, approval: false, build: false });
+      let decision = await routeDecision(question, remaining, profile, workspaceId, { consult: true, handoff: false, approval: false, build: false }, signal);
       if (decision.action === "none" && hop === 0) {
         const named = mentionConsult(asked, remaining, lead.id);
         if (named) decision = { action: "consult", agent: named.agent, question: named.question };
@@ -1260,14 +1250,17 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
       const question2 = decision.question;
       const peerProfile = resolveForAgent(peer.provider, loadProfiles());
       if (await overQuota(workspaceId, peerProfile)) { await stopShort(remaining); return outcome; }
+      if (stopped()) { await stopBrief(); return outcome; }
       send({ type: "consult", from: lead.name, to: peer.name, role: peer.role, question: question2 });
       await step(`${peer.name} asked`, question2.slice(0, 200));
       let answer = "";
       try {
         // A summons answers the question it was asked: it does not run a chain of its own, so
         // one brief stays inside the calls it planned no matter how the peer is configured.
-        answer = await consultPeer(workspaceId, leadSeat, peer, question2, { depth: NO_SUB_CONSULT, visited: [lead.id, ...summons.map(s => s.peer.id), peer.id], send: () => {} });
+        answer = await consultPeer(workspaceId, leadSeat, peer, question2, { depth: NO_SUB_CONSULT, visited: [lead.id, ...summons.map(s => s.peer.id), peer.id], send: () => {}, signal });
       } catch (error) {
+        // A stop is not a gap in the org's answer, and it must not be stored as one.
+        if (stopped()) { await stopBrief(); return outcome; }
         const why = error instanceof Error ? error.message : "the teammate call failed";
         await post({ content: `Asked ${peer.name}: ${question2}${NL}${peer.name} did not answer (${why}). Nothing from that seat is part of this report.`, kind: "channel_gap", metadata: { askedPeer: peer.name, failed: true } }, leadSeat);
         await step(`${peer.name} did not answer`, why.slice(0, 200));
@@ -1283,11 +1276,12 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     if (await overQuota(workspaceId, profile)) { await stopWithoutReport(); return outcome; }
     let messages = chat;
     for (const s of summons) messages = integrateMessages(messages, s.peer, s.question, s.answer);
+    if (stopped()) { await stopBrief(); return outcome; }
 
     const response = await requestCompletion({ profile, messages, maxTokens: tokenBudgetFor(caps), stream: true, timeoutMs: streamTimeoutMs() });
     let answer = "", finish = "", usage: { input: number; output: number } | null = null;
     try {
-      const streamed = await streamText(response, text => send({ type: "delta", text }), isClosed);
+      const streamed = await readSseText(response, text => send({ type: "delta", text }), isClosed);
       answer = streamed.text; finish = streamed.finish; usage = streamed.usage;
     } catch (error) {
       const reply = answer.trim()
@@ -1320,6 +1314,8 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     await step("Report posted", `${said.length} characters from ${profile.model}`);
     await finishRun("COMPLETED", said ? plainLine(said) : "The lead wrote reasoning and no answer followed. The channel keeps exactly what it produced.");
   } catch (error) {
+    // The abort is the reader's own action, not a blank in the org's work to report as a failure.
+    if (stopped()) { await stopBrief(); return outcome; }
     const why = error instanceof Error ? error.message : "unknown error";
     console.error("Org brief failed", team.name, why);
     try {
@@ -1331,17 +1327,23 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
   return outcome;
 }
 
-/** The same brief, streamed to a browser. */
-function streamBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string) {
+/** The same brief, streamed to a browser. A reader who leaves aborts the unary work in flight. */
+function streamBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string, clientSignal?: AbortSignal) {
   const encoder = new TextEncoder();
   let closed = false;
+  const stop = new AbortController();
+  const leave = () => { closed = true; stop.abort(); };
+  if (clientSignal) {
+    if (clientSignal.aborted) leave();
+    else clientSignal.addEventListener("abort", leave, { once: true });
+  }
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       const send = (payload: Record<string, unknown>) => {
         if (closed) return;
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`)); } catch { closed = true; }
       };
-      void runBrief(workspaceId, team, lead, asked, send, () => closed).catch(error => {
+      void runBrief(workspaceId, team, lead, asked, send, () => closed, "person", stop.signal).catch(error => {
         console.error("Org brief crashed", team.name, error instanceof Error ? error.message : "unknown error");
       }).finally(async () => {
         try { send({ type: "end", board: await board(workspaceId) }); } catch { /* client already gone */ }
@@ -1349,7 +1351,7 @@ function streamBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked:
         try { controller.close(); } catch { /* already closed */ }
       });
     },
-    cancel() { closed = true; },
+    cancel() { leave(); },
   });
 
   return new Response(stream, { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" } });
@@ -1473,7 +1475,7 @@ export async function POST(request: NextRequest) {
       // The brief is a channel row before anything is asked, so the record starts with who wanted what.
       await postToChannel(workspaceId, team.id, "user", { content: input.content, kind: "message", metadata: {} });
       await audit(workspaceId, lead.id, "org.briefed", `${team.name}: ${input.content.slice(0, 120)}`);
-      return streamBrief(workspaceId, team, lead, input.content);
+      return streamBrief(workspaceId, team, lead, input.content, request.signal);
     } else if (action === "assignOrgLead") {
       const input = z.object({ teamId: uuid, agentId: uuid }).parse(body);
       const [team] = await db.select().from(teams).where(and(eq(teams.id, input.teamId), eq(teams.workspaceId, workspaceId))).limit(1);

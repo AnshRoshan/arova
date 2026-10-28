@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildEndpoint, completionPayload, estimateTokens, finishReason, requestCompletion, usageFromJson, usageFromSseLine, isRetryableStatus, loadProfiles, parseStreamDelta, resolveForAgent, trimToTokenBudget } from "./model-gateway.ts";
+import { buildEndpoint, completionPayload, estimateTokens, finishReason, readSseText, requestCompletion, usageFromJson, usageFromSseLine, isRetryableStatus, loadProfiles, parseStreamDelta, resolveForAgent, trimToTokenBudget } from "./model-gateway.ts";
 
 
 const dahlProfile = loadProfiles({ PROVIDERS: "dahl", DAHL_BASE_URL: "https://inference.dahl.global/v1", DAHL_MODEL: "MiniMaxAI/MiniMax-M2.7", DAHL_API_KEY: "secret-key", DAHL_MAX_CONTEXT: "32000" }).find(p => p.name === "dahl")!;
@@ -187,4 +187,21 @@ test("requestCompletion: a caller who stopped is not retried — one attempt, th
     if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
   }
   assert.equal(attempts, 1, "a stop is final, not a transient failure to spend budget on");
+});
+
+test("a stopped SSE read closes the connection and keeps the text already shown", async () => {
+  let cancelled = false;
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "hi" }, finish_reason: null }] })}\n\n`));
+      // If the reader is not cancelled, the stream ends by itself shortly and the flag stays false.
+      setTimeout(() => { try { controller.close(); } catch { /* already cancelled */ } }, 120);
+    },
+    cancel() { cancelled = true; },
+  });
+  let stop = false;
+  const result = await readSseText(new Response(body, { status: 200 }), () => { stop = true; }, () => stop);
+  assert.equal(result.text, "hi", "what already arrived is kept");
+  assert.equal(cancelled, true, "the provider connection is closed, not left reading into nothing");
 });
