@@ -161,3 +161,16 @@ Five commits on `main`, none pushed: `9c6fb91` (one citation ledger), `d072736` 
 - Next 16.2.6 carries a critical advisory; upgrading to 16.4.3 is the owner's call.
 - The 20 pre-existing lint errors stay out of the gate unless the owner asks for them.
 Owner decisions still open: the 28-seat Nexus Labs org (L-12), reasoning-in-content display (L-04), and whether to push `main`.
+
+## Session 2026-10-28 (night) — the sandbox is provisioned but the host still refuses to launch it
+Owner ran `npx srt windows-install`. Two defects of ours fixed: (1) `denyRead` home entries (`~/.ssh`, …) made
+srt-win rewrite the profile root's DACL and walk the tree — removing them made the ACL grant finish in <1s;
+`buildSrtSettings` is now platform-aware (home denies only on non-Windows; `.env` denies stay). (2) An
+`incomplete` profile read grant refuses every session; `profile forget` took >1h and repaired it. The Sandbox
+tab states the right install (`--skip-profile-grant`, Secondary Logon).
+
+**Still blocked on the host:** `srt-win exec` fails `CreateProcessWithLogonW(srt-sandbox): Access denied
+(0x80070005)` with seclogon running, the account enabled, the credential present, no leftover process. Next:
+`npx srt uninstall` then `npx srt windows-install --skip-profile-grant` (UAC), restart dev from the user's own
+terminal, Check. If it still refuses, this host cannot start the sandbox account; the provider stays
+fail-closed and nothing else is affected. D-30, spec 19.
