@@ -67,6 +67,31 @@ await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, devi
 await sleep(800);
 await shot(`${P}-mobile`);
 
+
+await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+await sleep(600);
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Overview'); b?.click(); return true; })()`);
+await sleep(900);
+await read(`(() => { document.querySelector('button.agent-card')?.click(); return true; })()`);
+await sleep(1000);
+await shot(`${P}-thread`);
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Organisation'); b?.click(); return true; })()`);
+await sleep(900);
+await shot(`${P}-org`);
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Automations'); b?.click(); return true; })()`);
+await sleep(900);
+await shot(`${P}-automations`);
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Settings'); b?.click(); return true; })()`);
+await sleep(900);
+await shot(`${P}-settings`);
+await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+await sleep(700);
+await read(`(() => { const rail = [...document.querySelectorAll('.iconrail button')].find(el => (el.getAttribute('aria-label') || '') === 'Overview'); rail?.click(); return true; })()`);
+await sleep(800);
+await read(`(() => { document.querySelector('button.agent-card')?.click(); return true; })()`);
+await sleep(800);
+await shot(`${P}-thread-mobile`);
+
 console.log(JSON.stringify({ workspace, teamId }));
 ws.close(); chrome.kill(); await sleep(300); try { rmSync(profile, { recursive: true, force: true }); } catch { /* chrome may still hold a file */ }
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
