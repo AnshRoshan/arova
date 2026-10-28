@@ -191,3 +191,6 @@ real Check button: echo output, profile hidden, network unreachable, `/etc` read
 runs/audits recorded. Limits stated in the UI: no proxy/allowlist, no seccomp monitor, no snapshot.
 Spec 19 (WSL section), D-33. The Windows path remains for a console session; Node+socat in WSL would
 allow the ASRT runtime there later.
+
+## Session 2026-10-28 (redesign unit 1)
+The owner asked for a redesign: use the left chrome or drop it, decompress Integrations, sharpen radii. Unit 1 shipped: Integrations panel is a five-item sub-nav (no duplicate list), main pane owns connector cards in a 300px grid with one page-level note, activity column starts closed with a rail toggle, Overview gained a 300px Up next/Recent aside, radii went 8/12/16 → 4/7/10 (rail 9). Tabs wrap. Verified with `.impeccable/cdp-shell-check.mjs` at 1440 (and shots at 390). Next units: Agents/Organisation/Automations/Settings surfaces against the same rules.

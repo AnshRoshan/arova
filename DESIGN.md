@@ -345,12 +345,12 @@ Depth is carried by three registers, in order of how often they appear:
 
 ## Shapes
 
-Form is restrained and mechanical. Radii are three tokens plus pills — `--r-sm` 8px (tiles, small chips), `--r` 12px (tabs track, inline groups), `--r-lg` 16px (composer box, large panels), `99px` pills (chips, meters, badges, `fact`, `org-count`) — with a documented one-off ladder for the chrome between them: 9 (tab buttons), 10 (buttons, inputs, icon buttons), 11 (list rows, seat nodes), 13 (rail buttons, rail logo), 14 (row groups, cards, memory panel, team card, control-room cards), 18 (composer box, control-room cards), 20 (dialog, control-room hero), 24 (welcome hero). Borders are 1px hairlines; there are no heavy outlines and no decorative clipping. Tiles (30px seat nodes, 38px identity/avatar) are the recurring silhouette, and the active seat gets a 3px edge tab that bleeds from the rail (`rail-btn.on::before`). The code well (`--code-bg`) is the only deliberately recessed dark surface other than the rail.
+Form is restrained and mechanical. Radii are three tokens plus pills — `--r-sm` 4px (tiles, small chips, tab buttons), `--r` 7px (rows, cards, tabs track, buttons, inputs), `--r-lg` 10px (large panels), `99px` pills (chips, meters, badges, `fact`, `org-count`) — with two chrome one-offs: 9 (rail buttons, rail logo) and 20 (dialog, control-room hero). The 2026-10-28 redesign sharpened the ladder from 8/12/16 and removed the old 11–18px middle so surfaces read as cut rather than pillowed. Borders are 1px hairlines; there are no heavy outlines and no decorative clipping. Tiles (30px seat nodes, 38px identity/avatar) are the recurring silhouette, and the active seat gets a 3px edge tab that bleeds from the rail (`rail-btn.on::before`). The code well (`--code-bg`) is the only deliberately recessed dark surface other than the rail.
 
 ## Components
 
 ### Buttons
-- **Primary** (`.primary`): the accent gradient, dark `on-azure` label, 700 weight, 10px radius, padding `7px 13px`; hover brightens via `filter` and lifts 1px with a deeper shadow, active presses 1px, transition 120–220ms on `--dur`.
+- **Primary** (`.primary`): the accent gradient, dark `on-azure` label, 700 weight, 7px radius, padding `7px 13px`; hover brightens via `filter` and lifts 1px with a deeper shadow, active presses 1px, transition 120–220ms on `--dur`.
 - **Destructive confirmation** (`.primary.solid-fault`): the one primary that takes the `fault` fill with a dark glyph; hover inverts to `fault-line` + `fault`.
 - **Ghost** (`.ghost`): sheet background, `rule-2` border, ink text; hover fills with a faint azure wash, lifts the border to `azure-line`, and raises 1px. `.ghost.on` takes the `grad-soft` selected treatment.
 - **Danger** (`.danger`): a ghost that takes **fault** text and `fault-line` border; hover fills `fault-wash`. Danger stays a *ghost* — it is not a filled red button.
@@ -363,11 +363,11 @@ Form is restrained and mechanical. Radii are three tokens plus pills — `--r-sm
 - **Variants:** `.ran` / `.waiting` / `.fault` each take the matching state wash + state text + state-line border and a faint glow in their own channel; `.idle` is `raised` + `ink-2` (samples and unconfigured); `.azure` is the interaction tint. State chips are only ever rendered from `toneOf(status)`.
 
 ### Cards / rows
-- **Corner:** 14–16px. **Background:** `card` (or the agent-card's identity-washed gradient) with a `rule` hairline, `--edge` + `--lift`. Rows (`.row`, `.node`, `.sp-item`) separate with a 1px top border and hover to an azure- or room-tinted wash.
+- **Corner:** 7px (`--r`). **Background:** `card` (or the agent-card's identity-washed gradient) with a `rule` hairline, `--edge` + `--lift`. Rows (`.row`, `.node`, `.sp-item`) separate with a 1px top border and hover to an azure- or room-tinted wash.
 - **Agent card** (`.agent-card`): 216px min column, gradient ground with an identity `::before` wash bleeding from the top edge, 38px identity avatar tile carrying an identity-hued glow, an `agent-live` dot in `ran` (or `ink-3` when paused); hover rises 3px, deepens the gradient, and glows the border in the identity hue; the corner arrow fades in.
 
 ### Inputs / fields
-- **Style:** `sunken` background, `rule-2` border, 10px radius; textarea auto-grows to 168px.
+- **Style:** `sunken` background, `rule-2` border, 7px radius; textarea auto-grows to 168px.
 - **Focus:** border shifts to azure with a soft wash ring (the composer box uses the active identity hue instead: `h-line` border, `h-wash` ring).
 - **Placeholder/muted:** `ink-3`. Disabled: opacity `.45`, `not-allowed`.
 
