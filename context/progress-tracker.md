@@ -180,3 +180,27 @@ Design-system bookkeeping after the build: DESIGN.md gained the channel surface 
 - The empty first-run state was reasoned about from the code, not seen in a browser: `src/app/page.tsx` already guards `!data?.agents.length`, and the bench renders "No one here yet / Add the first agent", so no new UI was required. It still needs one human look.
 - `npm run lint` fails with 18 errors, all in `src/app/page.tsx` on `react-hooks/*` and one `react/no-unescaped-entities`. Pre-existing and untouched, consistent with the note above that lint is not this project's gate.
 
+
+## Session 2026-10-28 (later) — the citation ledger fixes a numbering defect
+**Complete.** Reading the tool loop found a real defect rather than a wish: every `web_search` numbered
+its own results from `[1]`, and the UI re-numbered the deduped source list from `[1]` again — so once a
+seat searched twice, every citation named a page the model had not read. `web_fetch` produced no source
+at all, and an invented number rendered exactly like a real one.
+
+**Feature 22 built, test-first.** `src/lib/citations.ts` (7 tests, confirmed RED first): one ledger per
+loop assigns each unique URL a stable number (fragment-stripped, capped at 12, past-cap sources are never
+numbered), and `citationReport` splits `{cited, unresolved, uncited}` while ignoring `[0]` and numbers in
+code. `executeToolCall` takes the ledger, so search text and the source list share numbering; `web_fetch`
+returns its final URL + title and its output is prefixed with its number. The report runs on the answer,
+not the reasoning block, and is stored by both reply paths through one `toolLoopMetadata()` helper. The
+UI prints each source's own index and adds a waiting-coloured line naming invented citations. The system
+prompt now says numbers are fixed for the whole reply.
+
+**Verified.** 241/241 tests, tsc clean. Live against `.impeccable/tool-loop-fixture.mjs` (two searches,
+second repeats a URL, answer cites [1], [3] and invents [9]): stored sources `[1,2,3]` in discovery order,
+`citations {cited:[1,3], unresolved:[9], uncited:[2]}`, two `tool.called` audits, report survives reload
+(`.impeccable/citation-proof.mjs`). Real Chrome at 1440×900 and 390×844: sources, the [9] warning in the
+waiting token, `CONSOLE: []`, no overflow (`.impeccable/cdp-citations.mjs`).
+
+**Not verified.** A real search provider and a vendor model (no key), unchanged from spec 21. No new
+schema; old rows fall back to list position. Spec 22, D-26.

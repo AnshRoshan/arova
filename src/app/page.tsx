@@ -1141,7 +1141,16 @@ export default function Workbench() {
                     <div style={{ minWidth: 0 }}><b>{String(m.metadata?.name ?? "New routine")}</b><span> · {String(m.metadata?.schedule ?? "Every day at 8:00 AM")} · {data.workspace.timezone}</span></div>
                     <button className="primary" disabled={busy} onClick={() => act("createRoutine", { agentId: agent.id, name: String(m.metadata?.name ?? "New routine"), description: String(m.metadata?.description ?? ""), schedule: String(m.metadata?.schedule ?? "Every day at 8:00 AM") }, "Routine saved")}>Save<ArrowRight size={14} /></button>
                   </div>}
-                  {(() => { const sources = Array.isArray(m.metadata?.sources) ? m.metadata.sources as { title?: string; url?: string }[] : []; return sources.length ? <p className="hint">Sources: {sources.map((s, i) => <span key={`${s.url}-${i}`}>{i ? " · " : ""}<a href={String(s.url)} target="_blank" rel="noreferrer noopener">[{i + 1}] {String(s.title || s.url)}</a></span>)}</p> : null; })()}
+                  {(() => {
+                    const sources = Array.isArray(m.metadata?.sources) ? m.metadata.sources as { title?: string; url?: string; index?: number }[] : [];
+                    const report = (m.metadata?.citations ?? null) as { unresolved?: unknown } | null;
+                    const unresolved = Array.isArray(report?.unresolved) ? report.unresolved.filter((n): n is number => typeof n === "number") : [];
+                    if (!sources.length && !unresolved.length) return null;
+                    return <>
+                      {sources.length ? <p className="hint">Sources: {sources.map((s, i) => <span key={`${s.url}-${i}`}>{i ? " · " : ""}<a href={String(s.url)} target="_blank" rel="noreferrer noopener">[{s.index ?? i + 1}] {String(s.title || s.url)}</a></span>)}</p> : null}
+                      {unresolved.length ? <p className="hint" style={{ color: "var(--waiting)" }}>Cited [{unresolved.join("], [")}] but no tool returned that number — those claims are not backed by anything this seat retrieved.</p> : null}
+                    </>;
+                  })()}
                   {isLast && provenance && <details className="prov">
                     <summary>
                       <span className="prov-state">{provenance.state}</span>

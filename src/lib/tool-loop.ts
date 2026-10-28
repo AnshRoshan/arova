@@ -7,14 +7,16 @@
 
 import type { ModelMessage, ToolCall, ToolDefinition } from "./model-gateway.ts";
 import { runLocalTool } from "./local-tools.ts";
-import { webFetch } from "./web-fetch.ts";
-import { formatSearchResults, searchWeb, type SearchProfile, type SearchResult } from "./web-search.ts";
+import { webFetch, type FetchPolicy } from "./web-fetch.ts";
+import { addSource, citationReport, createLedger, type CitationLedger, type CitationReport, type CitationSource } from "./citations.ts";
+import { splitReasoning } from "./markdown.ts";
+import { formatSearchResults, searchWeb, type SearchProfile } from "./web-search.ts";
 
 export const READONLY_TOOL_IDS = ["calc", "now_in_timezone", "json_transform", "checksum", "web_fetch"] as const;
 export type ToolLoopEvent = { type: "tool"; name: string; status: "running" | "completed" | "failed"; detail?: string };
-export type ToolExecution = { ok: boolean; output: string; sources?: SearchResult[] };
-export type ToolLoopResult = { content: string; used: string[]; sources: { title: string; url: string }[]; partial: boolean };
-export type ToolLoopDeps = { searchProfile?: SearchProfile; fetchImpl?: typeof fetch };
+export type ToolExecution = { ok: boolean; output: string; sources?: CitationSource[] };
+export type ToolLoopResult = { content: string; used: string[]; sources: CitationSource[]; citations: CitationReport; partial: boolean };
+export type ToolLoopDeps = { searchProfile?: SearchProfile; fetchImpl?: typeof fetch; lookup?: FetchPolicy["lookup"] };
 export type CompleteTurn = (messages: ModelMessage[], tools: ToolDefinition[]) => Promise<{ content: string; toolCalls: ToolCall[] }>;
 
 const schema = (description: string, properties: Record<string, unknown>, required: string[]): ToolDefinition["function"]["parameters"] => ({
@@ -44,7 +46,7 @@ export function toolDefinitions(ids: string[], searchConfigured: boolean): ToolD
 const str = (value: unknown): string => typeof value === "string" ? value : "";
 const clamp = (value: string, limit: number): string => value.length <= limit ? value : `${value.slice(0, limit)}… truncated at ${limit} characters of ${value.length}`;
 
-export async function executeToolCall(call: ToolCall, allowed: string[], deps: ToolLoopDeps = {}): Promise<ToolExecution> {
+export async function executeToolCall(call: ToolCall, allowed: string[], deps: ToolLoopDeps = {}, ledger: CitationLedger = createLedger()): Promise<ToolExecution> {
   const name = call.function.name;
   if (!allowed.includes(name)) return { ok: false, output: `Tool "${name}" is not granted to this seat.` };
   let args: Record<string, unknown>;
@@ -57,15 +59,21 @@ export async function executeToolCall(call: ToolCall, allowed: string[], deps: T
   }
 
   if (name === "web_fetch") {
-    const fetched = await webFetch(str(args.url), { fetchImpl: deps.fetchImpl });
-    return fetched.ok ? { ok: true, output: fetched.output } : { ok: false, output: fetched.error };
+    const fetched = await webFetch(str(args.url), { fetchImpl: deps.fetchImpl, lookup: deps.lookup });
+    if (!fetched.ok) return { ok: false, output: fetched.error };
+    // A page that was read is a source in its own right; without this it could inform the answer
+    // and never appear in the list of what the answer stands on.
+    const source = addSource(ledger, { title: fetched.title, url: fetched.url });
+    return { ok: true, output: source ? `[${source.index}] ${fetched.output}` : fetched.output, sources: source ? [source] : [] };
   }
   if (name === "web_search") {
     if (!deps.searchProfile?.configured) return { ok: false, output: "No search provider is configured on this server." };
     const found = await searchWeb(str(args.query), deps.searchProfile, { fetchImpl: deps.fetchImpl });
     if (!found.ok) return { ok: false, output: found.error };
-    const formatted = formatSearchResults(found.results);
-    return { ok: true, output: formatted.text, sources: found.results };
+    // Numbers come from the loop-wide ledger, so two searches never both claim [1].
+    const sources = found.results.map(result => addSource(ledger, { title: result.title, url: result.url }));
+    const formatted = formatSearchResults(found.results, sources.map(source => source?.index ?? null));
+    return { ok: true, output: formatted.text, sources: sources.filter((source): source is CitationSource => Boolean(source)) };
   }
 
   const inputs: Record<string, string> = {
@@ -92,38 +100,34 @@ export async function runToolLoop(input: {
 }): Promise<ToolLoopResult> {
   const messages = input.messages;
   const used: string[] = [];
-  const sources: { title: string; url: string }[] = [];
-  const seen = new Set<string>();
+  const ledger = createLedger();
   const maxSteps = Math.max(1, Math.min(8, input.maxSteps ?? 4));
   let lastContent = "";
+  // The report runs on the answer, not on reasoning: a number mentioned while thinking is not a claim.
+  const finish = (content: string, partial: boolean): ToolLoopResult => ({
+    content,
+    used,
+    sources: ledger.sources,
+    citations: citationReport(splitReasoning(content).answer, ledger.sources),
+    partial,
+  });
 
   for (let step = 0; step < maxSteps; step++) {
     const turn = await input.complete(messages, input.tools);
     lastContent = turn.content;
-    if (!turn.toolCalls.length) return { content: lastContent, used, sources, partial: false };
+    if (!turn.toolCalls.length) return finish(lastContent, false);
 
     messages.push({ role: "assistant", content: turn.content || null, tool_calls: turn.toolCalls });
     for (const call of turn.toolCalls) {
       input.onEvent?.({ type: "tool", name: call.function.name, status: "running" });
       const started = Date.now();
-      const result = await executeToolCall(call, input.allowed, input.deps);
+      const result = await executeToolCall(call, input.allowed, input.deps, ledger);
       used.push(call.function.name);
-      for (const source of result.sources ?? []) {
-        if (!seen.has(source.url) && sources.length < 5) {
-          seen.add(source.url);
-          sources.push({ title: source.title, url: source.url });
-        }
-      }
       messages.push({ role: "tool", tool_call_id: call.id, content: result.ok ? result.output : `Tool error: ${result.output}` });
       input.audit?.(`${call.function.name}: ${result.ok ? "ok" : "refused"} (${Date.now() - started}ms)`);
       input.onEvent?.({ type: "tool", name: call.function.name, status: result.ok ? "completed" : "failed", detail: result.ok ? undefined : result.output });
     }
   }
 
-  return {
-    content: lastContent.trim() || `Stopped after ${maxSteps} tool steps without a final answer.`,
-    used,
-    sources,
-    partial: true,
-  };
+  return finish(lastContent.trim() || `Stopped after ${maxSteps} tool steps without a final answer.`, true);
 }

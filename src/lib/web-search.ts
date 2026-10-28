@@ -76,8 +76,16 @@ export async function searchWeb(query: string, profile: SearchProfile, deps: Sea
   }
 }
 
-export function formatSearchResults(results: SearchResult[]): { text: string; sources: { title: string; url: string }[] } {
+/**
+ * Formats results for the model. `numbers` comes from the loop's citation ledger so a second search
+ * continues the numbering instead of starting at [1] again; null means the source budget is spent
+ * and the result is context only, never citable.
+ */
+export function formatSearchResults(results: SearchResult[], numbers?: (number | null)[]): { text: string; sources: { title: string; url: string }[] } {
   const sources = results.map(result => ({ title: result.title, url: result.url }));
-  const text = results.map((result, index) => `[${index + 1}] ${result.title}\n${result.url}\n${result.snippet}`).join("\n\n");
+  const text = results.map((result, index) => {
+    const n = numbers ? numbers[index] : index + 1;
+    return `[${n ?? "-"}] ${result.title}\n${result.url}\n${result.snippet}`;
+  }).join("\n\n");
   return { text, sources };
 }
