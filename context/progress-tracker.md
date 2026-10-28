@@ -295,3 +295,5 @@ host and `hidden` in the sandbox; `/dev/tcp/1.1.1.1/443` → “Network is unrea
 audits. Real Chrome: Integrations → Sandbox → Check prints `arova-sandbox-ok`, `CONSOLE: []`, no
 overflow. 5/5 provider tests. Honest limits in the UI: no proxy/allowlist (network absent), no seccomp
 monitor, no snapshot. Spec 19 WSL section, D-33.
+
+**Stale UI after refresh.** The owner's screenshot showed the pre-feature Integrations panel (two tabs, "MCP servers 8", copy that exists nowhere in the repository). The served bundles contain only the current copy and the server log showed repeated `GET /sw.js 404`: a service worker from an earlier app on this origin was still serving its cached build. `public/sw.js` is now a kill switch — when that worker next checks for an update it takes over, clears every cache, unregisters itself and reloads the clients. The Sandbox panel's empty state also offers **Create a seat** instead of a dead end.
