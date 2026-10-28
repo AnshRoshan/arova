@@ -50,8 +50,14 @@ const tabs = await read(`[...document.querySelectorAll('.sp-tabs [role="tab"]')]
 const clicked = await read(`(() => { const tab = [...document.querySelectorAll('.sp-tabs [role="tab"]')].find(el => /Sandbox/.test(el.textContent || "")); tab?.click(); return Boolean(tab); })()`);
 await sleep(800);
 const panel = await read(`(() => {
-  const hint = [...document.querySelectorAll('.hint')].map(el => el.textContent.trim()).find(text => /windows-install|workspaces live/i.test(text));
-  return { heading: document.querySelector('.pane-head h1')?.textContent?.trim() ?? null, hint: hint ?? null };
+  const text = document.body.innerText;
+  return {
+    heading: [...document.querySelectorAll('.pane-h2')].map(el => el.textContent.trim()).find(text => /sandbox/i.test(text)) ?? null,
+    notConfigured: /Not configured/.test(text),
+    footer: [...document.querySelectorAll('.hint')].map(el => el.textContent.trim()).find(text => /high-risk tool/.test(text)) ?? null,
+    wslHint: [...document.querySelectorAll('.hint')].map(el => el.textContent.trim()).find(text => /bubblewrap/i.test(text)) ?? null,
+    noSeat: /No seat exists yet/.test(text),
+  };
 })()`);
 await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
 await sleep(600);
