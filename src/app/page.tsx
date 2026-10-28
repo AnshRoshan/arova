@@ -804,9 +804,8 @@ export default function Workbench() {
         </div>
       </>}
 
-      {section === "scheduler" && <>
-        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "evals", label: "Evals", count: data.evals.tasks.length }, { id: "always-on", label: "24/7" }]} />
-        <div className="sp-scroll">
+      {section === "scheduler" && <div className="sp-scroll">
+        <div className="sp-group">{autoTab === "routines" ? "Routines" : autoTab === "runs" ? "Runs" : autoTab === "evals" ? "Evals" : "Control room"}</div>
           {autoTab === "routines" && <>
             {!data.routines.length && <p className="bench-none">No routines yet. Use + to add one.</p>}
             {data.routines.map(r => <button key={r.id} className="sp-item" onClick={() => { setAutoTab("routines"); setPane("scheduler"); setRail(false); }}>
@@ -837,8 +836,7 @@ export default function Workbench() {
               <span className={`sp-dot ${data.evals.results.some(r => r.taskId === t.id && r.status === "FAIL") ? "fault" : data.evals.results.some(r => r.taskId === t.id && r.status === "PASS") ? "ran" : ""}`} />
             </button>)}
           </>}
-        </div>
-      </>}
+        </div>}
 
       {section === "tools" && <div className="sp-scroll">
         <div className="sp-group">Surfaces</div>
@@ -1793,11 +1791,11 @@ function OrgManager({ tab, team, sel, agents, teams, busy, act, onOpen, onNewTea
       <button className="ghost" onClick={onDraft}><Sparkles size={15} />Draft with an agent</button>
       <button className="ghost danger" onClick={() => onAskDelete(team.id, team.name)}><Trash2 size={15} />Delete team</button>
     </div>
-    <div className="org-stats">
-      <div><b className="mono">{members.length}</b><span>seats</span></div>
-      <div><b className="mono">{lines}</b><span>reporting lines</span></div>
-      <div><b className="mono">{members.filter(a => a.status === "ACTIVE").length}</b><span>active</span></div>
-      <div><b className="mono">{roots.length}</b><span>top-level</span></div>
+    <div className="org-strip">
+      <span><b className="mono">{members.length}</b> seat{members.length === 1 ? "" : "s"}</span>
+      <span><b className="mono">{lines}</b> reporting line{lines === 1 ? "" : "s"}</span>
+      <span><b className="mono">{members.filter(a => a.status === "ACTIVE").length}</b> active</span>
+      <span><b className="mono">{roots.length}</b> top-level</span>
     </div>
 
     <div className="org-roles">

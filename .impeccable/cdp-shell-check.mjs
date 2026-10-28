@@ -84,9 +84,26 @@ await sleep(600);
 const mcp = await read(`(() => ({ heading: document.querySelector('.pane-head h1')?.textContent?.trim(), note: Boolean([...document.querySelectorAll('.pane-note')].find(el => /no OAuth client/.test(el.textContent || ''))) }))()`);
 assert.equal(mcp.heading, "MCP servers");
 assert.equal(mcp.note, false, "the connector note does not leak into another surface");
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Automations'); b?.click(); return true; })()`);
+await sleep(900);
+const automations = await read(`(() => ({ strips: document.querySelectorAll('.sp-tabs').length, inPanelTabs: document.querySelectorAll('.sidepanel .sp-tabs').length, segmented: document.querySelectorAll('.pane .sp-tabs').length }))()`);
+assert.equal(automations.inPanelTabs, 0, "the panel no longer repeats the Automations tabs");
+assert.equal(automations.segmented, 1, "one segmented control remains, in the pane");
+
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Organisation'); b?.click(); return true; })()`);
+await sleep(900);
+const org = await read(`(() => ({ strip: Boolean(document.querySelector('.org-strip')), cards: Boolean(document.querySelector('.org-stats')) }))()`);
+assert.equal(org.strip, true, "the org stats are one inline strip");
+assert.equal(org.cards, false, "the four paper cards are gone");
+
+await read(`(() => { const b = [...document.querySelectorAll('button')].find(el => (el.textContent || '').trim() === 'Settings'); b?.click(); return true; })()`);
+await sleep(900);
+const settings = await read(`(() => { const stack = document.querySelector('.pane .stack'); return { width: stack ? Math.round(stack.getBoundingClientRect().width) : 0 }; })()`);
+assert.ok(settings.width > 0 && settings.width <= 800, `form measure stays readable (${settings.width}px)`);
+
 assert.deepEqual(errors, [], "no console errors");
 
-console.log(JSON.stringify({ overview, tabs, integrations, mcp, errors }, null, 2));
+console.log(JSON.stringify({ overview, tabs, integrations, mcp, automations, org, settings, errors }, null, 2));
 console.log("PASS redesigned shell");
 ws.close(); chrome.kill(); await sleep(300);
 try { rmSync(profile, { recursive: true, force: true }); } catch {}
