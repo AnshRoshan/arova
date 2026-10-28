@@ -1,532 +1,425 @@
-# Feature parity — Grok bot and OpenAI Dots vs Arova
+# Market brief — rev 2 (2026-10-28)
 
-Purpose: an outside-in check on what this workbench is missing. Two products were researched as of
-**2026-10-01**: xAI's **Grok** (assistant + agent surfaces) and OpenAI's **Dots** (the always-on agent
-feature inside ChatGPT, which is the "ChatGPT alternative to the Grok bot" the comparison is about).
-Section 1 is ours and is read out of the code, not out of the specs, because a spec describes intent and
-the schema describes what exists.
+**Scope.** The always-on agent / agent-workspace market, and Arova's position in it. Arova's own state
+is read from the code on this tree, not from a spec. The root OpenDots `ARCHITECTURE.md` §19 is
+architecture evidence about open-source internals; it is not this document and is not duplicated here.
 
-Status of this document: §1 complete. §2 (Grok) and §3 (Dots) land from the research passes; §4 is the
-matrix; §5 ranks the gaps and §6 turns the top one into a spec. §7 adds a third reference, same date:
-**OpenBot** (CopilotKit), read from its repository and docs rather than from press.
+**Status.** Research record, not a build spec. Rev 1 (2026-10-01) is in git history under this
+filename's previous content. This revision widens the field from three products to thirteen, adds
+pricing, reliability, demand and substitute evidence, and records the three product slices built from
+the ranking (§8).
 
----
+**Method and source tiers.** A = vendor/provider primary page (or the repository itself). B = a
+maintainer document or a published benchmark/paper. C = press, guide or secondary summary. A claim
+whose source could not be reached is labelled **unverified**. Prices are list prices in USD as
+published on the date checked; they are not invoiced costs, and they change.
 
-## 1. What Arova does today
-
-### Identity and workspace
-- One **workspace** per browser session, identified by an httpOnly cookie. This is a demo identity, not
-  authentication: no accounts, no memberships, no roles beyond the creator/lead tier, no sharing URL.
-  Name and timezone are editable and the rename is an audited mutation.
-- Four-column shell: permanent icon rail · section panel titled by what it holds · work surface ·
-  activity board. The app reopens on the last conversation (`localStorage`), not on a dashboard.
-
-### Models and the gateway
-- **Env-driven providers**: `PROVIDERS` plus `<NAME>_BASE_URL` / `_MODEL` / `_API_KEY` / `_MAX_CONTEXT`.
-  Adding a vendor is a config edit; neither the gateway nor the picker changes. `auto` resolves to the
-  first configured profile; `local` answers honestly with no model call.
-- **Streaming** with a Stop that keeps what arrived (the partial is stored and labelled, never replayed);
-  a separate stream ceiling from the unary timeout; bounded retries before a stream starts; a slow-reader
-  backpressure fix; reasoning blocks captured, folded and labelled rather than deleted; a provider's
-  `length` stop shown as "budget reached", not as a finished answer.
-- **Token accounting**: reported counts when the server sends them (`stream_options.include_usage` with a
-  one-shot fallback), otherwise a ~4-char estimate that says "(est.)"; per provider/day rows with an
-  `estimated` flag; a **daily call budget** (`DAILY_MODEL_CALLS_LIMIT`) checked at every call site —
-  including the routing pass, which is a real vendor call.
-
-### Seats (agents)
-- CRUD, pause/resume (pausing disables their routines), avatar/role/instructions, provider choice, soft
-  delete. Per-seat identity is three measured tints plus a glyph — never a status colour.
-- **Capabilities** are one place: tool allow/deny lists, permission mode (`plan` blocks writes but not
-  reading or delegating), per-target consult/handoff allow-lists, effort → real output-token budget,
-  temperature/max-tokens overrides, MCP server entries (metadata only — no transport yet), and **skills**
-  which are prompt packs that grant nothing.
-- Removing a capability removes the option from the model's own prompt, so a tool the user took away
-  cannot be improvised back.
-
-### Organisations
-- Teams with **reporting lines** drawn from stored `manager_id` (a tree, not a label), a reviewed 10-seat
-  template, and model-designed org charts that a human confirms before any seat exists.
-- **Permission tier**: a designated creator seat is the only seat that may found an organisation on its
-  own behalf; an org's lead may staff inside its own org; refusals name the rule and the seat that can
-  actually do it. Null designation = no tier in force (pre-Feature-11 behaviour, kept deliberately).
-- **Hermetic reach**: a seat may consult only seats in its own org, and channel history is org-scoped.
-
-### Delegation and the channel
-- `consult` (asker keeps the floor and must weigh the answer, not paste it), `handoff` (the turn moves and
-  is billed to whoever answered), each hop a `delegations` row with question, answer, model and tokens;
-  `MAX_DELEGATIONS` ceiling; visited-set guards so a chain cannot loop.
-- The **org channel**: a brief to the lead is one turn whose summons land as their own attributed posts,
-  whose report names the posts it built on, and whose whole execution is a `runs` + `run_steps` row the
-  reader can drill into. A brief cut short by the budget leaves a row naming who was never asked, or who
-  answered with no report to show for it. A row belongs to one seat's thread **or** one org's channel —
-  enforced by a DB check, not by convention.
-
-### Automation
-- **Routines**: five schedule labels plus `Every N hours`, wall-clock resolution through `Intl` (so a zone
-  and a DST-absent hour are projected, not special-cased), a due index, `next_run_at`/`last_run_at`/
-  `last_status` per row, and claim-by-predicate under a row lock so two tabs cannot start the same run.
-- **Execution is real when it happens**: a run row, steps, a model call, the answer posted into the
-  seat's thread. The tick runs when the workspace is read, and the UI says there is no worker rather than
-  implying a daemon. "Run Now" records `WAITING_FOR_TOOL` with the reason, because that is what it is.
-- **Approvals**: an agent can stop and raise an action for a human to decide; the decision is audited and
-  nothing is performed either way (there is nothing to perform).
-- **Events**: an append-only audit stream (workspace/agent/team/org lifecycle, runs, approvals).
-
-### Observability
-- The activity board is a printer: In flight (frames this client actually received), Needs attention (real
-  pending approvals, blocked/waiting runs, due routines), Upcoming (stored `next_run_at`), Record
-  (newest-first stored runs, hops, selected events, decided approvals). A section with no rows is absent.
-- Every figure on screen traces to the board payload; seeded sample rows are forced grey and labelled
-  "sample"; a reply's provenance prints inline under it.
-
-### What Arova does not do (each of these is stated in-product, not hidden)
-- **No real tools.** No web fetch, search, browser, shell or file access. The registry lists each with the
-  reason it is off (`run_command`: "commands would run on your machine, so this stays off").
-- **No connectors.** `connectTool` throws the honest sentence; `connections`/`sandboxes` tables exist and
-  nothing populates them for real. No OAuth.
-- **No background worker**, so nothing runs while the app is closed. *(Corrected 2026-10-06: an in-process worker ships — `src/instrumentation.ts` + `src/lib/worker.ts`, plus `/api/cron` for an outside clock and `/api/trigger` for inbound events; four HTTP routes now. The lines below describe the code as inventoried on 2026-10-01 and are kept as dated history.)*
-- **No persistent agent compute** and no isolated sandbox — no per-agent machine, files or environment.
-- **No per-organisation memory** and no retrieval: context is the transcript inside the token budget.
-- **No multimodality**: no image/audio in or out, no file upload, no image or video generation.
-- **No citations**, because nothing browses — there is no source to name.
-- **No channels outside the browser**: no Slack/Teams/email/voice surface, no API for third parties to
-  talk to a seat, no inbound triggers.
-- **No pagination or retention** on messages (the board loads every row per workspace), no export.
-- **No evals, tracing, prompt versioning or A/B**; runs and steps are the only execution record.
-- **No multi-user tenancy**: no members, roles, admin policy, shared billing or audit export.
-
-### What our own stack can actually support (probed, not assumed)
-Checked against the running database on 2026-10-01 so the gap ranking below is bounded by reality:
-- **PostgreSQL 18.3**, driver `pg`, ORM Drizzle. Installed extensions: `plpgsql` only.
-- **`vector` (pgvector) is NOT available** on this server. Anything needing embeddings must either store
-  vectors elsewhere, ask the user to install the server package, or not claim semantic search.
-- **`pg_trgm`, `pgcrypto`, `unaccent` are available** (installable with `CREATE EXTENSION`, no new npm
-  dependency).
-- **Built-in full-text search works today**: `to_tsvector('english', …)` + a GIN index needs no extension
-  and no dependency. So *org memory that compounds from the channel* is buildable in this repo as-is;
-  semantic/vector memory is a server-install decision that belongs to the user, not a feature to fake.
-- Only two HTTP routes exist (`/api/board`, `/api/health`) and there is no upload handling anywhere, so
-  "no inbound triggers, no files" is structural, not an oversight.
+**Refresh.** Quarterly, or sooner if a tracked vendor ships a material change. The change log is at the
+end. A dated row is allowed to age; an undated row is not.
 
 ---
 
-## 2. Grok (xAI) as of 2026-10-01
+## 0. The one-page read
 
-Status marks are the researcher's, and the **unverified** flags are kept deliberately: a claim laundered
-into certainty here would mislead a build decision worse than an admitted gap.
-
-### Models and modes
-- Grok 4.6 default for consumers (GA 12 Aug 2026); Grok 4.7 GA 21 Sep 2026 — 500K context, $2/$6 per M
-  tokens, with standard / "xHigh" / rapid effort tiers. grok-4.3 / 4.20 at 1M context; 4.1 Fast at 2M;
-  grok-build-0.1 at 256K. Tiered-context pricing (price doubles above 200K prompt tokens).
-- Modes: Auto, **Think** (extended reasoning), **DeepSearch / DeeperSearch** (agentic multi-source
-  research), **Expert** ("Big Brain", internal-only). ⚠ The current grok.com picker itself was not
-  confirmed from a primary source.
-- **Effort tiers are a model-level product feature** — the same axis Arova models as `low/medium/high →
-  output-token budget`. Ours chooses a budget; theirs chooses a reasoning depth.
-
-### Assistant capabilities
-- Live web **and X** search with real-time grounding and citations (GA). File/PDF upload and analysis
-  (GA). Voice mode sub-second; voice STS 2.0 GA 18 Sep 2026, voice APIs GA 17 Apr 2026. **Imagine**
-  text-to-image/video (15s clips; Image 2.0 7 Aug, Video 1.5 Jun/Jul 2026).
-- Office-suite surfaces: Grok for Word/Excel/PowerPoint/Outlook (GA Jun–Jul 2026), Google Workspace
-  (24 Jul 2026).
-- Translation: no primary evidence found — treated as model-level only, **unverified**.
-
-### Personalisation and memory
-- **Cross-chat memory** GA on the consumer app (launched ~Apr 2025). The on/off and review controls were
-  not confirmed from a primary source.
-- "Memory in Grok Build" announced 16 Sep 2026; Skills GA 18 May 2026; Companions/personas are
-  secondary-sourced. ⚠ **Projects, "Knowledges" and custom instructions could not be confirmed** — the
-  researcher explicitly flagged this rather than assuming.
-
-### Agents and automation — the closest overlap with Arova
-- **Grok Bot** (GA-ish beta, 11 Aug 2026): always-on **cloud agents** with **peer-to-peer multi-agent
-  coordination**, that sign into third-party apps **from their own VMs**, hand off work **over messaging**,
-  work with X (29 Aug), and were pulled into more plans (26 Aug).
-- **Automations** (GA 16 Jul 2026): one-time / daily / weekly / monthly / yearly schedules, **free on every
-  tier**; **email-triggered** runs are premium-only. `/goal` announced 22 Jun 2026.
-- **Grok Build** (terminal coding agent, early beta 25 May 2026): plan-then-execute with the human
-  approving diffs, **parallel subagents in separate git worktrees**, loads `AGENTS.md`/hooks/MCP,
-  headless `-p`, ACP; open-sourced 15 Jul; web+mobile 19 Aug; Agent Dashboard, Workflows, Plugin
-  Marketplace. Grok Code Fast 1 (GA 28 Aug 2025) is the agentic-coding model. ⚠ **BugCrawl could not be
-  confirmed in any primary source.**
-
-### Collaboration and workspace
-- Public conversation share links (GA).
-- **Team Bots** (public beta 28 Sep 2026): team bots that **learn from team interactions**, a **shared
-  workspace plus private threads**, on Teams/Enterprise, across macOS/iOS/Android/X.
-- **Grok Bot for Enterprise** (GA 3 Sep 2026): admin dashboard, access/network/audit controls,
-  **zero-permission default agents**, **per-run isolated sandboxes**, seat-free invitations. Business /
-  Enterprise add SSO, directory sync, audit logging, RBAC, user analytics, encrypted storage, custom rate
-  limits.
-
-### Governance, limits and cost
-- Tiers: Free (4.6, voice, search, Build, connectors) · SuperGrok $30 (Grok Bot, Expert, image/video,
-  higher limits) · SuperGrok Plus $100 (1080p video, early access, priority routing) · Lite/Heavy listed
-  with no price shown (Heavy ≈$300/mo is third-party only — **unconfirmed**) · Business/Enterprise custom.
-- API returns **encrypted chain-of-thought traces by default**. Data controls (training opt-out, retention)
-  were **not verified from a primary source**.
-
-### Integrations
-- **Connectors** GA 6 May 2026: SharePoint, Outlook, OneDrive, Google Workspace, Notion, GitHub, Linear —
-  plus **Bring Your Own MCP**. MCP is also loaded natively by Grok Build.
-- Distribution through GitHub Copilot, Amazon Bedrock, Microsoft Foundry, Databricks, Gemini Enterprise,
-  Warp, OpenCode, Kilo Code. ⚠ Official Telegram/WhatsApp: only third-party bridges found — **unverified**.
-
-### Developer surface
-- **Agent Tools API** (GA 19 Nov 2025): server-side web search, real-time X search, file/document
-  retrieval **with citations**, a **hosted sandbox**, from $5 per 1K calls. Chat + responses endpoints,
-  vision with interleaved multi-image input, streaming, batch, tool calling, reasoning-effort controls,
-  and multi-agent model variants (grok-4.20).
-
-### What Grok has that a workbench like ours typically lacks
-1. Real-time X/web grounding **with citations**.
-2. Cloud-VM agents that sign into SaaS as a user, with **per-run isolated sandboxes**.
-3. Built-in image/video generation and low-latency full-duplex voice.
-4. **Email-triggered** automations next to time-triggered ones.
-5. Office-suite-native surfaces where the work already happens.
-6. A plugin marketplace + BYO-MCP on a hosted platform.
-7. Frontier models with published agentic benchmarks and tiered-context pricing.
-
-### Sources
-[x.ai/news](https://x.ai/news) · [Grok Bot](https://x.ai/news/introducing-grok-bot) ·
-[Grok Bot for Enterprise](https://x.ai/news/grok-bot-for-enterprise) ·
-[Grok Automations](https://x.ai/news/grok-automations) · [Grok Build CLI](https://x.ai/news/grok-build-cli) ·
-[Grok Connectors](https://x.ai/news/grok-connectors) · [Grok 4.7](https://x.ai/news/grok-4-7) ·
-[Grok Code Fast 1](https://x.ai/news/grok-code-fast-1) · [Agent Tools API / grok-4.1-fast](https://x.ai/news/grok-4-1-fast) ·
-[x.ai/grok](https://x.ai/grok) · [x.ai/pricing](https://x.ai/pricing) · [docs.x.ai models](https://docs.x.ai/developers/models) ·
-[Wikipedia: Grok](https://en.wikipedia.org/wiki/Grok_(chatbot))
+1. **The category has a price and a shape.** Hosted always-on agents sit at roughly **$15–200 per
+   user per month** (Agent 365 $15; Duet/Muse/Spark entry tiers $20; Dots $100+; Grok $30–200; Manus
+   $20–200). Self-hosted agents are **free software plus server and model cost**. Arova is in the
+   second group and has no hosted price.
+2. **Substrate is table stakes, not the differentiator.** A cloud computer, a browser, a connector
+   catalogue and a scheduler are now present in every hosted product and in several open-source ones.
+   Building a computer is still hard, but it no longer makes a product distinct.
+3. **The unserved position is governed, attributable multi-agent work for a small team that owns the
+   stack.** Dots has no dot-to-dot messaging; Grok has peer coordination but no durable per-hop
+   record; OpenBot has no agent-to-agent structure; OpenClaw and Hermes are single-agent personal
+   assistants. Arova's orgs, reporting lines, channel, per-hop `delegations`, reviewable memory and
+   per-seat budgets are the only combination in this sample.
+4. **Reliability is the market's open wound.** OSWorld 1.0's best agent is **63.5%** against a
+   **72.36%** human baseline; OSWorld 2.0's best agents are around **44%** on 108 long-horizon
+   workflows where humans take over an hour; WebVoyager leaders self-report **~89%**. The honest
+   product response is review-first, bounded and auditable — which is what Arova already refuses to
+   fake — but we do not yet have our own measured pass rate.
+5. **What we lack, in market order:** channels beyond a generic webhook (Slack/Teams/Telegram/email
+   adapters), real tools and a computer, search with citations, packaging, enterprise governance,
+   and a public reliability record. The first, third and sixth are partly closed in this pass (§8).
+6. **The name is not safe yet.** "Arova" is already used by Arova Nexus (AI enterprise IT operations),
+   Arova Technologies (AI automation) and an AROVA DeFi agent. This is a search/category collision,
+   not a proven trademark conflict; check before a public launch.
 
 ---
 
-## 3. OpenAI Dots as of 2026-10-01
+## 1. Market map
 
-Dots is OpenAI's always-on agent inside ChatGPT (announced ~29 Sep 2026). **A correction to what I first
-wrote down:** the "~$100/mo Pro tier" figure came from a secondary listicle; no Dots page states a price,
-and secondaries disagree ($100–$500/mo). Treat Dots' pricing as **unannounced**, not as $100.
-openai.com and help.openai.com refused direct fetch, so primary wording is read through a mirror of the
-same URLs — second-hand text, primary document.
+### 1.1 Hosted always-on agents
 
-### What a dot is
-- A **persistent named agent instance** on GPT-6 Astra (GA). **One per user at launch** — "start with
-  your primary dot, give it a name"; more dots are *announced only*.
-- Shared into a team space by bringing it into a channel. The org form — **specialist dots** with their
-  own identity, credentials and IT-provisioned hardware — is **preview / corporate trials**, set up with
-  OpenAI engineers, not self-serve.
+| Product | Price (checked 2026-10-28) | Substrate | Channels | Memory | Distinctive claim | Tier / date |
+|---|---|---|---|---|---|---|
+| **OpenAI Dots** | First dot included on Pro ($100+) and Business Premium; higher Pro tiers vary; extra dots not published | Cloud computer + browser on GPT-6 Astra | ChatGPT, Slack, Teams | Account memory + dot notes; delete only with the dot | 4k+ apps, auto-review, read-only proactive work | A 2026-09-29; C for higher tiers |
+| **Claude Duet** | Pro $20 / Max $100+; research preview | Anthropic cloud VM | Claude app, web, iOS, Android | Claude account memory, editable in settings | 6,000+ tools; classifier-based auto-approval; no direct password access; US waitlist | A 2026-10-21; C for pricing guide |
+| **Gemini Spark** | AI Pro $19.99 / Ultra $99.99–199.99 | Google Cloud VM | Gemini, Gmail/Docs/Drive/Calendar, third-party apps; US Chrome control | Not published as a per-item editor | 15 parallel jobs; scheduled automation; excluded from EEA/UK/CH | A product page; C guide 2026-10-13 |
+| **Meta Muse** | Free / $20 / $100 | Own cloud VM | Muse app, web, WhatsApp | Editable text files | Purchase approval; Stripe Link | A 2026-09-08; C pricing 2026-09-08 |
+| **Grok Bot** | X Premium $30–$200 | Cloud agents, own VMs | Grok, Slack, Teams, messaging | Shared across bots; not user-editable | Peer-to-peer multi-agent coordination; email triggers | C 2026-10-01 (rev 1) |
+| **Microsoft Agent 365** | $15 per user per month; part of M365 E7 | **Control plane, not an agent** | M365 admin, Entra, Purview, Defender | n/a | Observe / govern / secure a registry of agents | A 2026-05-01 |
+| **Manus** | Free / $20 / $40 / $200; Team $20/seat | Hosted | Web | Not documented as per-note | Credits; research, coding, data workflows | C 2026-10-25 |
 
-### Persistence and memory
-- Hybrid: "your dot receives memories from ChatGPT and can create its own memories" (GA). Retains context
-  "for as long as you keep your dot"; turning ChatGPT memory off stops the feed.
-- **Review and edit are weak**: you delete its context by deleting the dot. No per-memory editor. Deleting
-  the dot removes conversations, memories and scheduled tasks together, but threads/files it produced
-  survive. Context "does not retain credentials, images, or screenshots".
+### 1.2 Self-hosted / open-source
 
-### Compute and environment
-- **"Each dot works on its own cloud computer"** with **its own browser** (GA). The user can open it live
-  and interact. Local-machine access is opt-in through the desktop app, with an explicit "Revoke access".
-- Logins: "dots can use saved passwords **without exposing them to the model**" (GA).
-- ⚠ Not verified: VM specs, idle/restart policy, storage quota, egress policy, whether files survive a
-  restart (as opposed to a deletion).
+| Product | Price | Model | What it proves | Tier / date |
+|---|---|---|---|---|
+| **OpenClaw** | Free software; server + model cost | MIT; local/self-host; 20+ channels (Discord, Slack, WhatsApp, …) | State and memory stay on the operator's hardware; setup is the tax | A repo; C setup guide |
+| **Hermes Agent** | Free software; server + model cost | MIT; 257k+ stars; CLI, Telegram, Discord; persistent memory; self-created skills | Personal-agent demand is large; memory and channels are the entry price | A repo; C reviews |
+| **CopilotKit OpenDots** | Free | MIT; alpha Sep 2026; persistent agents each with an isolated computer + Slack | The exact category is already open-source; the name is occupied | A repo |
+| **OpenBot** | Free | MIT; per-Bot gVisor container, browser, shell, CEL policy gateway, real SSO, worker | Substrate is buildable by a small team; no agent-to-agent structure | A repo (rev 1 §7) |
+| **OpenMausBot** | Free | Apache-2; per-bot `trycua/xfce-cua` container, BYO VPS, boat.dev archive/resume | Hybrid self-host is a real topology; SQLite + one OS user per tenant is enough at small scale | A repo (root §19) |
+| **Rakazo** | Free | Apache-2; 7 sandbox providers, 55 Prisma models, pgvector, graphile-worker | The provider slot is real; approval and idempotency must live where the DB transaction is | A repo (root §19) |
 
-### Autonomy and scheduling
-- Always-on: keeps progressing between conversations, "works toward your goals 24/7", and **when you aren't
-  working with it, it looks for ways to help** — idle proactive research (GA). Runs several projects in
-  parallel.
-- **A hard read-only fence on unsolicited work**: during background research it "cannot send messages,
-  change app content, or control a browser or computer". (Semi-verified: wording from a secondary that
-  matches the primary's "non-modifying access".)
-- Routines are natural-language ("run a recurring check"); states are In progress / Scheduled / Completed.
-  Delegates to Codex / ChatGPT Work tasks (GA). OpenAI's own monitoring "can pause or stop the dot's work".
-- ⚠ No documented event triggers beyond app scanning.
+### 1.3 Infrastructure (what a computer or browser costs)
 
-### Channels
-- GA: ChatGPT web/desktop/mobile, **Slack**, **Microsoft Teams**, voice in. Texting is "coming next"; the
-  dot **cannot initiate calls** at launch; no email channel; channels must be connected from desktop.
-- **No API surface at all.**
+| Provider | Entry rate | What it is | Tier / date |
+|---|---|---|---|
+| E2B | ~$0.05/hr; 2 vCPU + 2 GB desktop ≈ $0.12/hr | Firecracker microVM, pause/resume | C 2026-09; A rate card |
+| Box | ~$0.10/vCPU-hr | Container, ~0.4 s resume, filesystem persistence | C 2026-09 |
+| Modal | ~$0.14/hr | gVisor, sub-second start, snapshots | C 2026-09 |
+| Browserbase | ~$20/mo entry | Hosted browser sessions | C (rev 1) |
+| Steel / Kernel / Anchor / Browser Use | Varies; see vendor pages | Browser infrastructure | C 2026-09 |
 
-### Tools and governance
-- "Connect to over 4,000 apps" through the existing ChatGPT connector ecosystem (not a new registry), with
-  per-app permission review at connect and grants managed in existing app controls. MCP specifics are
-  **secondary-only, low confidence**.
-- **Custom Rules**: allow / require-approval / block per action, and they cannot override built-in safety
-  (GA).
-- **Auto-review**: a *separate reviewer agent* classifies each action at the sandbox boundary — "a reviewer
-  swap, not a permission grant" — with a **circuit breaker** that interrupts the turn after 3 consecutive
-  denials or 10 denials in the last 50 reviews, an `/approve` picker, and policy written as a small
-  `auto_review` block. ([learn.chatgpt.com/docs/sandboxing/auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review), 1 Oct 2026)
-- Audit is the Activity View. Enterprise/Edu/Healthcare: **off by default**, admin-enabled; Microsoft Agent
-  365 governance "in progress" (announced-only).
-- Data: excluded at launch in EEA/Switzerland/UK for Pro; 18+/age-verified; business/edu data not used for
-  training by default; no training on proactive research or notes-to-self; limited human safety review
-  possible. **No dots-specific spend dashboard, rate limits or residency guarantees published.**
-- Conversations with a dot don't count toward ChatGPT usage limits; delegated Codex/Work tasks are metered
-  normally; extended limits for the first month, then "detailed billing parameters will be distributed".
-
-### Multi-agent — where our Feature 11 sits relative to them
-- **No dot↔dot messaging today.** "Over time, we envision teams of dots working together" is stated as a
-  vision. Cross-agent work happens by *delegating to Codex/ChatGPT Work*, and the only org/role concept is
-  the specialist-dots preview. ⚠ A VentureBeat headline referenced a "ChatGPT Space" multi-agent model but
-  the article was unreachable (429) — **do not treat as verified**.
-
-### Hardest-to-replicate things Dots has
-1. Per-agent persistent cloud VM + browser + password vault.
-2. A 4,000-app connector catalogue with per-user OAuth and admin consent.
-3. A dedicated frontier model behind the agent.
-4. Always-on idle proactive work (needs the background worker we deliberately don't fake).
-5. Slack/Teams/voice as first-party surfaces.
-6. An independent auto-reviewer agent with a denial circuit breaker.
-7. Managed local-device opt-in bridge.
-8. Vendor-run safety monitoring that can pause an agent; federated enterprise governance.
-9. Bundled-into-plan commercial metering.
-
-### Sources
-[Introducing dots](https://openai.com/index/introducing-dots/) ·
-[Dots feature page](https://chatgpt.com/features/dots/) ·
-[Getting started with your dot](https://help.openai.com/en/articles/20001530-getting-started-with-your-dot) ·
-[Dots privacy/security/safety FAQs](https://help.openai.com/en/articles/20001529-dots-privacy-security-and-safety-faqs) ·
-[ChatGPT release notes](https://help.openai.com/en/articles/6825453-chatgpt-release-notes) ·
-[Auto-review and sandboxing](https://learn.chatgpt.com/docs/sandboxing/auto-review) ·
-[Vellum breakdown](https://www.vellum.ai/blog/official-openai-dots-breakdown) ·
-[Flavio Copes deep dive](https://flaviocopes.com/openai-dots/) ·
-[Marc Bara](https://medium.com/@marc.bara.iniesta/openai-dots-chatgpt-joins-the-always-on-agent-race-caa0b188da0f) ·
-[Platformer](https://www.platformer.news/openai-dots-agents-devday-2026/) ·
-[TNW](https://thenextweb.com/news/openai-dots-always-on-ai-agents-cloud-computers-devday)
+**Read:** a desktop is cheap per hour and expensive per always-on tenant. The old root calculation
+stands: the control plane is not the cost; the per-tenant always-on machine is. That is why
+scale-to-zero and pause/resume are architectural, not billing details.
 
 ---
 
-## 4. The matrix
+## 2. Pricing and what it means
 
-"Ours" cites the thing that proves it — a table, a route action, or a module. A cell that says *deliberate*
-means the product refuses the feature out loud, in the UI, rather than silently failing.
+**Hosted price band.** $15/user/mo (Agent 365, governance layer) → $20–30/mo (Duet, Muse, Spark,
+Manus entry, Grok entry) → $100/mo (Dots Pro, Duet Max, Muse Maximum, Spark Ultra entry) → $200/mo
+(Grok top consumer tier, Manus top). The first agent is usually bundled into a plan that already
+exists; the marginal price of the *first* agent is therefore often zero to the buyer.
 
-| Axis | Grok | Dots | Arova | Verdict |
-| --- | --- | --- | --- | --- |
-| Agent entity | Many bots + Team Bots (beta) | **1 dot** per user; more announced | Many seats, unlimited, in orgs (`agents`, `teams`) | **Ours is ahead on structure** |
-| Agents talking to agents | Yes — peer-to-peer coordination, messaging handoffs | **No** ("we envision teams of dots") | Yes — `consult`/`handoff` + the channel; each hop a `delegations` row | **Ours matches Grok, beats Dots** |
-| Durable record of that work | Not documented | Not documented | Yes — channel posts, authored, with the report naming its sources (`messages.team_id` + check) | **Ours is the only one shown** |
-| Org chart / reporting lines | No | No (specialist-dots preview only) | Yes — `manager_id` tree, lead, creator tier | **Ours, unique** |
-| Who may create an agent | Admin (enterprise) | IT-provisioned | Designated creator seat founds; lead staffs its own org (`mayFoundOrg`/`mayStaffOrg`) | Ours, in-code and testable |
-| Memory | Cross-chat memory GA; "memory in Build" | Account memory + dot's own notes; **delete only by deleting the dot** | **None** beyond the transcript in the token budget | **Biggest gap — §5.1** |
-| Per-org memory isolation | n/a | n/a | Reach + history are hermetic; no stored knowledge | Gap, and the one the user asked for |
-| Tool execution | Real: browser, X, office apps, connectors | Real: own VM, own browser, saved passwords | **None.** 12 tools listed with `whyUnavailable` each | **Deliberate; the real ceiling** |
-| Sandbox isolation | Per-run sandboxes (enterprise) | Persistent per-dot cloud computer | `sandboxes` table exists; `sandboxAction` throws the reason | Deliberate |
-| Connectors/OAuth | 7 named + BYO-MCP | ~4,000 apps | None; `connectTool` refuses | Deliberate; needs your credentials |
-| Web grounding with citations | Yes (web + X firehose) | Via browser/connectors | No search provider; `web_search` off | Gap, external dependency |
-| Scheduled work | Time + **email-triggered**; free on all tiers | NL routines; In progress/Scheduled/Completed | Time-based, timezone-correct, claim-by-predicate (`routines`, `scheduler.ts`) | Ours matches on time; no event triggers |
-| Runs while app is closed | Yes (always-on) | Yes (24/7) | **No** — tick on read, and the UI says so | Deliberate (no worker) — corrected 2026-10-06: Arova now ships a worker; this row is the 2026-10-01 reading |
-| Proactive/idle work | Yes | Yes, fenced read-only | No | Deliberate; needs the worker |
-| Approvals for actions | Diff approval in Grok Build | Custom Rules (allow/ask/block) + reviewer agent | `approvals` rows raised by the agent, decided by the human; `plan` mode blocks writes | Ours matches the *shape*, lacks the reviewer |
-| Denial circuit breaker | Not documented | **3 consecutive / 10-in-50 denials interrupts the turn** | None | **Cheap idea worth stealing — §5.3** |
-| Budget/spend visibility | Plan tiers + API pricing | Not published per dot | Per provider/day calls + tokens, est-vs-reported, `DAILY_MODEL_CALLS_LIMIT` enforced at every call site | **Ours is more legible than either** |
-| Audit trail | Enterprise admin/audit | Activity View | `events` append-only, printed on the board | Ours matches |
-| Multimodal (image/voice/video) | All GA | Voice in; images in context | None | Gap, out of scope for a workbench |
-| Channels outside the app | X, Telegram/WhatsApp (unverified), office suites | Slack, Teams, voice | Browser only | Gap |
-| Multi-user tenancy | Business/Enterprise: SSO, RBAC, directory sync | Enterprise/Edu admin | Cookie demo workspace, no accounts | Gap, by design of a demo |
-| Public API for your agents | Agent Tools API | **None** | None (session-cookie endpoint only) | Gap; Dots shares it |
-| Model freedom | xAI only | OpenAI only | **Any OpenAI-compatible endpoint** (`PROVIDERS`) | **Ours, unique** |
-| Honest about what it can't do | Not documented | Not documented | Every refusal is in-product text | **Ours, and it's the point** |
+**What is not published.** Extra Dots, real per-plan limits, overage rules, per-run cost, and the
+price of a second agent. Do not quote a per-run figure for a competitor as fact.
 
-**The one-line read:** we are ahead on *structure, attribution and legibility* — orgs, reporting lines, the
-durable channel, per-seat budgets, model freedom — and behind on *substrate*: memory, real tools, background
-execution, and channels. Of those four, only **memory** is buildable here today with no new dependency, no
-credentials and no infrastructure.
+**Self-host price.** Free software plus a server (the comparison guides put a small VPS at ~$6/mo)
+plus model usage. The operator pays the model vendor directly. This is the honest alternative to a
+subscription, and it is the one Arova can offer today without building billing.
+
+**Arova today.** No price and no billing. That is a positioning choice, recorded as D-19: self-host
+first; do not invent a hosted price before there is a hosted product.
 
 ---
 
-## 5. Ranked gaps
+## 3. Reliability: the number that decides the product
 
-Ranked by value to this product × whether it can be built in this repo without a new dependency, a
-credential, or infrastructure the user hasn't chosen. Not ranked by how impressive it sounds.
+| Benchmark | What it measures | Result | Tier / date |
+|---|---|---|---|
+| OSWorld 1.0 | 369 real computer tasks | Best agent 63.5% (Agent S3 w/ bBoN); second 62.3% (GLM-5V-Turbo); human 72.36% | C leaderboard 2026; A paper |
+| OSWorld 2.0 | 108 long-horizon workflows; humans take >1 hour | Best agents ~44% | B 2026-06-26 |
+| WebVoyager | Real websites | Fara1.5-27B 89.3%, Fara1.5-4B 80.8% — provider self-reports | C 2026-10 |
+| GAIA | General assistant tasks with verifiable answers | Public leaderboard and reliability dashboard; do not cherry-pick a single row | B/C |
 
-### 5.1 Org memory that compounds from the channel — **build now, spec'd as 12**
-Both competitors treat memory as the agent's core property, and Dots' version is bad in a way we can beat:
-you can only delete its memory by deleting the agent, and there is no per-note review. We already produce
-the raw material — every brief, every summon, every report is an attributed row in an org-scoped channel —
-and keep none of it as knowledge. This is also the one feature the user asked for by name ("each
-organisation should have its own memory… should not lead to other places") and that §11 recorded as
-deliberately unbuilt (11d). **Feasibility is proven, not assumed**: `to_tsvector` works on this server,
-`pg_trgm` is installable, and `vector` is **not** available — so this ships as reviewable keyword memory
-with no embeddings and no new npm dependency, and says so.
+**Interpretation.** Long-horizon computer work fails more often than it succeeds at the frontier. A
+product that presents an unverified success as a result is not optimistic; it is unsafe. The market
+already sells review layers (Dots auto-review, Duet classifiers, Agent 365 governance) because the
+underlying agent cannot be trusted alone.
 
-### 5.2 Inbound triggers (an event starts a brief)
-Grok fires an automation from an email; we fire from a clock, and only when someone opens the app. A
-token-scoped `POST /api/trigger/:token` that queues a brief to a lead would close most of the gap without
-pretending to be a worker — the honest half of "always-on" is "anyone with this URL can brief this org".
-Needs a decision on auth and on what runs before the next read.
-
-### 5.3 A denial circuit breaker and a reviewer pass
-Dots' best cheap idea: an independent pass that classifies an action at the boundary, plus a breaker that
-stops the turn after repeated denials (3 in a row, or 10 of 50). We already have `plan` mode, per-target
-allow-lists and an approvals table; a breaker is a pure function over the last N decisions and a reviewer
-is one extra model call behind a capability grant. Small, testable, and it makes our permission story real
-instead of declarative.
-
-### 5.4 Citations for anything retrieved
-Every competitor grounds with sources; we have nothing to cite because no tool fetches. This is *blocked
-behind* 5.1/5.2 in value order and behind a search provider in feasibility: it needs an external key, so
-it's the user's call, not a feature to stub.
-
-### 5.5 Real tool execution in a sandbox
-The honest ceiling on the whole demo. Grok and Dots both have compute per agent; we refuse to run anything,
-because there is nowhere safe to run it. Building this means choosing a provider (the `sandboxProvider`
-seam exists) and accepting that a self-hosted agent with a shell is a different risk class than a chat app.
-Not a weekend, and not ours to decide.
-
-### 5.6 Deliberately not chasing
-Multimodal generation, voice, Slack/Teams presence, SSO/RBAC tenancy, frontier-model benchmarks. Each is a
-different product; the demo's argument is legible agent work on any endpoint, not a wider feature list.
+**Arova's response, and its gap.** Arova has approvals, a denial breaker, an append-only event
+stream, per-seat budgets and a provenance sentence. It now also has an eval harness that records a
+pass/fail against an expected fragment, and a skipped run when no model is configured. What it does
+not have is a golden-task suite with cost and step metrics, or a published pass rate. Until it does,
+"honest" is a design claim, not a measured one.
 
 ---
 
-## 6. What this changed — and what it did not
+## 4. Demand and security
 
-**Built the same day (2026-10-01), all verified live:**
-- **5.1 org memory** → `feature-specs/12-org-memory.md`: `memories` table with a GIN full-text index,
-  `src/lib/memory.ts` (5 tests, written first), hermetic retrieval injected as a labelled record, provenance
-  naming what was used, and a per-org Memory panel where every note is pinnable, editable and individually
-  forgettable — the thing Dots only lets you do by deleting the whole agent.
-- **5.3 denial breaker** → `feature-specs/13-boundary-and-door.md`: `denialBreaker` (3 consecutive / 10 of
-  50 decided approvals) behind one `approvalReply` shared by both reply paths.
-- **5.2 inbound trigger** → same spec: `POST /api/trigger` with a per-org bearer token, a 60s cooldown
-  measured from the end of the work, and the ask posted in the channel authored by the trigger.
-- **Two controls that lied, removed:** `maxTurns` is now the summons ceiling the server enforces, and the
-  unary reply path reaches the same `approval`/`build` decisions as the streaming path.
-
-**Still open, and not buildable here:** **5.4 citations** needs a search provider and a key — the registry
-still lists `web_search`/`web_fetch` as unavailable *with the reason*, which is the correct state until one
-exists. **5.5 real tool execution** needs an infrastructure choice and a different risk class; `sandboxAction`
-still throws the honest sentence. Multimodality, Slack/Teams presence, SSO tenancy and a background worker are
-§5.6 — different products, not gaps in this one.
-
-**The finding worth keeping:** closing the cheap gaps exposed a bug that had been there all along. The JSON
-and directive parsers read the model's raw text, and a reasoning model enumerates the shapes it is choosing
-between *inside its thinking* before it decides — so `parseRouting` could read a hypothetical as the answer.
-Every parse site now strips a closed reasoning block first. That is not a parity feature; it is the cost of
-testing against a real frontier model instead of a fixture.
+- **Demand is real and uneven.** McKinsey's 2026 survey reports **40% of large organizations are
+  scaling AI agents**, up from 27% a year earlier (A, 2026-08). LangChain's State of Agent Engineering
+  reports **57% of respondents have agents in production**, and names **quality** as the production
+  killer (B). The buyer is not asking "can it act?"; they are asking "can I trust what it did?"
+- **Governance is a budget line.** Microsoft sells Agent 365 at $15/user/mo as an observe/govern/secure
+  layer over agents it did not build (A). That is evidence that agent inventory, identity, policy and
+  audit are purchased separately from the agent itself.
+- **Security is the adoption tax.** Prompt injection, memory poisoning and tool-supply-chain risk are
+  now standard enterprise-agent concerns (C, multiple 2026 guides). Arova's current answer is real but
+  partial: approvals, a denial breaker, metadata-only desktop audit (planned with the desktop),
+  same-origin writes and a per-workspace write bucket. It has no effect ledger for external actions
+  and no sandbox, so it cannot yet claim a full action boundary.
+- **Implication.** A self-host product that gives a small team an agent registry, an attributable
+  record and reviewable memory is selling the thing the market is already paying a governance layer
+  for. That is a stronger position than "another agent with a computer".
 
 ---
 
-## 7. OpenBot (CopilotKit) as of 2026-10-01
+## 5. Substitutes
 
-The ask arrived as "openclaw" but the link was `github.com/CopilotKit/openbot`, and the repo resolves to
-**OpenBot** — a different product from `openclaw/openclaw` (the lobster personal assistant). This section
-is about the linked one. Unlike §2/§3 this is not press research: it was read out of the repository itself
-(README, `docs/architecture.md`, `docs/routines.md`, `docs/coworkers.md`, `docs/automatic-learning.md`), so
-the mechanisms below are documented, not inferred. ⚠ stays for the few claims the docs don't settle.
+The buyer does not only compare Arova to Dots. They compare it to:
 
-### What it is
-- **MIT-licensed, self-hostable "AI coworkers" template**, alpha, 5.8k stars. Bun + Hono API + React/Vite
-  app + PostgreSQL (with pgvector) + Docker Compose; one Docker image, Helm charts, a Tauri desktop shell.
-- Explicitly *"a template, not a product"*: no hosted version, every workspace private, the intended use is
-  to clone it and swap `examples/` for your own tenant package. CopilotKit sells setup-services alongside.
-- **No model in the box**: an admin supplies the credential, encrypted at rest, never logged. On the
-  model-freedom axis this puts it beside us, not beside Grok/Dots.
+| Substitute | Better at | Where Arova differs |
+|---|---|---|
+| RPA (UiPath) | Deterministic, audited, existing enterprise connectors | Arova is language-first and model-neutral; RPA is brittle for judgment work |
+| Workflow automation (Zapier, Make, n8n) | Cheap triggers, huge connector catalogue, no model required | Arova adds a named team, reviewable memory and a reasoning record |
+| Coding agents (Claude Code, Cursor, Devin) | Code changes with diffs and tests | Arova is for non-code recurring work; it can delegate to a coding tool later |
+| Microsoft 365 Copilot / Agent 365 | Distribution, identity, compliance, existing data | Arova is model-free and self-hosted; it does not require the Microsoft estate |
+| A human virtual assistant | Judgment, accountability, relationships | Arova is cheaper per routine and auditable; it is not a replacement for judgment |
+| OpenClaw / Hermes + cron | Free, local, many channels | Arova adds org structure, per-hop attribution, reviewable memory and a governance view |
 
-### The coworker model
-- A coworker is any **AG-UI endpoint** (LangGraph, Mastra, CrewAI, Pydantic AI, ADK, ~15 framework
-  adapters ship in-tree) plus a durable profile: name, title, **standing role** re-sent every run,
-  owner, `private`/`public` visibility, soft delete with tombstones.
-- A **deployment-wide provenance block** is appended to every coworker's prompt by the platform, not the
-  package: say where each answer came from, mark anything answered from own knowledge, never present the
-  latter as the former. It *cannot be forgotten* by the next coworker someone adds.
-- **Skills are instructions, not capabilities** — verbatim our own doctrine (§1, Seats), arrived at
-  independently.
+**Read:** the product is not competing on access. It is competing on **structure and evidence**.
 
-### Substrate — the part we refuse to have
-- **A computer per Bot**: a supervisor creates one container each with its own Chromium, browser profile
-  and `/workspace` volume; `COMPUTER_RUNTIME=runsc` runs them under gVisor. Computers bind to
-  `127.0.0.1` behind a per-container token; the Bots' network is segregated from PostgreSQL's because a
-  Bot has a shell and a shell reaches whatever its container reaches.
-- **Real tools**: browser (snapshots, screenshots, forms), file tools, **and a workspace shell** — all
-  through the same gate, which can deny shells or particular commands, and the command is on the record
-  either way.
-- **Take the wheel**: a Bot that hits a login/2FA wall asks for help; handover is recorded as
-  `computer.help_requested / control_taken / control_released`, and **Bot actions are refused — not
-  queued — while a human drives**.
+---
 
-### The policy gateway (validates our spec-13 direction, with three ideas we didn't have)
-- One gateway is the *only* path to any action: resolve target from a server-held snapshot → evaluate
-  policy → **write the audit row → then act** (a second row if a forwarded action fails). There is no
-  path that acts without the record existing first.
-- **CEL expressions, fail closed**: deny evaluated before allow; a missing policy permits nothing; a
-  broken deny rule denies and a broken allow rule does not permit; a malformed configured policy stops
-  server startup.
-- **Initiator-aware rules**: policy inspects `initiator.kind` (`person | deployment | routine | handoff`)
-  separately from `actor.id`, so a rule can refuse a *scheduled* run what it would allow the same person
-  typing. Our routines run as the lead with no way to express "unattended may not do X".
-- Secrets: the audit trail records that a secret was requested and its length, never the value;
-  credentials are write-only through `/admin/credentials` and redacted from events.
+## 6. Positioning, segment and kill criteria
 
-### Governance and tenancy (where Dots is a product, this is a checkable list)
-- Real multi-user: Google/Microsoft/Okta from env, **tenant-owned SAML/OIDC registered at runtime and
-  routed by email domain**; `/admin/people` promotes/demotes/removes, removal ends the live session;
-  every change audited. Single-user demo mode exists via `OPENBOT_SINGLE_USER=true` — the same honesty
-  shape as our cookie, but labelled as the exception.
-- **Governed MCP**: catalogue ships Drive/Notion + Composio's few-hundred behind one account, reached as
-  the *asking person*. Unknown tools and custom-server tools are **treated as writes by default**; a
-  Bot is told which connectors exist and which it holds, so it says "not granted" rather than browsing
-  to the vendor.
-- Routines-as-tools: `create/update/delete_routine` are a plugin entry granted **per Bot** — an admin
-  decides which Bots may schedule future work before anyone decides what that work is.
+### 6.1 Segment (working decision D-19)
 
-### Routines — the most transferable block in the whole repo
-- Created only by asking in chat (sentence → cron), runs as the asker, replies land in the channel.
-- **A 15-minute floor and a 20-enabled cap** because "a model can be talked into anything a sentence can
-  describe"; `MINIMUM_INTERVAL_MS` is the same constant as the sweep window.
-- **A fatigue rule, explicitly *not* a retry policy**: first failure posts one message; ten consecutive
-  failures switch the routine off and say so — the expired-since-March Notion token question, not the
-  hiccuped-queue question.
-- **Missed windows are skipped, not replayed**: the next run is a stamp, not a queue; a restarted worker
-  drains backlog by advancing silently, never by firing thirty stale summaries.
-- **The worker proves it sweeps**: every sweep writes to `routine_sweeps`; the Routines page reads it and
-  tells you if no worker ever checked in or when the last one did — because a no-worker deployment
-  *used to look identical* to a healthy one. Their old failure mode is exactly our §1 "the UI says there
-  is no worker" stance, upgraded with a heartbeat.
+**Self-host-first, owner-operated workspace for a small team (1–10 seats) that wants to own the stack
+and the model choice.** The buyer is technical enough to run a Postgres and a Next.js app, or has
+someone who is. They already pay for a model endpoint, or want to use one the hosted products do not
+offer. They value auditability over a polished consumer surface.
 
-### Memory and learning
-- Threads and memory are durable through **CopilotKit Intelligence** (external managed or self-hosted
-  service) — not in the repo's own Postgres. ⚠ The memory's review/edit UX is not documented here; we
-  know it stores and delivers, not what a user can do with an individual memory.
-- **Automatic Learning**: opted-in Bots contribute completed conversations to a Learning container;
-  Intelligence analyses the evidence and **proposes skills**; a human reviews the source evidence and
-  publishes revisions; delivery is per-Bot with optional revision pinning. Neither a scheduled analysis
-  nor enabling Learning auto-approves anything. This is the shape our §5.1 memory can grow toward —
-  experience distilled into reviewable, human-approved capability text.
-- Live voice calls exist and route substantive answers through the same governed `ask_agent` run. ⚠
-  Depth of the voice surface unverified beyond the learning doc.
+This is a recommendation, not a proven demand curve. The root `OpenDots` decision D-30 (self-host
+tool vs hosted service) remains the owner's call; D-19 is the reversible working answer that lets the
+product move without inventing billing or multi-tenant SaaS.
 
-### Components instead of prose
-- Answers can be **React components**: compiled ones in-tree, sandboxed ones authored in a browser
-  playground and published with no deployment. Every render asks the server whether the component exists,
-  is published, and is not withheld from that Bot; data functions are granted per component. Arova is
-  text + structured posts only; this is a genuinely different axis. ⚠ How much authors rely on it in a
-  real tenant is unknowable from a template repo.
+### 6.2 The job
 
-### What this changes for us
-**Corroborates, hard:** spec 12 (memory → reviewed knowledge, now with a learning loop to aim at),
-spec 13 (decide-then-record gateway — they built exactly the shape we spec'd, plus fail-closed CEL),
-and §5.5 (a self-hosted per-Bot computer is buildable by a small team under MIT; "not ours to decide"
-stands, "impossible here" would not have).
-**Still only ours:** orgs with reporting lines, `consult`/`handoff` delegation with per-hop records, the
-durable channel, per-seat token budgets. OpenBot has no agent-talking-to-agents structure at all —
-`initiator.kind: handoff` implies human-directed passing of work, ⚠ and no coworker↔coworker protocol
-was found in the docs. On *structure* our §4 read survives the third reference.
-**New, cheap and worth stealing — all three built the same day as Feature 14 (`feature-specs/14-openbot-steals.md`),
-tests written first, 144/144 green:**
-1. **Initiator on every decision** — tag approvals/brief steps with what started the run so `plan`
-   policy can be stricter for routines than for typers. A field and a predicate.
-2. **The fatigue rule** (fail-once-quietly, ten-and-off, one message each way) on top of our
-   `routines.last_status` — smaller than it sounds, and it is the answer our "no worker" honesty pairs
-   with if 5.2 ever grows one.
-3. **The standing provenance sentence** appended platform-wide, un-forgettable by any seat — a prompt
-   line today, before any citation feature exists.
+"Turn the repetitive part of my week into a named team that runs on a schedule, leaves an attributable
+record, and can be reviewed when it goes wrong." The primary surface is a thread; the secondary
+surfaces are the org chart, the channel, the routine schedule and the registry. The desktop is a later
+capability, not the identity of the product.
 
-### Sources
-[CopilotKit/OpenBot](https://github.com/CopilotKit/OpenBot) (README, 2026-10-01) ·
-[docs/architecture.md](https://github.com/CopilotKit/OpenBot/blob/main/docs/architecture.md) ·
-[docs/routines.md](https://github.com/CopilotKit/OpenBot/blob/main/docs/routines.md) ·
-[docs/coworkers.md](https://github.com/CopilotKit/OpenBot/blob/main/docs/coworkers.md) ·
-[docs/automatic-learning.md](https://github.com/CopilotKit/OpenBot/blob/main/docs/automatic-learning.md) ·
-[copilotkit.ai/openbot](https://www.copilotkit.ai/openbot) · [AG-UI protocol](https://github.com/ag-ui-protocol/ag-ui)
+### 6.3 Why us
+
+- **Model freedom**: any OpenAI-compatible endpoint is configuration, not code.
+- **Structure**: orgs, reporting lines, `consult`/`handoff`, per-hop `delegations`.
+- **Attribution**: channel posts, run steps, initiators and provenance are rows, not prose.
+- **Reviewable memory**: org-scoped, source-linked, individually forgettable, keyword-based and
+  honest about it.
+- **Self-host**: the operator owns the database, the keys and the record.
+- **Honest UX**: unconfigured, partial, skipped and failed are states, not hidden.
+
+### 6.4 Why now
+
+Hosted agents have proved the category and normalized the price. Open-source agents have proved
+self-host demand. Neither has made the **structure layer** legible: a small team can see who its
+agents are, who asked whom, what was recorded, what is waiting on a human, and what it cost. That is
+the opening.
+
+### 6.5 Kill criteria — what would make us lose
+
+1. **The first agent is free inside a plan the buyer already has.** Dots, Duet, Spark and Muse all
+   bundle an agent into a subscription. A paid hosted Arova has no room; staying free/self-host is the
+   only defensible version.
+2. **Long-horizon reliability stays below ~50%.** Broad autonomy is not sellable. The product must
+   stay review-first and narrow, and the eval suite must show where it is reliable.
+3. **Self-host agents add org structure and attribution.** OpenBot or OpenClaw could absorb the
+   differentiator. Our advantage is a design choice, not a moat; it must keep shipping.
+4. **Model freedom becomes universal.** If every agent platform accepts any endpoint, provider
+   neutrality stops differentiating. The remaining edge is structure and record.
+5. **We never measure our own pass rate.** Without a golden-task suite, the honesty claim is a
+   stylistic preference. This is the cheapest criterion to fix and the most damaging to ignore.
+
+### 6.6 The name
+
+"Arova" is in use by Arova Nexus (arova-ai.com, AI-driven enterprise IT operations), Arova Technologies
+(AI automation) and an AROVA DeFi agent. This is a search/category collision, not a legal conclusion.
+A trademark search and a distinct product name are prudent before a public launch. The CopilotKit/
+OpenDots collision that blocked the root project is not the only naming risk.
+
+---
+
+## 7. Competitive matrix
+
+**Ours** cites what proves it on this tree: a table, a route action, a module or a feature spec. A
+cell that says **deliberate** means the product refuses the feature in the interface rather than
+pretending.
+
+| Axis | Dots | Duet | Spark | Muse | Grok Bot | Agent 365 | Manus | OpenClaw | Hermes | OpenBot | Arova |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Agent entity | 1 dot | Claude agent | Gemini agent | Muse | Many bots | Registry of agents | Hosted tasks | Personal assistant | Personal assistant | Many coworkers | Many seats in orgs |
+| Agent↔agent | No | Not documented | Not documented | Not documented | Peer coordination | n/a | No | No | No | No structure | `consult`/`handoff`, per-hop rows |
+| Durable record | Activity | Not documented | Not documented | Not documented | Not documented | Audit/registry | Task history | Chat | Chat | Channel | Channel + runs + delegations + events |
+| Org chart | No | No | No | No | No | Registry, not chart | No | No | No | No | `manager_id` tree |
+| Memory | Account + dot | Account, editable | Not per-note | Editable files | Shared, not editable | n/a | Not documented | Local files | Persistent, self-created skills | Managed Intelligence | Org-scoped keyword, reviewable |
+| Tools/computer | Cloud computer | Cloud VM | Cloud VM | Cloud VM | Own VMs | n/a | Hosted | Local | Local | gVisor + shell | **None** (honest refusal) |
+| Connectors | 4k apps | 6,000 tools | Workspace apps | Apps/WhatsApp | 7 + MCP | n/a | Some | 20+ channels | 28 adapters | MCP catalogue | **None** |
+| Grounding/citations | Browser | Tools | Google | Apps | Web/X | n/a | Research | Web | Web | Tools | `web_fetch` only; no citations |
+| Scheduling | Routines | Checks | Scheduled | Recurring | Automations | n/a | Tasks | Heartbeat | Events | Routines | Time routines + worker/trigger |
+| Approvals | Auto-review + rules | Classifiers | Not documented | Purchase approval | Review model | Policy layer | Not documented | Not documented | Not documented | CEL gateway | Approvals + denial breaker |
+| Budget visibility | Not per dot | Plan quota | Plan quota | Plan quota | Plan quota | n/a | Credits | Model bill | Model bill | Not documented | Per-provider/day calls, estimated vs reported |
+| Audit | Activity | Not documented | Not documented | Not documented | Not documented | Yes | Not documented | Local | Local | Yes | Append-only events |
+| External channels | Slack/Teams | App/mobile | Gemini apps | WhatsApp | Slack/Teams/messaging | n/a | Web | 20+ | 28 | Slack | Generic webhook + inbound; **new** |
+| Self-host | No | No | No | No | No | No | No | Yes | Yes | Yes | **Yes** |
+| Model freedom | OpenAI only | Anthropic only | Google only | Meta only | xAI only | n/a | Vendor | Any configured | Local/any | ~15 frameworks | **Any OpenAI-compatible** |
+| Price | $100+ | $20+ | $20+ | Free/$20 | $30+ | $15/user | $20+ | Free + server | Free + server | Free | **Free software** |
+
+**The one-line read:** Arova is behind on substrate (tools, computer, connectors, grounding,
+multimodal) and ahead on structure, attribution, reviewable memory, model freedom and self-hosting.
+The strategy is to stop treating the first list as the scoreboard and make the second list provable.
+
+---
+
+## 8. Gap ranking and what shipped
+
+Ranked by **market value × whether it can be built here without a credential, a new dependency, or an
+infrastructure decision the owner has not made.** This is not a wish list.
+
+### 8.1 Shipped in this pass (2026-10-28)
+
+| Gap | What shipped | Proof |
+|---|---|---|
+| **External channels** (#1 distribution gap) | A channel contract with a generic HTTPS webhook (Slack incoming-webhook compatible), per-channel inbound token for org channels, SSRF policy, 60 s inbound cooldown, delivery ledger, UI with test/disable/delete | `src/lib/channels.ts` + 9 tests; live `DELIVERED` to httpbin.org, live `FAILED` to example.com recorded, inbound run + 429 cooldown |
+| **Reliability evidence** (#2 market wound) | Eval tasks (agent + prompt + expected fragment), substring scorer, skipped/error states, audit run per attempt, pass-rate/median UI | `src/lib/evals.ts` + 4 tests; live `SKIPPED` with no model key; run row and result stored |
+| **Agent governance** (#3 trust gap) | Agent registry with team/manager, status, provider, tool count, permission mode, exact run/pending/routine counts, filter | `src/lib/registry.ts` + 4 tests; live registry showed exact counts and last-run status |
+
+### 8.2 Next, in order
+
+1. **Native channel adapters**: Slack Events API / Teams / Telegram / email, with per-adapter
+   verification and a delivery retry policy. The generic webhook is the contract; adapters are
+   formatting and auth.
+2. **A real computer**: E2B (or the provider chosen by the root Phase 1 measurements). **Do not
+   implement before Phase 1**: the root project's own backlogs says the resume/login measurements
+   decide the design. The cost is ~$0.05–0.12/hr; the risk class is the blocker.
+3. **Search with citations**: needs a tool-calling loop, not just a search key. The current model has
+   no autonomous tools; adding a search console without the loop would be cosmetic. Spec it first.
+4. **Golden-task suite**: 10–20 tasks per archetype, cost/steps per task, a trend view. The current
+   harness measures one prompt at a time; the market claim needs a suite.
+5. **Packaging**: a self-host support model, an install path, and a clear statement that there is no
+   hosted price. Do not invent a subscription.
+6. **Enterprise governance**: RBAC/admin, retention/export, agent identity, and (if hosted) SSO.
+   Agent 365 proves this is a paid layer.
+7. **Memory depth**: semantic memory only if the Postgres has pgvector; otherwise deepen the
+   reviewable keyword memory. Never imply recall the server cannot perform.
+8. **Defer**: multimodal/voice, 4k connectors, a frontier model, 24/7 consumer proactivity, a general
+   VM manager, a workflow canvas.
+
+---
+
+## 9. What changed since rev 1 (2026-10-01)
+
+- **New products.** OpenAI Dots (GA 29 Sep 2026), Anthropic Claude Duet (preview 21 Oct 2026),
+  Google Gemini Spark (I/O 2026; Gemini agent at Work 8 Oct 2026), Meta Muse (8 Sep 2026), Microsoft
+  Agent 365 (GA 1 May 2026), Manus (already live).
+- **A product left.** Google shut down Project Mariner; browser control moved into Gemini. A tracked
+  product can disappear, which is why the brief is dated and refreshed.
+- **Pricing moved from "unannounced" to a band.** Rev 1 correctly refused the listicle's "~$100/mo"
+  for Dots. The current primary page says the first dot is included on Pro/Business Premium; Pro is
+  $100+. Higher tiers and extra dots remain unpublished.
+- **Reliability evidence became available.** OSWorld 2.0 and the 2026 OSWorld leaderboard turn "agents
+  fail" from an intuition into a number.
+- **Arova built three slices** from the ranking: channels, eval harness, registry (§8.1). It also
+  fixed the docs' stale "no worker" claim in this pass.
+
+---
+
+## 10. Sources
+
+**Tier A — vendor/provider primary**
+- [OpenAI — Introducing dots](https://openai.com/index/introducing-dots/) (2026-09-29)
+- [Anthropic — Introducing Claude Duet](https://claude.com/resources/articles/claude-duet) (2026-10-21)
+- [Google — Gemini at Work 2026](https://cloud.google.com/blog/products/ai-machine-learning/welcome-to-gemini-at-work-2026) (2026-10-08)
+- [Meta — Introducing Muse](https://about.fb.com/news/2026/09/introducing-muse-personal-ai-agent/) (2026-09-08)
+- [Microsoft Learn — Agent 365 overview](https://learn.microsoft.com/en-us/microsoft-agent-365/overview) (2026-08-19; GA 2026-05-01)
+- [Microsoft Security — Agent 365 GA](https://www.microsoft.com/en-us/security/blog/2026/05/01/microsoft-agent-365-now-generally-available-expands-capabilities-and-integrations/) (2026-05-01)
+- [OpenClaw repository](https://github.com/openclaw/openclaw)
+- [Hermes Agent repository](https://github.com/nousresearch/hermes-agent)
+- [CopilotKit OpenDots repository](https://github.com/CopilotKit/OpenDots)
+- [E2B pricing](https://e2b.dev/pricing)
+
+**Tier B — maintainer docs, benchmarks, papers**
+- [OSWorld 2.0 paper](https://arxiv.org/abs/2606.29537) (2026-06-26)
+- [OSWorld 2.0 leaderboard](https://snorkel.ai/leaderboard/os-world-2-0/)
+- [OSWorld leaderboard](https://www.codesota.com/benchmark/osworld) (2026 snapshot)
+- [GAIA leaderboard](https://huggingface.co/spaces/gaia-benchmark/leaderboard)
+- [McKinsey — The State of AI: Global Survey 2026](https://www.mckinsey.com/capabilities/quantumblack/our-insights/the-state-of-ai) (2026-08-25)
+- [LangChain — State of Agent Engineering](https://www.langchain.com/state-of-agent-engineering)
+
+**Tier C — press, guides, secondary comparisons**
+- [Wired — OpenAI's Dots](https://www.wired.com/story/openai-dots-always-on-ai-agents-that-proactively-help/) (2026-09-29)
+- [eesel — OpenAI Dots pricing and limits](https://www.eesel.ai/blog/openai-dots) (2026-09-30)
+- [The Agent Report — Claude Duet usage economics](https://the-agent-report.com/2026/10/claude-duet-proactive-agent-usage-economics/) (2026-10)
+- [Layer3Labs — Gemini Spark explained](https://www.layer3labs.io/guides/gemini-spark-explained) (2026-10-13)
+- [Layer3Labs — Manus pricing](https://www.layer3labs.io/guides/manus-ai-pricing) (2026-10-25)
+- [CNBC — Meta Muse pricing](https://www.cnbc.com/2026/09/08/meta-personal-ai-agents-public-reckoning-privacy-safety.html) (2026-09-08)
+- [WebVoyager leaderboard](https://benchlm.ai/benchmarks/webvoyager) (2026-10)
+- [Upstash — 15 agent sandbox providers compared](https://upstash.com/blog/ai-agent-sandbox-providers-compared-2026) (2026-09-17)
+- [Aimultiple — always-on agents compared](https://aimultiple.com/always-on-agents) (2026-09-30)
+- [Arova Nexus](https://arova-ai.com/en/platform/) (name collision)
+- [Tracxn — Arova](https://tracxn.com/d/companies/arova/__-SKsb6iUkNVWMP4-wFA9TP0Ko_W5S0xLZdsFP_Ibzw0) (2026-08-29)
+
+**Dated revision note.** Rev 1's Grok/Dots/OpenBot inventories remain in git history. Their ⚠ flags
+were correct to keep: a secondary claim that cannot be checked is not a fact, and a product page that
+will not load is not evidence.
+
+---
+
+## Appendix A — Arova today (code-verified 2026-10-28)
+
+- **Identity**: cookie workspace for the demo; OIDC sign-in foundation (`users`, `memberships`,
+  `sessions`, hashed session token) with owner/member roles; no production auth claim.
+- **Agents**: CRUD, pause/resume, per-seat instructions, provider choice, three-tint identity,
+  capability registry that can only narrow what genuinely runs.
+- **Structure**: teams, `manager_id` reporting lines, reviewed org templates, creator/lead staffing
+  tiers, hermetic reach, channel posts, `consult`/`handoff` with per-hop `delegations`.
+- **Memory**: org-scoped `to_tsvector` keyword memory, source ids, supersession, pinning, per-note
+  review and forget; no embeddings (pgvector unavailable on this server).
+- **Automation**: wall-clock routines with timezone/DST projection, claim-by-predicate, in-process
+  worker plus `/api/cron`, fatigue off after 10 consecutive failures, inbound trigger with atomic
+  cooldown.
+- **Tools**: calc, world clock, JSON transform, checksum, `web_fetch` behind an SSRF policy; browser,
+  shell, files, connectors and MCP transport remain refused with their reasons.
+- **New this pass**: generic webhook channels with inbound org tokens and a delivery ledger; eval
+  tasks with a substring scorer and honest skipped/error states; exact agent registry.
+- **Gates**: `npm test` **208/208**, `next typegen`, `tsc --noEmit`, `npm run build` all green on this
+  tree; live API checks covered a delivered webhook, a failed webhook, inbound run + 429 cooldown, a
+  skipped eval and the registry.
+- **Not present, and never to be inferred**: a sandbox, a real computer, autonomous model tool calls,
+  citations from the web, a production hosted service, billing, or a measured pass rate.
+
+## Appendix B — detailed product notes
+
+**OpenAI Dots.** Persistent named agent on GPT-6 Astra; one per user at launch; own cloud computer
+and browser; 4k+ apps through the ChatGPT connector estate; Slack/Teams; auto-review with a 3-in-a-row
+/ 10-of-50 denial circuit breaker; background work fenced read-only; no dot-to-dot API. Memory is
+account plus dot notes; deletion is the only per-item control. (Tier A, 2026-09-29.)
+
+**Claude Duet.** Proactive agent app on Opus 5.5; US Pro/Max waitlist; 6,000+ tools; iOS/Android/web;
+no direct password access; safety classifiers. (Tier A, 2026-10-21.)
+
+**Gemini Spark.** Google Cloud VM; scheduled automation across Google and third-party apps; US Chrome
+control; 15 parallel jobs. (Tier A/C, 2026-10-13.)
+
+**Meta Muse.** Own cloud VM; WhatsApp/web; editable memory files; purchase approval; free/$20/$100.
+(Tier A/C, 2026-09-08.)
+
+**Grok Bot.** Cloud agents with peer-to-peer coordination, own VMs, Slack/Teams/messaging, email
+triggers; X Premium $30–$200. (Tier C, rev 1 2026-10-01.)
+
+**Microsoft Agent 365.** Not an agent: an observe/govern/secure control plane over a registry of
+agents, $15/user/mo, GA 2026-05-01. The existence of this layer is the demand signal for Arova's
+registry. (Tier A.)
+
+**Manus.** Hosted task agent; credits; free/$20/$40/$200. (Tier C, 2026-10-25.)
+
+**OpenClaw.** MIT, local/self-host, 20+ channels; memory and state on the operator's hardware; free
+software. Setup complexity is the tax. (Tier A repo, C guide.)
+
+**Hermes Agent.** MIT, Nous Research, 257k+ stars; persistent memory; self-created skills; CLI and
+messaging adapters. (Tier A repo, C reviews.)
+
+**OpenBot.** MIT; per-Bot gVisor container, browser, shell, CEL policy gateway, real SSO, worker;
+no agent-to-agent structure. (Tier A repo, rev 1 §7.)
+
+**CopilotKit OpenDots.** MIT alpha; persistent agents each with an isolated computer and Slack; the
+category is already open-source under this name. (Tier A repo, 2026-09.)
+
+**OpenMausBot / Rakazo.** Hybrid self-host topologies; provider slots; SQLite at small scale; 7
+sandbox providers. (Tier A repos, root §19.)
+
+## Appendix C — refresh checklist
+
+1. Re-check the price and eligibility of every hosted product; mark the date.
+2. Re-read the OSWorld 1.0/2.0 and WebVoyager leaders; do not compare self-reports to verified runs.
+3. Check whether any tracked product shipped agent-to-agent structure, a reviewable memory editor, or
+   a self-host option. Those are the four claims Arova's position depends on.
+4. Re-run the Arova code inventory (Appendix A) from the tree, not from this document.
+5. Update the three kill criteria that can flip: free bundled agent, reliability, self-host structure.
+6. Append a change-log line; do not silently rewrite a dated row.
