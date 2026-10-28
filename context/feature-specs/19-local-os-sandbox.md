@@ -131,3 +131,31 @@ The owner ran `npx srt windows-install`. What that leaves behind, and what the a
   elevated) would allow it in RDP at the cost of the installer's hardening.
 - **A successful sandbox command is still unverified on this host.** The provider stays fail-closed
   and says exactly why.
+
+## The WSL provider (interim, built 2026-10-28)
+**Why:** on this host the host-native runtime cannot start in a Remote Desktop session (its sandbox
+account carries `SeDenyRemoteInteractiveLogonRight`, so `CreateProcessWithLogonW` is refused). The
+machine already has WSL2 (Ubuntu, `bwrap`) and no container or VM is added: a second provider runs
+commands in bubblewrap inside that distro.
+
+**What it guarantees:** `--unshare-all` (user, pid, network, ipc, uts, cgroup), a read-only `/`,
+only the workspace writable (`/var/tmp/arova-sandboxes/<agent>`), a private `/tmp`, a **cleared
+environment**, and `--tmpfs` over both the Linux home and the Windows profile (`/mnt/c/Users/<name>`),
+so neither is readable. The command is written to a script file inside the workspace and executed —
+no shell quoting layer sees user text.
+
+**What it does not:** network is *absent*, not allow-listed — there is no proxy and no per-domain
+policy; there is no seccomp violation monitor and no snapshot/GUI. The process runs as the WSL user
+inside namespaces, not as a separate account.
+
+**How it is chosen:** `AROVA_SANDBOX_PROVIDER=wsl` (or `wsl-bwrap`); `AROVA_SANDBOX_ROOT` overrides
+the Linux workspace root; the command budget is 120 s. The Sandbox panel states all of this.
+
+**Verified (2026-10-28, live through the app's API):** `echo arova-wsl-ok` → the real output;
+`test -e /mnt/c/Users/Ansh/…/memory.md` → `hidden` while the same file is visible on the host;
+`/dev/tcp/1.1.1.1/443` → `Network is unreachable`; writing `/etc/arova-sandbox-escape` →
+`Read-only file system`; `ls /home/ansh | wc -l` → `0`; five commands stored as five runs (3
+COMPLETED, 2 FAILED) with five audits. Script: `.impeccable/sandbox-wsl-proof.mjs`. Real Chrome:
+Integrations → Sandbox → Check prints `arova-sandbox-ok`, `CONSOLE: []`, no overflow
+(`.impeccable/cdp-sandbox-check.mjs`). Unit: `src/lib/sandbox-wsl.test.ts` 5/5 (argv layout, script
+staging, refusal, capabilities, no GUI).
