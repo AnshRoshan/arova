@@ -17,6 +17,10 @@ export type ProviderProfile = {
   builtIn: boolean;
 };
 
+export type ToolDefinition = { type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } };
+export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
+export type ModelMessage = { role: string; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string };
+
 /** Sentinel for workspaces with no model key: honest local replies, never a fabricated completion. */
 export const LOCAL_PROFILE: ProviderProfile = { name: "local", label: "Local", base: "", model: "", maxContextTokens: 0, configured: false, builtIn: true };
 
@@ -175,12 +179,13 @@ export function finishReason(line: string): string {
  * the last SSE frame; without it a streamed reply has no usage at all and every figure on screen is
  * an estimate. Servers that do not know the field reject the request, so the caller retries without it.
  */
-export function completionPayload(input: { profile: { model: string }; messages: { role: string; content: string }[]; maxTokens?: number; stream: boolean; requestUsage?: boolean }): Record<string, unknown> {
+export function completionPayload(input: { profile: { model: string }; messages: ModelMessage[]; maxTokens?: number; stream: boolean; requestUsage?: boolean; tools?: ToolDefinition[] }): Record<string, unknown> {
   const requestUsage = input.requestUsage ?? input.stream;
   return {
     model: input.profile.model,
     messages: input.messages,
     max_tokens: input.maxTokens,
+    ...(input.tools?.length ? { tools: input.tools, tool_choice: "auto" } : {}),
     ...(input.stream ? { stream: true, ...(requestUsage ? { stream_options: { include_usage: true } } : {}) } : {}),
   };
 }
@@ -216,18 +221,19 @@ export function usageFromSseLine(line: string): { input: number; output: number 
 
 export type CompletionRequest = {
   profile: ProviderProfile;
-  messages: { role: string; content: string }[];
+  messages: ModelMessage[];
   maxTokens?: number;
   stream: boolean;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  tools?: ToolDefinition[];
 };
 
 /**
  * Bounded retries for the transient class only (429/5xx/network/timeout). A stream that
  * already started yielding text is never retried: replaying it would duplicate output.
  */
-export async function requestCompletion({ profile, messages, maxTokens = 800, stream, timeoutMs = 45000, fetchImpl }: CompletionRequest): Promise<Response> {
+export async function requestCompletion({ profile, messages, maxTokens = 800, stream, timeoutMs = 45000, fetchImpl, tools }: CompletionRequest): Promise<Response> {
   const doFetch = fetchImpl ?? fetch;
   const key = apiKeyFor(profile.name);
   if (!key) throw new Error(`${profile.label} is selected, but its server API key is not configured.`);
@@ -241,7 +247,7 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
   for (let attempt = 0; attempt <= RETRYABLE_WAIT_MS.length; attempt++) {
     if (attempt) await wait(forcedWait ?? RETRYABLE_WAIT_MS[attempt - 1]);
     forcedWait = null;
-    const body = JSON.stringify(completionPayload({ profile, messages, maxTokens, stream, requestUsage }));
+    const body = JSON.stringify(completionPayload({ profile, messages, maxTokens, stream, requestUsage, tools }));
     let response: Response;
     try {
       response = await doFetch(endpoint, {
@@ -281,4 +287,48 @@ export function completionText(data: unknown): string {
   const content = (data as { choices?: { message?: { content?: unknown } }[] })?.choices?.[0]?.message?.content;
   if (typeof content !== "string" || !content.trim()) throw new Error("Provider returned no text");
   return content.trim();
+}
+
+/** A non-streaming assistant message: text and/or tool calls. */
+export function completionMessage(data: unknown): { content: string; toolCalls: ToolCall[] } {
+  const message = (data as { choices?: { message?: { content?: unknown; tool_calls?: unknown } }[] })?.choices?.[0]?.message;
+  const content = typeof message?.content === "string" ? message.content.trim() : "";
+  const raw = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+  const toolCalls: ToolCall[] = raw.map(entry => {
+    const call = entry as { id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+    return {
+      id: typeof call.id === "string" ? call.id : "",
+      type: "function" as const,
+      function: {
+        name: typeof call.function?.name === "string" ? call.function.name : "",
+        arguments: typeof call.function?.arguments === "string" ? call.function.arguments : "{}",
+      },
+    };
+  }).filter(call => call.id && call.function.name);
+  return { content, toolCalls };
+}
+
+export type ToolCallDelta = { index: number; id?: string; name?: string; arguments?: string };
+
+/** Streaming tool-call deltas. A call's id/name arrive once; arguments arrive in fragments. */
+export function sseToolCallDeltas(line: string): ToolCallDelta[] {
+  const trimmed = line.replace(/\r$/, "").trim();
+  if (!trimmed.startsWith("data:")) return [];
+  const payload = trimmed.slice(5).trim();
+  if (!payload || payload === "[DONE]") return [];
+  try {
+    const raw = JSON.parse(payload)?.choices?.[0]?.delta?.tool_calls;
+    if (!Array.isArray(raw)) return [];
+    return raw.map(entry => {
+      const call = entry as { index?: unknown; id?: unknown; function?: { name?: unknown; arguments?: unknown } };
+      return {
+        index: Number.isFinite(Number(call.index)) ? Number(call.index) : 0,
+        id: typeof call.id === "string" ? call.id : undefined,
+        name: typeof call.function?.name === "string" ? call.function.name : undefined,
+        arguments: typeof call.function?.arguments === "string" ? call.function.arguments : undefined,
+      };
+    });
+  } catch {
+    return [];
+  }
 }

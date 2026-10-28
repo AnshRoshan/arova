@@ -58,6 +58,8 @@ export type Capabilities = {
   tools: string[];
   deniedTools: string[];
   permissionMode: PermissionMode;
+  /** Opt-in read-only tool loop. Off keeps the existing token-streamed reply path. */
+  toolLoop: boolean;
   canConsult: string[];
   canHandoffTo: string[];
   effort: Effort;
@@ -74,6 +76,7 @@ export const DEFAULT_CAPABILITIES: Capabilities = {
   tools: [...LIVE_TOOL_IDS],
   deniedTools: [],
   permissionMode: "default",
+  toolLoop: false,
   canConsult: ["*"],
   canHandoffTo: [],
   effort: "medium",
@@ -129,6 +132,7 @@ export function normaliseCapabilities(raw: unknown): Capabilities {
     tools: Array.isArray(o.tools) ? Array.from(new Set(tools)) : [...DEFAULT_CAPABILITIES.tools],
     deniedTools: Array.from(new Set(denied)),
     permissionMode,
+    toolLoop: o.toolLoop === true,
     canConsult: Array.isArray(o.canConsult) ? list(o.canConsult) : [...DEFAULT_CAPABILITIES.canConsult],
     canHandoffTo: Array.isArray(o.canHandoffTo) ? list(o.canHandoffTo) : [],
     effort,

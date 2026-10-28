@@ -91,3 +91,68 @@ export const sessions = pgTable("sessions", {
   lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
 }, t => [uniqueIndex("sessions_token_hash_unique").on(t.tokenHash), index("sessions_user_index").on(t.userId)]);
+
+/**
+ * An external surface the workspace can post results to and, when it belongs to an organisation,
+ * receive work from. `target` is server-only: it is usually a Slack incoming-webhook URL, which is
+ * itself a credential, so the board returns only its hostname. The inbound token is a second
+ * credential, scoped to one row and revocable by deleting it.
+ */
+export const channels = pgTable("channels", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  kind: text("kind").notNull().default("webhook"),
+  target: text("target").notNull().default(""),
+  token: text("token").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true }),
+  lastStatus: text("last_status"),
+  lastError: text("last_error"),
+  delivered: integer("delivered").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
+  createdAt: created(),
+}, t => [uniqueIndex("channels_token_unique").on(t.token), index("channels_workspace_index").on(t.workspaceId), index("channels_team_index").on(t.teamId)]);
+
+/** Every attempt is a row, so "the Slack post failed" is evidence, not a story. */
+export const channelDeliveries = pgTable("channel_deliveries", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  channelId: uuid("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+  direction: text("direction").notNull().default("out"),
+  event: text("event").notNull(),
+  status: text("status").notNull(),
+  detail: text("detail").notNull().default(""),
+  runId: uuid("run_id"),
+  createdAt: created(),
+}, t => [index("channel_deliveries_channel_index").on(t.channelId, t.createdAt)]);
+
+/**
+ * A fixed task and the answer fragment that proves it. The score is deliberately a substring
+ * check, not an LLM judge: a judge would add a second model call and a second unverifiable claim.
+ */
+export const evalTasks = pgTable("eval_tasks", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  prompt: text("prompt").notNull(),
+  expected: text("expected").notNull(),
+  createdAt: created(),
+});
+
+/** One measured attempt. `detail` holds the answer excerpt and the scorer's sentence. */
+export const evalResults = pgTable("eval_results", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  taskId: uuid("task_id").notNull().references(() => evalTasks.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  status: text("status").notNull(),
+  score: integer("score").notNull().default(0),
+  detail: text("detail").notNull().default(""),
+  durationMs: integer("duration_ms").notNull().default(0),
+  createdAt: created(),
+}, t => [index("eval_results_task_index").on(t.taskId, t.createdAt)]);

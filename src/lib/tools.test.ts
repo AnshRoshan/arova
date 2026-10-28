@@ -39,6 +39,8 @@ test("normalise: junk input becomes safe defaults, never a crash or an escalatio
   const caps = normaliseCapabilities("not an object");
   assert.deepEqual(caps.tools, DEFAULT_CAPABILITIES.tools);
   assert.equal(caps.permissionMode, DEFAULT_CAPABILITIES.permissionMode);
+  assert.equal(caps.toolLoop, false, "the tool loop is opt-in");
+  assert.equal(normaliseCapabilities({ toolLoop: true }).toolLoop, true);
   const hostile = normaliseCapabilities({ tools: ["run_command", "browser", "request_approval"], permissionMode: "bypassPermissions", maxTurns: 99999, effort: "unheard-of" });
   assert.deepEqual(hostile.tools, ["request_approval"], "unavailable tools cannot be granted into existence");
   assert.notEqual(hostile.permissionMode, "bypassPermissions", "the most permissive mode must not be reachable by payload");
