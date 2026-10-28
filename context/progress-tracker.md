@@ -249,3 +249,23 @@ endpoint and would send the API key over it; non-local http is now refused befor
 **Verified.** `paging-proof.mjs` on the live app + DB: window 200, tie-only cursor 0 (the bug), pair
 cursor 50, no overlap, union 250, workspace deleted afterwards. `web-search.test.ts` proves the http
 refusal happens before `fetch`. 245/245 tests, typegen/tsc/build green. Spec 24, D-29.
+
+## Session 2026-10-28 (night) — Windows sandbox provisioning, measured
+The owner ran `npx srt windows-install`. Two real defects in our settings surfaced, and one host
+blocker remains.
+
+**Fixed.** `denyRead` listed `~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`; on Windows those make
+srt-win rewrite the **profile root's** DACL and walk the whole tree (minutes to hours per command).
+Measured: with them removed, `acl grant --persistent` finished in under a second. `buildSrtSettings`
+now takes a platform and emits home denies only on non-Windows — the profile grant's exclusions (or a
+missing grant) already cover the stores there — while project `.env` denies stay everywhere. The
+Sandbox tab states the Windows prerequisite (`windows-install --skip-profile-grant`, Secondary Logon)
+and why the profile grant is skipped.
+
+**Host findings.** The install's profile read grant was left `incomplete`, which refuses every session;
+`profile forget` repaired it after >1 hour of ACL rewrites. Afterwards `initialize()` passes,
+`seclogon` is `ok`, the account is enabled and the credential present — but `srt-win exec` still fails
+with `CreateProcessWithLogonW(srt-sandbox): Access is denied (0x80070005)`. Next step is a clean
+reinstall (`uninstall` + `install --skip-profile-grant`, UAC); if that fails too, the host cannot start
+the sandbox account. **A successful sandbox command is still unverified.** Spec 19 (measured section),
+D-30.

@@ -318,3 +318,14 @@ Why not B: a sequence is a migration and a second ordering for one edge case; th
 Design: the window and the pager order by `created_at DESC, id DESC`; the pager predicate is `created_at < before OR (created_at = before AND id < beforeId)`; `beforeId` is optional so an older client still works, and the client computes the oldest row with the same tie-break. The search adapter refuses `http` for any non-local host before any fetch.
 
 Cost: one optional field, one predicate, one client reducer; one line in `buildUrl` and one test. Reversibility: drop `beforeId` (timestamp-only behaviour returns). Evidence: spec 24; `paging-proof.mjs` (200 + 50 = 250 unique, 0 without the id); `web-search.test.ts` proves no fetch on http; 245 tests, typegen/tsc/build green.
+
+## D-30: no home-deny entries on Windows; skip the profile read grant — 2026-10-28
+Trigger: after the owner provisioned the sandbox, the app still failed closed and the runtime was unusably slow. Measured causes: (1) our `denyRead` listed `~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure`, which makes srt-win rewrite the **profile root's** DACL and walk the whole tree — minutes per run on this machine; removing them made the persistent ACL grant finish in under a second; (2) the install's optional profile read grant was left `incomplete`, and any non-`none`/`current` state refuses every session; repairing it rewrote ~900 ACLs (over an hour).
+
+Options considered: (A) **platform-aware deny list (home denies only on non-Windows) and guidance to install with `--skip-profile-grant`**; (B) keep the home denies and accept the walk; (C) grant profile read and keep our denies; (D) drop `.env` denies too. Chosen: A.
+
+Why not B: a per-command multi-minute ACL walk is not a usable sandbox, and on Windows the entries are redundant — the profile grant excludes the credential stores by design, and without a grant the profile is unreadable outright. Why not C: the grant is exactly the slow, risky step this app does not need. Why not D: project `.env` files sit inside a granted read root, so those denies are load-bearing on every platform.
+
+Design: `buildSrtSettings` takes a `platform` (defaulting to `process.platform`) and emits `~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.azure` only when not Windows; `.env`/`.env.local` (relative and absolute) stay everywhere. The Sandbox tab states the Windows prerequisite and why the profile grant is skipped.
+
+Cost: one option, one branch, two tests. Reversibility: restore the home entries if a provider ever needs them. Evidence: spec 19's measured section; the debug run showed `acl grant --persistent` completing instantly without the home entries; 10/10 sandbox tests, tsc green. A successful command is still unverified — the host refuses `CreateProcessWithLogonW(srt-sandbox)` with access denied after provisioning.

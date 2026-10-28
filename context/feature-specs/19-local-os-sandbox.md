@@ -85,3 +85,29 @@ hosted multi-tenant policy.
   capability chips; Check ran, created a `Sandbox · Scout` FAILED run, an ERROR `sandboxes` row, and
   rendered the refusal. A successful command is **not** verified on this host until the owner runs
   `npx srt windows-install`.
+
+## Windows provisioning, measured (2026-10-28, late)
+The owner ran `npx srt windows-install`. What that leaves behind, and what the app must do about it:
+
+- **The profile read grant is a separate, opt-in step that can be the whole outage.** The install
+  records it; if it is `incomplete` (an interrupted run), every `initialize()` refuses — not just the
+  profile-dependent part. `profile grant` and `profile forget` both rewrite ~900 recorded ACLs;
+  `forget` took over an hour here (it removes the inherited ACE from `C:\Users\Ansh\Documents` last).
+  This app does not need the profile read, so the right install is
+  `npx srt windows-install --skip-profile-grant`; `profile forget` is the way back from a bad grant.
+- **`denyRead` entries under `~` were the slow path.** Denying `~/.ssh` etc. makes the runtime rewrite
+  the profile root's DACL and walk the tree; with those entries removed the persistent ACL grant
+  finished in under a second. On Windows the credential stores are already protected — the profile
+  grant's own exclusions cover them, and without a grant the profile is unreadable — so
+  `buildSrtSettings` now emits home denies only on non-Windows platforms. Project `.env` denies stay
+  on every platform.
+- **`seclogon` must be running.** The first `exec` after provisioning spawns the runner with
+  `CreateProcessWithLogonW`; without the Secondary Logon service it fails with a typed error. Here it
+  is running (`user.seclogon: ok`).
+- **Still refusing on this host:** even with `seclogon` running and the grant `none`, `srt-win exec`
+  and the WFP probe fail with `CreateProcessWithLogonW(srt-sandbox): Access is denied (0x80070005)`.
+  The account is enabled, the credential is present, the profile directory exists, and no sandbox-user
+  process is left over. A clean reinstall (`uninstall` + `install --skip-profile-grant`, UAC) is the
+  next step; if it still refuses, this host cannot start the sandbox account and the provider stays
+  fail-closed. **A successful sandbox command is still unverified here.**
+- The Sandbox tab now states the Windows prerequisite and why the profile grant is skipped.

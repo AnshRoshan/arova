@@ -8,12 +8,24 @@ import { LocalOsSandboxProvider, UnconfiguredSandboxProvider, buildSrtSettings, 
 const AGENT = "11111111-1111-4111-8111-111111111111";
 
 test("the settings are allow-only, deny credentials by absolute path, and start with no network", () => {
-  const settings = buildSrtSettings({ workspace: "/work/agent", projectRoot: "/app", allowedDomains: ["example.com"] });
+  const settings = buildSrtSettings({ workspace: "/work/agent", projectRoot: "/app", allowedDomains: ["example.com"], platform: "linux" });
   assert.deepEqual(settings.network.allowedDomains, ["example.com"]);
   assert.deepEqual(settings.filesystem.allowWrite, ["/work/agent"]);
   assert.ok(settings.filesystem.denyRead.includes("~/.ssh"));
   assert.ok(settings.filesystem.denyRead.some(p => p.endsWith(".env.local")));
   assert.ok(settings.filesystem.denyWrite.includes(".env"));
+});
+
+test("on Windows the home denies are left to the profile grant, which already excludes them", () => {
+  // A deny on ~/.ssh forces the runtime to rewrite the DACL on the profile root and walk the whole
+  // tree (hours on a real machine). Without a profile read grant the profile is unreadable anyway;
+  // with one, the grant itself excludes the credential stores. Project .env files are still denied.
+  const windows = buildSrtSettings({ workspace: "C:\\work\\agent", projectRoot: "C:\\app", platform: "win32" });
+  assert.equal(windows.filesystem.denyRead.some(p => p.startsWith("~")), false);
+  assert.ok(windows.filesystem.denyRead.includes(".env"));
+  assert.ok(windows.filesystem.denyRead.some(p => p.endsWith(".env.local")));
+  const linux = buildSrtSettings({ workspace: "/work/agent", projectRoot: "/app", platform: "linux" });
+  assert.ok(linux.filesystem.denyRead.includes("~/.ssh"), "a Linux home is readable by default, so it is denied there");
 });
 
 test("the allowlist parser accepts commas and whitespace and drops empties", () => {

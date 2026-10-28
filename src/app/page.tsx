@@ -1311,6 +1311,7 @@ export default function Workbench() {
                 <button className="primary" type="button" disabled={busy || !data.agents.length || !sandboxCommand.trim()} onClick={async () => { const r = await act("runSandboxCommand", { agentId: sandboxAgent || agent?.id, command: sandboxCommand }); const s = r?.sandbox as { ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | undefined; if (s) setSandboxResult(s); }}>{busy ? "Running" : "Run"}</button>
                 <button className="ghost" type="button" disabled={busy || !data.agents.length} onClick={async () => { const command = "echo arova-sandbox-ok"; setSandboxCommand(command); const r = await act("runSandboxCommand", { agentId: sandboxAgent || agent?.id, command }); const s = r?.sandbox as { ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | undefined; if (s) setSandboxResult(s); }}>Check</button>
               </div>
+              {data.sandbox.provider === "local-os" && <p className="hint">On Windows the host is provisioned once with <span className="mono">npx srt windows-install --skip-profile-grant</span> (UAC) and the Secondary Logon service running. Skipping the profile grant is deliberate: the sandbox does not need your home directory, and granting it rewrites the profile's ACLs. The first command can take longer while the sandbox user's access list is built.</p>}
               {(() => {
                 const seatId = sandboxAgent || agent?.id || "";
                 const row = data.sandboxes.find(s => s.agentId === seatId);

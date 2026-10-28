@@ -80,10 +80,16 @@ export function parseAllowedDomains(raw: string | undefined): string[] {
  * absolute path because the command's cwd is the workspace, not the project root. Network is
  * allow-only and starts empty: a command that needs a host must be given one by the operator.
  */
-export function buildSrtSettings(input: { workspace: string; projectRoot?: string; allowedDomains?: string[] }): SrtSettings {
+export function buildSrtSettings(input: { workspace: string; projectRoot?: string; allowedDomains?: string[]; platform?: NodeJS.Platform }): SrtSettings {
   const projectRoot = input.projectRoot ?? process.cwd();
+  // On Windows the credential stores are already protected: either the profile read grant excludes
+  // them, or the profile is unreadable because no grant exists. Denying them here makes the runtime
+  // rewrite the profile root's DACL and walk the entire tree, which takes minutes to hours.
+  const homeDenies = (input.platform ?? process.platform) === "win32"
+    ? []
+    : ["~/.ssh", "~/.aws", "~/.config/gcloud", "~/.azure"];
   const denyRead = [
-    "~/.ssh", "~/.aws", "~/.config/gcloud", "~/.azure",
+    ...homeDenies,
     ".env", ".env.local",
     path.join(projectRoot, ".env"), path.join(projectRoot, ".env.local"),
   ];
