@@ -136,15 +136,28 @@ The Stop button aborted only the browser's read; the tool loop checked nothing b
 
 **Verified.** New tests: one model turn after a stop (+ running tool kept), one fetch attempt after an abort. Live fixture (loop turn delayed 1.2 s, `/stats` counts): reader aborts on the first `tool` event → `{calls:3, delayed:1, aborted:1}`, no delta, only the greeting stored, one stop audit (`.impeccable/stop-proof.mjs`). 243 tests, typegen/tsc/build green. Spec 23, D-27.
 
-**Out of scope, named:** `runBrief` still only polls `isClosed` between steps (a brief reader who leaves keeps the brief running); consult/handoff streams are not aborted.
+**Resolved later the same session:** briefs and consult calls now abort too (D-28); a stopped token stream keeps its partial and closes the connection.
 
-HEAD after the citation commit is `9c6fb91`; this feature is uncommitted as of this entry (committed in the same turn if the gate passed).
+Committed as `d072736`.
 
 ### Same session, continued — briefs stop too (D-28)
 D-27 covered chat; an org brief still only polled `isClosed` between steps, so a reader who left kept paying for the router and every seat call and the report was written afterwards. `streamBrief` now owns the same controller (cancel + `request.signal`), `runBrief` polls `stopped()` before the first summons, each routing pass, each seat call and the report, and the signal reaches `routeDecision` and `consultPeer` recursively. A stopped brief writes one `channel_gap` row with `metadata.stopped`, audits `brief.stopped`, finishes `CANCELLED`, and writes no "did not answer" gap and no `provider_error`; posts already landed stay. `streamText` moved to the gateway as `readSseText`, which calls `reader.cancel()` on stop — partial text kept, provider connection closed.
 
 Verified 244/244 tests; live brief proof `{calls:2, delayed:1, aborted:1}` + stop row + CANCELLED run + one audit (`.impeccable/brief-stop-proof.mjs`); both earlier live proofs re-run. The local fix queue is now empty; remaining blockers are credential/infrastructure ones (OAuth client, sandbox provisioning, vendor/search keys, pgvector).
 
-**Also fixed:** the client's Stop toast promised a stored partial for a tool loop, which stores nothing. It now picks the message from what happened (stored partial / streamed-but-landing / nothing streamed) and was verified through the real composer in Chrome (`.impeccable/cdp-stop-toast.mjs`). Uncommitted until the gate passes.
+**Also fixed:** the client's Stop toast promised a stored partial for a tool loop, which stores nothing. It now picks the message from what happened (stored partial / streamed-but-landing / nothing streamed) and was verified through the real composer in Chrome (`.impeccable/cdp-stop-toast.mjs`). Committed as `6d98ba8`.
 
 **Sweep fixes (D-29):** history paging now uses `(created_at, id)` — 250 tied rows reproduced the old 0-row page, the pair cursor returned 50 with no overlap (`paging-proof.mjs`, needs the app's DATABASE_URL from `.env.local`, never printed). The search adapter refuses non-local http so a key cannot ride plain http.
+
+
+## Session 2026-10-28 — final state of the fix queue
+Five commits on `main`, none pushed: `9c6fb91` (one citation ledger), `d072736` (Stop aborts the tool loop), `06dbc07` (briefs stop; stopped streams close their connection), `6d98ba8` (the Stop toast says what was stored), `45a409c` (history pages on `(created_at, id)`; search refuses non-local http). 245/245 tests, typegen/tsc/build green, tree clean.
+
+**The local fix queue is empty.** Remaining work is blocked on people or infrastructure, not on code:
+- Google OAuth client + `AUTH_PROVIDERS` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` for Feature 15's live flow.
+- `npx srt windows-install` (one-time UAC) before the local-os sandbox can run a command on this host.
+- A vendor model and a real search endpoint to prove the tool loop against them (the fixture proves the wiring only).
+- `pgvector` is not available on this Postgres; memory is keyword and the UI says so.
+- Next 16.2.6 carries a critical advisory; upgrading to 16.4.3 is the owner's call.
+- The 20 pre-existing lint errors stay out of the gate unless the owner asks for them.
+Owner decisions still open: the 28-seat Nexus Labs org (L-12), reasoning-in-content display (L-04), and whether to push `main`.
