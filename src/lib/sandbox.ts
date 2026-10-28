@@ -103,6 +103,16 @@ export function buildSrtSettings(input: { workspace: string; projectRoot?: strin
   };
 }
 
+/**
+ * Where a seat's workspace lives. On Windows it is outside the user profile: with the profile read
+ * grant skipped (the install this app recommends) the sandbox account cannot traverse the user's
+ * profile, and the runtime reports a workspace inside it as a mapped drive and refuses.
+ */
+export function defaultSandboxRoot(env: Record<string, string | undefined> = process.env, platform: NodeJS.Platform = process.platform): string {
+  if (platform === "win32") return path.join(env.PUBLIC || "C:\\Users\\Public", "arova", "sandboxes");
+  return path.join(process.cwd(), ".arova", "sandboxes");
+}
+
 export type SrtRunner = (bin: string, args: string[], opts: { cwd: string; timeoutMs: number }) => Promise<{ code: number | null; stdout: string; stderr: string }>;
 
 const MAX_OUTPUT = 20_000;
@@ -156,10 +166,12 @@ export class LocalOsSandboxProvider implements SandboxProvider {
   private readonly runner: SrtRunner;
 
   constructor(options: LocalOsOptions = {}) {
-    this.root = options.root ?? path.join(process.cwd(), ".arova", "sandboxes");
+    this.root = options.root ?? defaultSandboxRoot();
     this.projectRoot = options.projectRoot ?? process.cwd();
     this.allowedDomains = options.allowedDomains ?? [];
-    this.timeoutMs = options.timeoutMs ?? 30_000;
+    // initialize() runs the runtime's own WFP probe, which has a 30 s budget and can retry; a
+    // shorter cap kills setup and reports only "timed out" instead of the runtime's typed refusal.
+    this.timeoutMs = options.timeoutMs ?? 120_000;
     this.cliPath = options.cliPath ?? null;
     this.runner = options.runner ?? defaultRunner;
   }

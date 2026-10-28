@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = process.cwd();
-const ws = join(root, ".arova", "sandboxes", "debug");
+const ws = join(process.env.PUBLIC || "C:\\Users\\Public", "arova", "sandboxes", "debug");
 mkdirSync(ws, { recursive: true });
 const settingsPath = join(ws, "srt-settings.json");
 writeFileSync(settingsPath, JSON.stringify({
