@@ -124,6 +124,27 @@ test("the loop is bounded and says it stopped", async () => {
   assert.equal(result.used.length, 2);
 });
 
+test("a reader who leaves stops the loop before the next model call is paid for", async () => {
+  let calls = 0;
+  let stop = false;
+  const result = await runToolLoop({
+    messages: [{ role: "user", content: "go" }],
+    tools: toolDefinitions(["calc"], false),
+    allowed: ["calc"],
+    shouldStop: () => stop,
+    complete: async () => {
+      calls++;
+      return { content: "", toolCalls: [call("calc", { expression: "1+1" })] };
+    },
+    // The tool that was already running is finished (so its result is real), then the loop stops.
+    audit: () => { stop = true; },
+  });
+  assert.equal(calls, 1, "the second model turn is never requested");
+  assert.equal(result.stopped, true);
+  assert.deepEqual(result.used, ["calc"], "the running tool is not torn in half");
+  assert.equal(result.partial, true);
+});
+
 test("a tool error is fed back to the model, which can recover", async () => {
   let turn = 0;
   const seen: string[] = [];

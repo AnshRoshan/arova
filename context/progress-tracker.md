@@ -204,3 +204,17 @@ waiting token, `CONSOLE: []`, no overflow (`.impeccable/cdp-citations.mjs`).
 
 **Not verified.** A real search provider and a vendor model (no key), unchanged from spec 21. No new
 schema; old rows fall back to list position. Spec 22, D-26.
+
+## Session 2026-10-28 (evening) — Stop now stops the tool loop
+**Complete.** The Stop button only aborted the browser's read; the tool loop checked nothing between
+turns, so a stopped reply kept buying model turns and tool calls and then stored a full answer the
+reader had cancelled. Fixed end to end: `streamReply` owns one abort controller fed by both the stream's
+`cancel()` and `request.signal`; the router and each tool-loop turn receive its signal; the gateway
+combines it with the timeout and never retries an abort; `runToolLoop` polls `shouldStop` before each
+turn and each tool call and returns `stopped`. A stopped loop stores no assistant row and no fake
+provider error — only one `chat.stopped` audit. Streamed token replies are unchanged and still keep
+their partial (`what has already arrived is kept`).
+
+**Verified.** Two new tests; live fixture with a 1.2 s loop turn: reader stops on the first tool event →
+`{calls:3, delayed:1, aborted:1}`, no delta, only the greeting stored, one stop audit
+(`.impeccable/stop-proof.mjs`). Full gate follows. Spec 23, D-27.

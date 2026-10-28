@@ -782,7 +782,7 @@ async function streamText(response: Response, onText: (chunk: string) => void, s
  * actually granted, so removing a capability in the UI removes the option from the model
  * rather than asking the model politely to ignore a tool it still has.
  */
-async function routeDecision(question: string, peers: Peer[], profile: ProviderProfile, workspaceId: string, allowed: { consult: boolean; handoff: boolean; approval: boolean; build: boolean }): Promise<Routing> {
+async function routeDecision(question: string, peers: Peer[], profile: ProviderProfile, workspaceId: string, allowed: { consult: boolean; handoff: boolean; approval: boolean; build: boolean }, signal?: AbortSignal): Promise<Routing> {
   if (!allowed.consult && !allowed.handoff && !allowed.approval && !allowed.build) return { action: "none" };
   try {
     const response = await requestCompletion({
@@ -791,6 +791,7 @@ async function routeDecision(question: string, peers: Peer[], profile: ProviderP
       maxTokens: 1600,
       stream: false,
       timeoutMs: requestTimeoutMs(),
+      signal,
     });
     const body = await response.json();
     const text = completionText(body);
@@ -885,7 +886,7 @@ type ModelPlan = Extract<Awaited<ReturnType<typeof planReply>>, { kind: "model" 
  * web_search (when configured); it cannot call a shell. Each model turn is counted; each tool call is
  * audited. The final answer is returned to the caller, which streams it as one delta.
  */
-async function runAgentToolLoop(workspaceId: string, agent: ChatAgent, plan: ModelPlan, messages: ModelMessage[], send: (payload: Record<string, unknown>) => void) {
+async function runAgentToolLoop(workspaceId: string, agent: ChatAgent, plan: ModelPlan, messages: ModelMessage[], send: (payload: Record<string, unknown>) => void, control: { signal?: AbortSignal; shouldStop?: () => boolean } = {}) {
   let inputTokens = 0, outputTokens = 0, countedAny = false;
   const result = await runToolLoop({
     messages,
@@ -893,10 +894,11 @@ async function runAgentToolLoop(workspaceId: string, agent: ChatAgent, plan: Mod
     allowed: plan.toolIds,
     deps: { searchProfile: plan.searchProfile },
     maxSteps: 4,
+    shouldStop: control.shouldStop,
     onEvent: event => send({ type: "tool", name: event.name, status: event.status, ...(event.detail ? { detail: event.detail } : {}) }),
     audit: detail => { void audit(workspaceId, agent.id, "tool.called", detail); },
     complete: async (turnMessages, tools) => {
-      const response = await requestCompletion({ profile: plan.profile, messages: turnMessages, maxTokens: tokenBudgetFor(plan.caps), stream: false, timeoutMs: requestTimeoutMs(), tools });
+      const response = await requestCompletion({ profile: plan.profile, messages: turnMessages, maxTokens: tokenBudgetFor(plan.caps), stream: false, timeoutMs: requestTimeoutMs(), tools, signal: control.signal });
       const body = await response.json();
       const message = completionMessage(body);
       const counted = usageFromJson(body);
@@ -973,9 +975,18 @@ async function buildReply(workspaceId: string, agent: ChatAgent, history: Turn[]
  * reply, a partial reply flagged `incomplete`, or the failure notice. A stream that already
  * began is never retried — replaying it would duplicate text the user has watched arrive.
  */
-function streamReply(workspaceId: string, agent: ChatAgent, agentId: string) {
+function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, clientSignal?: AbortSignal) {
   const encoder = new TextEncoder();
   let closed = false;
+  // The reader's Stop aborts this, so a model call already in flight stops spending tokens rather
+  // than completing into a stream nobody is reading. Two sources: the request itself (a client that
+  // disconnects) and the stream's cancel().
+  const stop = new AbortController();
+  const leave = () => { closed = true; stop.abort(); };
+  if (clientSignal) {
+    if (clientSignal.aborted) leave();
+    else clientSignal.addEventListener("abort", leave, { once: true });
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -1005,10 +1016,13 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string) {
             send({ type: "reply", reply });
             return row;
           };
+          // A tool-loop reply exists only when the loop finishes, so a reader who leaves gets no
+          // answer — and the record says the stop happened rather than looking like a lost message.
+          const noteStopped = () => audit(workspaceId, agent.id, "chat.stopped", "Stopped by the reader before the tool loop finished; no answer was stored.");
 
           // Route first, answer second: whatever the agent is granted decides what can happen.
           const asked = history[history.length - 1]?.content ?? "";
-          let decision = await routeDecision(asked, plan.consultPeers, profile, workspaceId, plan.allowed);
+          let decision = await routeDecision(asked, plan.consultPeers, profile, workspaceId, plan.allowed, stop.signal);
           // A reasoning router can spend its whole budget thinking and emit no JSON. Naming one
           // teammate in the message is unambiguous, so that route does not depend on the model.
           if (decision.action === "none" && plan.allowed.consult) {
@@ -1068,12 +1082,21 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string) {
           const finalMessages = hop ? integrateMessages(plan.chat, hop.peer, hop.question, hop.answer) : plan.chat;
           if (plan.toolLoop && plan.tools.length) {
             try {
-              const result = await runAgentToolLoop(workspaceId, agent, plan, finalMessages, send);
+              const result = await runAgentToolLoop(workspaceId, agent, plan, finalMessages, send, { signal: stop.signal, shouldStop: () => closed });
+              if (result.stopped || closed) {
+                await noteStopped();
+                return;
+              }
               if (!result.content.trim()) throw new Error("The tool loop returned no text.");
               send({ type: "delta", text: result.content });
               await persist({ content: result.content, kind: "message", metadata: toolLoopMetadata(result, profile, hop) }, profile.name, null, false);
               return;
             } catch (error) {
+              // The abort is the reader's own action, not a provider failure worth storing.
+              if (closed) {
+                await noteStopped();
+                return;
+              }
               await persist(failureReply(profile, error));
               return;
             }
@@ -1110,7 +1133,10 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string) {
           const row = await persist({ content: finalText, kind: "message", metadata: { provider: profile.name, model: profile.model, ...(hop ? { consulted: [{ name: hop.peer.name, question: hop.question }] } : {}), ...(plan.memory.count ? { memory: plan.memory } : {}), ...(truncated ? { incomplete: true, truncated: true } : {}) } }, profile.name, streamedUsage);
           if (hop) await db.insert(delegations).values({ workspaceId, messageId: row.id, fromAgentId: agent.id, toAgentId: hop.peer.id, question: hop.question, answer: hop.answer, model: profile.model, inputTokens: estimateTokens(hop.question), outputTokens: estimateTokens(hop.answer) });
         } catch (error) {
-          if (profile) {
+          if (closed) {
+            // A reader who left mid-flight caused the abort; storing "provider error" would blame
+            // the model for the human's own Stop.
+          } else if (profile) {
             const notice = failureReply(profile, error);
             await db.insert(messages).values({ workspaceId, agentId, role: "assistant", ...notice });
             send({ type: "reply", reply: notice });
@@ -1127,7 +1153,7 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string) {
         }
       })();
     },
-    cancel() { closed = true; },
+    cancel() { leave(); },
   });
 
   return new Response(stream, { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive", "X-Accel-Buffering": "no" } });
@@ -1431,7 +1457,7 @@ export async function POST(request: NextRequest) {
       const content = text.parse(body.content);
       await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "user", content });
       await audit(workspaceId, agent.id, "chat.message", "Message exchanged");
-      if (body.stream !== false) return streamReply(workspaceId, agent, agent.id);
+      if (body.stream !== false) return streamReply(workspaceId, agent, agent.id, request.signal);
       const reply = await buildReply(workspaceId, agent, await recentTurns(workspaceId, agent.id));
       await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "assistant", ...reply });
       result = { reply };
