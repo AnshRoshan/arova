@@ -15,6 +15,7 @@ import { AlwaysOn, type SchedulerInfo } from "./AlwaysOn";
 import { ScheduleBuilder } from "./ScheduleBuilder";
 import { orgTree, type OrgNode } from "@/lib/org";
 import { resolveLead, summonCeiling } from "@/lib/channel";
+import { searchRegistry, type RegistryRow } from "@/lib/registry";
 
 type Agent = { id: string; name: string; role: string; instructions: string; avatar: string; status: string; provider: string; teamId: string | null; managerId: string | null; capabilities: Capabilities };
 /** A row belongs to one seat's thread or to one organisation's channel — `teamId` set means channel. */
@@ -27,6 +28,7 @@ type Profile = { name: string; label: string; model: string; configured: boolean
 type Usage = { provider: string; calls: number; inputTokens: number; outputTokens: number; estimated: boolean };
 type Capabilities = {
   tools: string[]; deniedTools: string[]; permissionMode: "default" | "plan" | "auto";
+  toolLoop: boolean;
   canConsult: string[]; canHandoffTo: string[]; effort: "low" | "medium" | "high";
   maxTurns: number | null; modelParams: { temperature?: number; maxTokens?: number };
   mcpServers: { name: string; transport: string }[]; mcpInheritance: unknown; skills: string[];
@@ -39,6 +41,12 @@ type Trigger = { id: string; teamId: string; token: string; label: string; enabl
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
 type BoardEvent = { id: string; agentId: string | null; type: string; detail: string; createdAt: string };
+/** The target is a credential, so the board sends its host and inbound token only, never the URL. */
+type Channel = { id: string; teamId: string | null; name: string; kind: string; targetHost: string; token: string; enabled: boolean; lastDeliveryAt: string | null; lastStatus: string | null; lastError: string | null; delivered: number; failed: number; lastInboundAt: string | null; createdAt: string };
+type ChannelDelivery = { id: string; channelId: string; direction: string; event: string; status: string; detail: string; runId: string | null; createdAt: string };
+type EvalTask = { id: string; agentId: string; name: string; prompt: string; expected: string; createdAt: string };
+type EvalResultRow = { id: string; taskId: string; agentId: string; runId: string | null; status: string; score: number; detail: string; durationMs: number; createdAt: string };
+type EvalSummary = { attempts: number; passed: number; failed: number; skipped: number; passRate: number | null; medianMs: number | null };
 type Board = {
   workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
   overview: { activeAgents: number; enabledRoutines: number; completedRuns: number; pendingApprovals: number; messagesToday: number };
@@ -46,9 +54,14 @@ type Board = {
   olderMessages: boolean;
   connections: { agentId: string; slug: string }[]; events: BoardEvent[];
   sandboxProvider: string; modelConfigured: boolean; profiles: Profile[];
+  sandbox: { provider: string; capabilities: { graphical: boolean; pty: boolean; snapshots: boolean; takeover: boolean; persistentHome: boolean; multiScreen: boolean } };
+  sandboxes: { id: string; agentId: string; provider: string; status: string; minutesUsed: number; createdAt: string }[];
   auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
   identity: { signedIn: { name: string; email: string; role: "owner" | "member" } | null; people: { id: string; name: string; email: string; role: string; addedAt: string; lastSeenAt: string | null; sessions: number }[] };
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
+  channels: Channel[]; channelDeliveries: ChannelDelivery[];
+  evals: { tasks: EvalTask[]; results: EvalResultRow[]; summary: EvalSummary };
+  registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
 };
@@ -196,19 +209,27 @@ export default function Workbench() {
   const [agentTab, setAgentTab] = useState<"all" | "active" | "paused">("all");
   const [orgTab, setOrgTab] = useState<"teams" | "bench">("teams");
   const [orgSel, setOrgSel] = useState<string | null>(null);
-  const [autoTab, setAutoTab] = useState<"routines" | "runs" | "always-on">("routines");
-  const [toolsTab, setToolsTab] = useState<"connectors" | "local" | "mcp">("connectors");
+  const [autoTab, setAutoTab] = useState<"routines" | "runs" | "always-on" | "evals">("routines");
+  const [toolsTab, setToolsTab] = useState<"connectors" | "local" | "mcp" | "channels" | "sandbox">("connectors");
+  const [sandboxAgent, setSandboxAgent] = useState("");
+  const [sandboxCommand, setSandboxCommand] = useState("echo arova-sandbox-ok");
+  const [sandboxResult, setSandboxResult] = useState<{ ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | null>(null);
   const [consoleTool, setConsoleTool] = useState("calc");
   const [consoleAgent, setConsoleAgent] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const [toolRuns, setToolRuns] = useState<Record<string, { ok: boolean; output?: string; error?: string }>>({});
-  const [settingsTab, setSettingsTab] = useState<"workspace" | "models" | "limits">("workspace");
+  const [settingsTab, setSettingsTab] = useState<"workspace" | "models" | "limits" | "registry">("workspace");
   const [teamForm, setTeamForm] = useState({ name: "", brief: "" });
+  const [channelForm, setChannelForm] = useState({ name: "", kind: "webhook", target: "", teamId: "" });
+  const [channelOutput, setChannelOutput] = useState<{ token: string } | null>(null);
+  const [evalForm, setEvalForm] = useState({ name: "", agentId: "", prompt: "", expected: "" });
+  const [registryQuery, setRegistryQuery] = useState("");
   const [activity, setActivity] = useState(false);
   const [draft, setDraft] = useState("");
   const [stream, setStream] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [consulting, setConsulting] = useState<{ from: string; to: string; question: string } | null>(null);
+  const [toolState, setToolState] = useState<{ name: string; status: string; detail?: string } | null>(null);
   /** The open organisation channel, the posts this brief has already landed, and the run behind them. */
   const [channelId, setChannelId] = useState<string | null>(null);
   const [livePosts, setLivePosts] = useState<Message[]>([]);
@@ -229,7 +250,7 @@ export default function Workbench() {
   }, []);
   const [atBottom, setAtBottom] = useState(true);
   const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team"; id: string; name: string } | null>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "sandbox"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -293,6 +314,9 @@ export default function Workbench() {
     setAgentId(data.agents.find(a => a.id === saved)?.id ?? data.agents.find(a => a.id === touched)?.id ?? data.agents[0].id);
   }, [data, agentId]);
   useEffect(() => { if (agentId) localStorage.setItem("arova.lastAgent", agentId); }, [agentId]);
+  /** The eval form needs a seat before it can save; adopt the first one once, not on every poll. */
+  useEffect(() => { if (!evalForm.agentId && data?.agents.length) setEvalForm(f => ({ ...f, agentId: data.agents[0].id })); }, [data, evalForm.agentId]);
+  useEffect(() => { if (!sandboxAgent && data?.agents.length) setSandboxAgent(data.agents[0].id); }, [data, sandboxAgent]);
 
   async function act(action: string, payload: Record<string, unknown> = {}, say?: string) {
     setBusy(true);
@@ -335,7 +359,7 @@ export default function Workbench() {
     const controller = new AbortController();
     abortRef.current = controller;
     const answeredBefore = thread.filter(m => m.role === "assistant").length;
-    setBusy(true); setPending(content); setStream("");
+    setBusy(true); setPending(content); setStream(""); setToolState(null);
     try {
       const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sendMessage", agentId: agent.id, content, stream: true }), signal: controller.signal });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Something went wrong");
@@ -352,9 +376,10 @@ export default function Workbench() {
         for (const frame of frames) {
           const line = frame.split("\n").find(l => l.startsWith("data: "));
           if (!line) continue;
-          let ev: { type: string; text?: string; board?: Board; error?: string };
+          let ev: { type: string; text?: string; board?: Board; error?: string; name?: string; status?: string; detail?: string };
           try { ev = JSON.parse(line.slice(6)); } catch { continue; }
           if (ev.type === "delta") { answer += ev.text ?? ""; setStream(answer); setConsulting(null); }
+          else if (ev.type === "tool") setToolState({ name: String(ev.name ?? "tool"), status: String(ev.status ?? "running"), detail: ev.detail ? String(ev.detail) : undefined });
           else if (ev.type === "consult") setConsulting({ from: String((ev as { from?: string }).from), to: String((ev as { to?: string }).to), question: String((ev as { question?: string }).question) });
           else if (ev.type === "end") finalBoard = ev.board ?? null;
           else if (ev.type === "error") setToast(ev.error || "The reply could not be completed");
@@ -374,7 +399,7 @@ export default function Workbench() {
       }
       setToast(e instanceof Error ? e.message : "Something went wrong"); return false;
     }
-    finally { abortRef.current = null; setBusy(false); setPending(null); setStream(""); setConsulting(null); }
+    finally { abortRef.current = null; setBusy(false); setPending(null); setStream(""); setConsulting(null); setToolState(null); }
   }
 
   const stop = () => abortRef.current?.abort();
@@ -511,6 +536,8 @@ export default function Workbench() {
   const hueOf = (id: string | null | undefined) => hueVars(hueFor(id ?? undefined));
   const hue = hueOf(agent?.id);
   const mcpCount = (data?.agents ?? []).reduce((n, a) => n + (a.capabilities?.mcpServers?.length ?? 0), 0);
+  /** The registry filter runs over exact server aggregates; nothing here is recomputed from a window. */
+  const registryRows = useMemo(() => searchRegistry(data?.registry ?? [], registryQuery), [data, registryQuery]);
 
   /* ── the workbench computes: what each seat is doing, and what the server recorded ── */
   const nowMs = Date.now();
@@ -759,7 +786,7 @@ export default function Workbench() {
       </>}
 
       {section === "scheduler" && <>
-        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "always-on", label: "24/7" }]} />
+        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "evals", label: "Evals", count: data.evals.tasks.length }, { id: "always-on", label: "24/7" }]} />
         <div className="sp-scroll">
           {autoTab === "routines" && <>
             {!data.routines.length && <p className="bench-none">No routines yet. Use + to add one.</p>}
@@ -783,11 +810,19 @@ export default function Workbench() {
               <span className={`sp-dot ${toneOf(r.status, isSample(r))}`} title={isSample(r) ? "sample" : r.status.toLowerCase()} />
             </button>)}
           </>}
+          {autoTab === "evals" && <>
+            {!data.evals.tasks.length && <p className="bench-none">No eval tasks yet. Add one in the Evals tab.</p>}
+            {data.evals.tasks.map(t => <button key={t.id} className="sp-item" onClick={() => { setAutoTab("evals"); setPane("scheduler"); setRail(false); }}>
+              <span className="sp-item-icon"><Gauge size={16} /></span>
+              <span className="sp-item-main"><b>{t.name}</b><em>{byId(t.agentId)?.name ?? "removed agent"} · {data.evals.results.filter(r => r.taskId === t.id).length} attempt(s)</em></span>
+              <span className={`sp-dot ${data.evals.results.some(r => r.taskId === t.id && r.status === "FAIL") ? "fault" : data.evals.results.some(r => r.taskId === t.id && r.status === "PASS") ? "ran" : ""}`} />
+            </button>)}
+          </>}
         </div>
       </>}
 
       {section === "tools" && <>
-        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "local", label: "Local tools", count: localToolSpecs.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
+        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "local", label: "Local tools", count: localToolSpecs.length }, { id: "channels", label: "Channels", count: data.channels.length }, { id: "sandbox", label: "Sandbox", count: data.sandboxes.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
         <div className="sp-scroll">
           {toolsTab === "connectors" && [...new Set(toolCatalog.map(t => t.category))].map(cat => <div key={cat}>
             <div className="sp-group">{cat}</div>
@@ -796,6 +831,19 @@ export default function Workbench() {
           {toolsTab === "local" && <>
             <div className="sp-group">Runs for real here</div>
             {localToolSpecs.map(t => <button key={t.id} className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}><span className="sp-item-icon"><Zap size={16} /></span><span className="sp-item-main"><b>{t.label}</b><em>no credential needed</em></span></button>)}
+          </>}
+          {toolsTab === "sandbox" && <button className="sp-item" onClick={() => { setPane("tools"); setRail(false); }}>
+            <span className="sp-item-icon"><Cpu size={16} /></span>
+            <span className="sp-item-main"><b>Sandbox</b><em>{data.sandbox.provider === "local-os" ? "local-os · shell and files" : "not configured"}</em></span>
+            <span className={`sp-dot ${data.sandbox.provider === "local-os" ? "ran" : ""}`} />
+          </button>}
+          {toolsTab === "channels" && <>
+            {!data.channels.length && <p className="bench-none">No channel yet. Add a Slack incoming webhook or any HTTPS endpoint.</p>}
+            {data.channels.map(c => <button key={c.id} className="sp-item" onClick={() => { setToolsTab("channels"); setPane("tools"); setRail(false); }}>
+              <span className="sp-item-icon"><Webhook size={16} /></span>
+              <span className="sp-item-main"><b>{c.name}</b><em>{c.kind} · {c.targetHost} · {c.enabled ? `${c.delivered} delivered` : "disabled"}</em></span>
+              <span className={`sp-dot ${c.enabled ? "ran" : ""}`} title={c.enabled ? "enabled" : "disabled"} />
+            </button>)}
           </>}
           {toolsTab === "mcp" && <>
             {!mcpCount && <p className="bench-none">No MCP server configured. Add one in an agent’s capabilities.</p>}
@@ -809,6 +857,7 @@ export default function Workbench() {
         {([
           { id: "workspace", label: "Workspace", note: "Name and time zone", icon: Building2 },
           { id: "models", label: "Models & usage", note: "Providers and today’s calls", icon: Cpu },
+          { id: "registry", label: "Agent registry", note: "Who exists and what they can do", icon: ShieldCheck },
           { id: "limits", label: "Deployment limits", note: "What cannot run here", icon: Gauge },
         ] as const).map(s => <button key={s.id} className={`sp-item ${settingsTab === s.id ? "on" : ""}`} onClick={() => { setSettingsTab(s.id); setPane("settings"); setRail(false); }}><span className="sp-item-icon"><s.icon size={16} /></span><span className="sp-item-main"><b>{s.label}</b><em>{s.note}</em></span></button>)}
       </div>}
@@ -1092,6 +1141,7 @@ export default function Workbench() {
                     <div style={{ minWidth: 0 }}><b>{String(m.metadata?.name ?? "New routine")}</b><span> · {String(m.metadata?.schedule ?? "Every day at 8:00 AM")} · {data.workspace.timezone}</span></div>
                     <button className="primary" disabled={busy} onClick={() => act("createRoutine", { agentId: agent.id, name: String(m.metadata?.name ?? "New routine"), description: String(m.metadata?.description ?? ""), schedule: String(m.metadata?.schedule ?? "Every day at 8:00 AM") }, "Routine saved")}>Save<ArrowRight size={14} /></button>
                   </div>}
+                  {(() => { const sources = Array.isArray(m.metadata?.sources) ? m.metadata.sources as { title?: string; url?: string }[] : []; return sources.length ? <p className="hint">Sources: {sources.map((s, i) => <span key={`${s.url}-${i}`}>{i ? " · " : ""}<a href={String(s.url)} target="_blank" rel="noreferrer noopener">[{i + 1}] {String(s.title || s.url)}</a></span>)}</p> : null; })()}
                   {isLast && provenance && <details className="prov">
                     <summary>
                       <span className="prov-state">{provenance.state}</span>
@@ -1110,11 +1160,12 @@ export default function Workbench() {
           {busy && (() => { const live = splitReasoning(stream); return <div className="entry entry-assistant entry-live" style={hue}>
             <span className="entry-face"><FaceIcon agent={agent} /></span>
             <div className="entry-main">
-              <div className="entry-head"><strong>{agent.name}</strong><time>{live.answer ? "answering" : live.reasoning ? "reasoning" : consulting ? "consulting" : "waiting"}</time>
+              <div className="entry-head"><strong>{agent.name}</strong><time>{toolState ? `using ${toolState.name}` : live.answer ? "answering" : live.reasoning ? "reasoning" : consulting ? "consulting" : "waiting"}</time>
                 <span className="entry-tools"><button className="stop-btn" type="button" onClick={stop} title="Stop this reply; what has already arrived is kept"><Square size={11} fill="currentColor" />Stop</button></span>
               </div>
               <ReasoningFold text={stream} model={answering?.model} streaming />
-              <div className="entry-text">{consulting ? <span className="consulting">Consulting {consulting.to} — {consulting.question}</span> : null}{live.answer || (live.reasoning || consulting ? "" : "Waiting for the model…")}{stream ? <span className="caret" /> : null}</div>
+              {toolState && <div className="consult"><div className="consult-head"><WandSparkles size={13} /><span><b>{toolState.name}</b> · {toolState.status}</span></div>{toolState.detail && <p className="consult-q">{toolState.detail}</p>}</div>}
+              <div className="entry-text">{consulting ? <span className="consulting">Consulting {consulting.to} — {consulting.question}</span> : null}{live.answer || (live.reasoning || consulting ? "" : toolState ? `Running ${toolState.name}…` : "Waiting for the model…")}{stream ? <span className="caret" /> : null}</div>
             </div>
           </div>; })()}
           <div ref={endRef} />
@@ -1122,9 +1173,43 @@ export default function Workbench() {
 
         {pane === "scheduler" && <div className="pane">
           <div className="pane-head"><div><h1>Automations</h1><p>{data.scheduler.headline === "always-on" ? "Your scheduler is live: due routines fire on time, even with nobody in the app." : "Routines fire only while something is watching the clock. Open the 24/7 tab to make it permanent."}</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
-          <div className="pane-tabs"><Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "always-on", label: "24/7 control room" }]} /></div>
+          <div className="pane-tabs"><Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "evals", label: "Evals", count: data.evals.tasks.length }, { id: "always-on", label: "24/7 control room" }]} /></div>
           {autoTab === "always-on" && <AlwaysOn info={data.scheduler} origin={origin} routineCount={data.routines.length} enabledCount={data.routines.filter(r => r.enabled).length} onRefresh={() => { void load(); }}
             onPreset={schedule => { setRoutineForm({ name: "", description: "", schedule, agentId: agent?.id ?? data.agents[0]?.id ?? "" }); setDialog("routine"); }} />}
+          {autoTab === "evals" && <div>
+            <div className="kv"><span>Pass rate</span><span className="push mono">{data.evals.summary.passRate === null ? "no scored attempts" : `${Math.round(data.evals.summary.passRate * 100)}%`}</span></div>
+            <div className="kv"><span>Attempts</span><span className="push mono">{data.evals.summary.attempts} · {data.evals.summary.passed} passed · {data.evals.summary.failed} failed · {data.evals.summary.skipped} skipped</span></div>
+            <div className="kv"><span>Median duration</span><span className="push mono">{data.evals.summary.medianMs === null ? "no measurement" : `${data.evals.summary.medianMs} ms`}</span></div>
+            <p className="hint">One prompt, one answer, one expected fragment. The score is a case-insensitive substring check, not a model judge — cheap, replayable, and exactly as narrow as it looks.</p>
+            <h2 className="pane-h2">New task<span className="mono">agent + prompt + expected fragment</span></h2>
+            <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="ev-name">Task name</label><input id="ev-name" maxLength={80} placeholder="Reports the current time for Berlin" value={evalForm.name} onChange={e => setEvalForm({ ...evalForm, name: e.target.value })} /></div>
+              <div className="field"><label htmlFor="ev-agent">Seat</label><select id="ev-agent" value={evalForm.agentId} onChange={e => setEvalForm({ ...evalForm, agentId: e.target.value })}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select></div>
+              <div className="field"><label htmlFor="ev-prompt">Prompt</label><textarea id="ev-prompt" rows={3} maxLength={4000} placeholder="State the current time in Europe/Berlin, and say which tool or fact you used." value={evalForm.prompt} onChange={e => setEvalForm({ ...evalForm, prompt: e.target.value })} /></div>
+              <div className="field"><label htmlFor="ev-expected">Expected fragment</label><input id="ev-expected" maxLength={500} placeholder="Europe/Berlin" value={evalForm.expected} onChange={e => setEvalForm({ ...evalForm, expected: e.target.value })} /><span className="hint">The answer passes when it contains this text, case-insensitive. Keep it a fact, not a phrasing.</span></div>
+              <button className="primary" disabled={busy || !evalForm.name.trim() || !evalForm.agentId || !evalForm.prompt.trim() || !evalForm.expected.trim()} onClick={async () => { const r = await act("createEvalTask", evalForm, "Eval task saved"); if (r) setEvalForm(f => ({ ...f, name: "", prompt: "", expected: "" })); }}>Save task</button>
+            </div></div>
+            <h2 className="pane-h2">Tasks<span className="mono">{data.evals.tasks.length}</span></h2>
+            {data.evals.tasks.length ? <div className="rows">{data.evals.tasks.map(t => {
+              const results = data.evals.results.filter(r => r.taskId === t.id);
+              const last = results[0];
+              return <div className="row" key={t.id}>
+                <span className="row-face"><Gauge size={15} /></span>
+                <span className="row-main"><strong>{t.name}</strong><span>{byId(t.agentId)?.name ?? "removed agent"} · expects “{t.expected}” · {results.length} attempt(s)</span><span className="row-when">{last ? `${last.status.toLowerCase()} · ${last.durationMs} ms · ${last.detail.slice(0, 160)}` : "not run yet"}</span></span>
+                <span className="row-side">{last ? <span className={`chip ${last.status === "PASS" ? "ran" : last.status === "FAIL" ? "fault" : last.status === "SKIPPED" ? "waiting" : "idle"}`}><i />{last.status.toLowerCase()}</span> : <span className="chip idle"><i />not run</span>}</span>
+                <span className="row-actions">
+                  <button className="ghost" disabled={busy} onClick={async () => { const r = await act("runEvalTask", { taskId: t.id }); const res = r?.result as { status?: string; detail?: string } | undefined; if (res?.status) setToast(`Eval ${res.status.toLowerCase()}${res.detail ? `: ${res.detail.slice(0, 120)}` : ""}`); }}><Play size={14} />Run</button>
+                  <button className="icon-btn" title="Delete" disabled={busy} onClick={() => setAskDelete({ kind: "eval", id: t.id, name: t.name })}><Trash2 size={15} /></button>
+                </span>
+              </div>;
+            })}</div> : <div className="blank"><h3>No eval tasks</h3><p>Add one above. It runs the configured model and records what it measured.</p></div>}
+            <h2 className="pane-h2">Recent results<span className="mono">{data.evals.results.length}</span></h2>
+            {data.evals.results.length ? <div className="rows">{data.evals.results.slice(0, 12).map(r => <div className="row" key={r.id}>
+              <span className="row-face"><Check size={14} /></span>
+              <span className="row-main"><strong>{data.evals.tasks.find(t => t.id === r.taskId)?.name ?? "deleted task"}</strong><span>{byId(r.agentId)?.name ?? "removed agent"} · {r.durationMs} ms · {r.detail.slice(0, 220)}</span></span>
+              <span className="row-side"><span className={`chip ${r.status === "PASS" ? "ran" : r.status === "FAIL" ? "fault" : r.status === "SKIPPED" ? "waiting" : "idle"}`}><i />{r.status.toLowerCase()}</span><time className="mono">{stamp(r.createdAt)}</time></span>
+            </div>)}</div> : <div className="blank"><h3>No measurements yet</h3><p>Run a task and the result appears here with its duration and the scorer’s sentence.</p></div>}
+          </div>}
           {autoTab === "routines" && <><h2 className="pane-h2">Routines<span className="mono">{data.routines.length}</span></h2>
           {data.routines.length ? <div className="rows">{data.routines.map(r => <div className="row" key={r.id}>
             <span className="row-face"><CalendarDays size={15} /></span>
@@ -1150,7 +1235,7 @@ export default function Workbench() {
           onDraft={() => { const lead = agent ?? data.agents[0]; if (!lead) return; openSeat(lead.id); setDraft("Build me an organisation for "); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 80); }} />}
 
         {pane === "tools" && <div className="pane">
-          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has a browser, files, or an external account. Five tools do run for real: four inside the server process, and one public web page behind an SSRF policy — open Local tools. Per-agent grants live in Agent › Capabilities.</p></div></div>
+          <div className="pane-head"><div><h1>Tools &amp; MCP</h1><p>No connector is authorised here, so no agent has an external account. The local tools and one public web page run for real; Channels delivers results; Sandbox is an opt-in shell/files runtime with no GUI. Per-agent grants live in Agent › Capabilities.</p></div></div>
           <div className={`rows ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <div className="row" key={t.slug}>
             <span className="row-face"><Compass size={15} /></span>
             <span className="row-main"><strong>{t.name}</strong><span>{t.description} · {t.category}</span></span>
@@ -1180,6 +1265,69 @@ export default function Workbench() {
               <span className="row-actions"><button className="ghost" type="button" onClick={() => setConsoleTool(t.id)}>{consoleTool === t.id ? "in the runner" : "use"}</button></span>
             </div>)}</div>
           </div>}
+          <div className={toolsTab === "sandbox" ? "" : "is-hidden"}>
+            <h2 className="pane-h2">Local OS sandbox<span className="mono">{data.sandbox.provider}</span></h2>
+            <p className="hint">An opt-in shell on this host, wrapped by Anthropic's sandbox runtime: filesystem allowlist, default-deny network, no Docker and no VM. It has no desktop, browser stream, snapshot or takeover. On Windows the runtime needs a one-time <span className="mono">npx srt windows-install</span>.</p>
+            <div className="facts">
+              <span className={`fact ${data.sandbox.capabilities.pty ? "live" : ""}`}><i className="fact-dot" />pty {data.sandbox.capabilities.pty ? "yes" : "no"}</span>
+              <span className="fact">graphical {data.sandbox.capabilities.graphical ? "yes" : "no"}</span>
+              <span className="fact">snapshots {data.sandbox.capabilities.snapshots ? "yes" : "no"}</span>
+              <span className="fact">takeover {data.sandbox.capabilities.takeover ? "yes" : "no"}</span>
+              <span className="fact">persistent home {data.sandbox.capabilities.persistentHome ? "yes" : "no"}</span>
+            </div>
+            {data.sandbox.provider !== "local-os" && <div className="blank"><h3>Not configured</h3><p>Set <span className="mono">AROVA_SANDBOX_PROVIDER=local-os</span> on the server, install <span className="mono">@anthropic-ai/sandbox-runtime</span>, restart, then run a command below. Until then it refuses without pretending.</p></div>}
+            <div className="local-console">
+              <div className="lc-runner">
+                <label className="lc-seat" htmlFor="sb-agent">Run as</label>
+                <select id="sb-agent" value={sandboxAgent || agent?.id || ""} onChange={e => setSandboxAgent(e.target.value)} disabled={!data.agents.length}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+                <input value={sandboxCommand} onChange={e => setSandboxCommand(e.target.value)} placeholder="echo arova-sandbox-ok" aria-label="Sandbox command" disabled={!data.agents.length} />
+                <button className="primary" type="button" disabled={busy || !data.agents.length || !sandboxCommand.trim()} onClick={async () => { const r = await act("runSandboxCommand", { agentId: sandboxAgent || agent?.id, command: sandboxCommand }); const s = r?.sandbox as { ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | undefined; if (s) setSandboxResult(s); }}>{busy ? "Running" : "Run"}</button>
+                <button className="ghost" type="button" disabled={busy || !data.agents.length} onClick={async () => { const command = "echo arova-sandbox-ok"; setSandboxCommand(command); const r = await act("runSandboxCommand", { agentId: sandboxAgent || agent?.id, command }); const s = r?.sandbox as { ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | undefined; if (s) setSandboxResult(s); }}>Check</button>
+              </div>
+              {(() => {
+                const seatId = sandboxAgent || agent?.id || "";
+                const row = data.sandboxes.find(s => s.agentId === seatId);
+                const history = data.runs.filter(r => r.agentId === seatId && r.title.startsWith("Sandbox ·")).slice(0, 6);
+                return <>
+                  <div className="kv"><span>Workspace state</span><span className="push">{row ? <span className={`chip ${row.status === "READY" ? "ran" : row.status === "ERROR" ? "fault" : "idle"}`}><i />{row.status.toLowerCase()}</span> : <span className="chip idle"><i />not created</span>}<button className="icon-btn" title="Reset the per-agent workspace" disabled={busy || data.sandbox.provider !== "local-os" || !seatId} onClick={() => setAskDelete({ kind: "sandbox", id: seatId, name: `Sandbox · ${byId(seatId)?.name ?? "agent"}` })}><RotateCcw size={14} /></button></span></div>
+                  {history.length > 0 && <div className="rows">{history.map(r => <button className="row" key={r.id} onClick={() => setDialog(r)}><span className="row-face"><Cpu size={14} /></span><span className="row-main"><strong>{r.title}</strong><span>{r.summary}</span></span><span className="row-side"><State status={r.status} /><time>{clock(r.startedAt)}</time></span></button>)}</div>}
+                </>;
+              })()}
+              {!data.agents.length && <p className="hint">No seat exists yet, so there is nothing to run this as.</p>}
+              {sandboxResult && <div className="code" style={{ marginTop: 12 }}><div className="code-bar"><span className="code-lang">{sandboxResult.ok ? "output" : "refused"}</span><CopyBtn text={sandboxResult.ok ? sandboxResult.output ?? "" : sandboxResult.error ?? ""} label="Copy" /></div><pre><code>{sandboxResult.ok ? sandboxResult.output : sandboxResult.error}</code></pre></div>}
+              <p className="hint">Every command is stored as a real run with its step and audit event. A shell is a high-risk tool; this sandbox reduces blast radius but shares the host kernel. Credentials are denied by path; network starts with an empty allowlist.</p>
+            </div>
+          </div>
+          <div className={toolsTab === "channels" ? "" : "is-hidden"}>
+            <h2 className="pane-h2">Channels<span className="mono">{data.channels.length}</span></h2>
+            <p className="hint">A finished run or a pending approval can be posted to Slack or any HTTPS endpoint. The target URL is stored server-side and only its host is shown here. A channel attached to an organisation also accepts inbound work at its token URL; a workspace-wide channel is outbound only.</p>
+            <div className="stack"><div className="block">
+              <h3>Add a channel</h3>
+              <div className="field"><label htmlFor="ch-name">Name</label><input id="ch-name" maxLength={60} placeholder="Ops room" value={channelForm.name} onChange={e => setChannelForm({ ...channelForm, name: e.target.value })} /></div>
+              <div className="field"><label htmlFor="ch-kind">Kind</label><select id="ch-kind" value={channelForm.kind} onChange={e => setChannelForm({ ...channelForm, kind: e.target.value })}><option value="webhook">Webhook · generic JSON</option><option value="slack">Slack · incoming webhook</option></select></div>
+              <div className="field"><label htmlFor="ch-target">Target URL</label><input id="ch-target" type="url" placeholder="https://hooks.slack.com/services/…" value={channelForm.target} onChange={e => setChannelForm({ ...channelForm, target: e.target.value })} /><span className="hint">https only, public address, no credentials in the URL. Slack incoming webhooks work as-is.</span></div>
+              <div className="field"><label htmlFor="ch-team">Organisation (optional)</label><select id="ch-team" value={channelForm.teamId} onChange={e => setChannelForm({ ...channelForm, teamId: e.target.value })}><option value="">Workspace-wide · outbound only</option>{data.teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+              <button className="primary" disabled={busy || !channelForm.name.trim() || !channelForm.target.trim()} onClick={async () => { const r = await act("createChannel", { name: channelForm.name, kind: channelForm.kind, target: channelForm.target, teamId: channelForm.teamId || undefined }, "Channel saved"); if (r?.token) setChannelOutput({ token: String(r.token) }); if (r) setChannelForm({ name: "", kind: "webhook", target: "", teamId: channelForm.teamId }); }}>Save channel</button>
+              {channelOutput && <div className="code" style={{ marginTop: 12 }}><div className="code-bar"><span className="code-lang">inbound URL</span><CopyBtn text={`${origin}/api/channels/${channelOutput.token}`} label="Copy URL" /></div><pre><code>{origin}/api/channels/{channelOutput.token}</code></pre></div>}
+            </div></div>
+            <h2 className="pane-h2">Configured<span className="mono">{data.channels.length}</span></h2>
+            {data.channels.length ? <div className="rows">{data.channels.map(c => <div className="row" key={c.id}>
+              <span className="row-face"><Webhook size={15} /></span>
+              <span className="row-main"><strong>{c.name}<span className="mono">{c.kind}</span></strong><span>{c.targetHost} · {c.teamId ? data.teams.find(t => t.id === c.teamId)?.name ?? "organisation removed" : "workspace-wide"} · {c.delivered} delivered · {c.failed} failed</span><span className="row-when">{c.lastDeliveryAt ? `last ${stamp(c.lastDeliveryAt)} · ${c.lastStatus}${c.lastError ? ` · ${c.lastError}` : ""}` : "no delivery yet"}{c.lastInboundAt ? ` · inbound ${stamp(c.lastInboundAt)}` : ""}</span></span>
+              <span className="row-side"><span className={`chip ${c.enabled ? "ran" : "idle"}`}><i />{c.enabled ? "enabled" : "disabled"}</span></span>
+              <span className="row-actions">
+                <button className="ghost" disabled={busy} onClick={async () => { const r = await act("testChannel", { channelId: c.id }); const d = r?.delivered as { ok?: boolean; detail?: string } | undefined; if (d) setToast(d.ok ? "Test delivered." : `Test failed: ${d.detail ?? "unknown"}`); }}><Play size={14} />Test</button>
+                <button className="icon-btn" title={c.enabled ? "Disable" : "Enable"} disabled={busy} onClick={() => act("updateChannel", { channelId: c.id, enabled: !c.enabled }, c.enabled ? "Channel disabled" : "Channel enabled")}>{c.enabled ? <Pause size={15} /> : <Play size={15} />}</button>
+                <button className="icon-btn" title="Delete" disabled={busy} onClick={() => setAskDelete({ kind: "channel", id: c.id, name: c.name })}><Trash2 size={15} /></button>
+              </span>
+            </div>)}</div> : <div className="blank"><h3>No channel yet</h3><p>Add a Slack incoming webhook or any HTTPS endpoint. Delivery is best-effort and every attempt is recorded.</p></div>}
+            <h2 className="pane-h2">Recent deliveries<span className="mono">{data.channelDeliveries.length}</span></h2>
+            {data.channelDeliveries.length ? <div className="rows">{data.channelDeliveries.slice(0, 12).map(d => <div className="row" key={d.id}>
+              <span className="row-face"><ArrowUpRight size={14} /></span>
+              <span className="row-main"><strong>{data.channels.find(c => c.id === d.channelId)?.name ?? "deleted channel"}<span className="mono">{d.direction}</span></strong><span>{d.event} · {d.detail}</span></span>
+              <span className="row-side"><span className={`chip ${d.status === "DELIVERED" ? "ran" : d.status === "FAILED" ? "fault" : "waiting"}`}><i />{d.status.toLowerCase()}</span><time className="mono">{stamp(d.createdAt)}</time></span>
+            </div>)}</div> : <div className="blank"><h3>No deliveries recorded</h3><p>Test a channel or finish a run; each attempt becomes a row here.</p></div>}
+          </div>
           <div className={toolsTab === "mcp" ? "" : "is-hidden"}><h2 className="pane-h2">MCP servers<span className="mono">{mcpCount}</span></h2>
           {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
             <span className="row-face"><Settings2 size={15} /></span>
@@ -1230,12 +1378,22 @@ export default function Workbench() {
               </div>
               {data.limits.usage.length ? data.limits.usage.map(u => <div className="kv" key={u.provider}><span>{data.profiles.find(p => p.name === u.provider)?.label ?? u.provider}</span><span className="push mono">{u.inputTokens} in · {u.outputTokens} out {u.estimated ? <span style={{ color: "var(--ink-3)" }}>est.</span> : <span style={{ color: "var(--ink-3)" }}>reported</span>}</span></div>) : <div className="kv"><span>No model calls recorded today</span></div>}
             </div>
+            <div className={`block ${settingsTab !== "registry" ? "is-hidden" : ""}`}>
+              <h2>Agent registry</h2><p>Every seat the server has, with exact counts from SQL — not the board’s 60-row window. A pending approval is a human decision, not a failure.</p>
+              <div className="field"><label htmlFor="registry-filter">Filter</label><input id="registry-filter" placeholder="name, role, team, status, provider" value={registryQuery} onChange={e => setRegistryQuery(e.target.value)} /><span className="hint">{registryRows.length} of {data.registry.length} seats.</span></div>
+              <p><a className="ghost" href="/api/export" download>Export audit JSON</a> <span className="hint">Runs, steps, events, approvals, delegations, memory and channel status. Message bodies, channel targets/tokens, keys and agent instructions are excluded.</span></p>
+              {registryRows.length ? <div className="rows">{registryRows.map(r => <div className="row" key={r.id}>
+                <span className="row-face"><ShieldCheck size={15} /></span>
+                <span className="row-main"><strong>{r.name}<span className="mono">{r.permissionMode}</span></strong><span>{r.role} · {r.teamName ?? "bench"}{r.managerName ? ` · reports to ${r.managerName}` : ""} · {r.provider} · {r.tools} tool{r.tools === 1 ? "" : "s"}</span><span className="row-when">{r.lastRunAt ? `last run ${stamp(r.lastRunAt)} · ${r.lastRunStatus}` : "no run recorded"} · {r.runCount} run{r.runCount === 1 ? "" : "s"} · {r.routineCount} routine{r.routineCount === 1 ? "" : "s"}</span></span>
+                <span className="row-side"><span className={`chip ${r.status === "ACTIVE" ? "ran" : "idle"}`}><i />{r.status.toLowerCase()}</span>{r.pendingApprovals > 0 && <span className="chip waiting"><i />{r.pendingApprovals} pending</span>}</span>
+              </div>)}</div> : <div className="blank"><h3>No seat matches</h3><p>Clear the filter or create an agent.</p></div>}
+            </div>
             <div className={`block ${settingsTab !== "limits" ? "is-hidden" : ""}`}>
               <h2>What cannot run here</h2><p>Limits of this deployment, not switches for you to find.</p>
               <div className="kv"><span>Sign-in</span><span className="push"><span className={`chip ${data.identity.signedIn ? "ran" : "idle"}`}><i />{data.identity.signedIn ? `signed in as ${data.identity.signedIn.role}` : data.auth.providers.length ? `cookie session · ${data.auth.providers.map(p => p.label).join(", ")} available` : "cookie demo"}</span></span></div>
               <div className="kv"><span>Scheduler</span><span className="push"><span className={`chip ${data.scheduler.headline === "always-on" ? "ran" : data.scheduler.headline === "degraded" ? "fault" : "waiting"}`}><i />{data.scheduler.headline === "always-on" ? "always on" : data.scheduler.headline === "degraded" ? "went silent" : "runs on open"}</span></span></div>
               <div className="kv"><span>Tool connectors</span><span className="push"><span className="chip idle"><i />not configured</span></span></div>
-              <div className="kv"><span>Computer / browser</span><span className="push"><span className="chip idle"><i />{data.sandboxProvider}</span></span></div>
+              <div className="kv"><span>Computer / browser</span><span className="push"><span className={`chip ${data.sandbox.provider === "local-os" ? "waiting" : "idle"}`}><i />{data.sandbox.provider}{data.sandbox.provider === "local-os" ? " · shell only, no GUI" : ""}</span></span></div>
             </div>
           </div>
         </div>}
@@ -1254,7 +1412,7 @@ export default function Workbench() {
           </div>
           <div className="composer-bar">
             <span className="fact">{answering ? <><b>{answering.label}</b><s>{answering.model}</s></> : <>no model key · local replies</>}</span>
-            <span className="composer-note"><CircleHelp size={12} />no browser, files, or connectors</span>
+            <span className="composer-note"><CircleHelp size={12} />{agent.capabilities.toolLoop ? "read-only tool loop on · no shell" : "no browser, files, or connectors"}</span>
             <span className="push mono">{draft.trim() ? <>{est(draft)} est. tokens</> : busy ? <>Stop keeps what has arrived</> : <span className="only-wide">Enter sends · Shift+Enter newline</span>}</span>
           </div>
         </form>
@@ -1389,10 +1547,10 @@ export default function Workbench() {
     {askDelete && <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) setAskDelete(null); }}>
       <div className="dialog" style={{ width: 'min(380px, 100%)' }}>
         <div className="dialog-top"><span className="mark" style={{ background: 'var(--fault)' }}><Trash2 size={14} /></span><h2>Delete {askDelete.name}?</h2><button type="button" className="icon-btn x" onClick={() => setAskDelete(null)} aria-label="Close"><X size={15} /></button></div>
-        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
+        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}
@@ -1453,6 +1611,14 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
         {(["default", "plan", "auto"] as const).map(m => <button type="button" key={m} className={caps.permissionMode === m ? "on" : ""} onClick={() => setCaps({ ...caps, permissionMode: m })}>{m}</button>)}
       </div>
       <p className="caps-help">{caps.permissionMode === "plan" ? "Plan: advises and delegates, cannot save routines or raise approvals." : caps.permissionMode === "auto" ? "Auto: acts without asking for approval on writes." : "Default: acts, and raises approvals for anything that leaves the workspace."}</p>
+    </div>
+    <div className="caps-group">
+      <label className="caps-label">Tool loop</label>
+      <label className="tool-row">
+        <input type="checkbox" checked={caps.toolLoop} onChange={e => setCaps({ ...caps, toolLoop: e.target.checked })} />
+        <span className="tool-row-main"><b>Let the model call read-only tools</b><em>Calculator, clock, JSON, checksum, web_fetch and web_search when configured. The answer arrives after the loop finishes, not token-by-token. No shell, no writes.</em></span>
+        <span className={`chip ${caps.toolLoop ? "ran" : "idle"}`}><i />{caps.toolLoop ? "on" : "off"}</span>
+      </label>
     </div>
     <div className="caps-group">
       <label className="caps-label">May reach</label>
