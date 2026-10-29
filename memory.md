@@ -94,10 +94,15 @@ key; a real vendor/search endpoint is unverified. **232/232 tests.**
 - **The name is crowded.** Arova collides with Arova Nexus (enterprise IT-ops AI), Arova Technologies
   and an AROVA DeFi agent; legal/search check before a public launch.
 - **Operational notes that still hold:** start dev with `env -u OPENAI_API_KEY npm run dev` (an
-  ambient key would outrank `.env.local`); a running Next dev server can serve stale bundles — read
-  `.next/dev/lock` for the pid, `taskkill /PID x /F`, restart; `.impeccable/cdp-harness.cjs` and
-  `cdp-channel.cjs` are the raw-CDP drivers; the dahl endpoint returns byte-identical replies for a
-  repeated prompt; `npm run lint` still has pre-existing advisory errors outside the gate.
+  ambient key would outrank `.env.local`); **`npm run dev` is now `node scripts/dev.mjs`** (D-36):
+  it reaps dead-parent compile workers before starting and kills the whole tree on stop. Never stop
+  a dev server with `taskkill /PID x /F` — that was the 2026-10-29 incident (1,179 orphans, 50.9 GB
+  commit, PostgreSQL stopped). Ctrl+C is enough; if a kill is unavoidable use `/T`. A running Next
+  dev server can serve stale bundles — read `.next/dev/lock` for the pid, then `/T`, restart;
+  `.impeccable/cdp-harness.cjs` and `cdp-channel.cjs` are the raw-CDP drivers; the dahl endpoint
+  returns byte-identical replies for a repeated prompt; `npm run lint` still has pre-existing
+  advisory errors outside the gate. Check `Fix-CommitPressure` in PowerShell if the machine feels
+  starved. Port 3000 can be held by the sel-nexus vite server — use `npm run dev -- -p 3100`.
 
 ## NEXT STEP (the one thing to do)
 
