@@ -44,7 +44,7 @@ Named Arova, with a calm, plain-spoken voice in its own copy ("Make room for the
 
 - Real PostgreSQL rows: workspaces, agents, teams, messages, routines, runs, run steps, delegations, memories, approvals, channels, channel deliveries, eval tasks/results, events, per-day model usage.
 - A verified live call to a third-party endpoint (`inference.dahl.global`, model `MiniMaxAI/MiniMax-M2.7`) that streamed 122 deltas into one persisted reply, with usage counted once. On 2026-10-28 the same endpoint had no key configured, so eval runs were honestly `SKIPPED` rather than fabricated.
-- **280/280** unit tests (`npm test`) recorded at D-42, with typegen, `tsc --noEmit` and `npm run build` green on 2026-10-30. The count moves; the gate is the command, not this sentence.
+- **284/284** unit tests (`npm test`) recorded at D-44, with typegen, `tsc --noEmit` and `npm run build` green on 2026-10-30. The count moves; the gate is the command, not this sentence.
 - Live checks on 2026-10-28: a webhook test to httpbin.org delivered; a test to example.com recorded `FAILED: example.com answered 405`; an inbound org channel ran its local-provider lead and returned an honest failure, with the second immediate call `429`; the registry's counts matched the stored runs.
 - Sample data exists only in clearly-labelled seed form ("Sample run:", "SAMPLE ACTIVITY"), and the seeded approvals row is labelled a sample.
 - Absent, and never to be invented: latency benchmarks, uptime, user counts, testimonials, pricing, a pass rate without a measured suite, integrations that have not been configured.

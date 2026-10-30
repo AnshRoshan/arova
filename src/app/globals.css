@@ -957,3 +957,9 @@ button.sp-item:hover, button.node:hover { background: color-mix(in srgb, var(--s
 .load-earlier { display: flex; align-items: center; gap: 6px; margin: 2px auto 10px; font-size: 11.5px; color: var(--ink-3); padding: 4px 12px; }
 
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }
+
+.research-excerpt { margin-top: 4px; font-size: 12.5px; color: var(--ink-2); }
+.research-excerpt summary { cursor: pointer; color: var(--ink-3); }
+.research-excerpt p { margin: 6px 0 0; line-height: 1.55; max-height: 220px; overflow: auto; }
+.research-facts { margin-bottom: 10px; }
+.icon-btn[href] { display: inline-grid; place-items: center; }

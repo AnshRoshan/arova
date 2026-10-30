@@ -474,3 +474,14 @@ Options considered: (A) **move the tick/reap/execute block and the helpers it sh
 Why not B: the chat block owns `streamReply`/`runBrief` and most of the action handlers; moving it in the same change as the scheduler would make the live proof ambiguous. Why not C: the boot path no longer needs a route, which is a real coupling and a real test seam.
 
 Design: `board-core.ts` holds request-free helpers; `routine-runner.ts` holds the two process-local sets (documented as such) and the SQL-guarded clock; both are imported by the route and by instrumentation/cron. Cost: two modules and re-exported types. Reversibility: inline the blocks back. Evidence: route 2,031→1,781 lines; 280/280 tests; worker booted from the module; run-contract and 35/35 sweep pass live.
+
+## D-44: research is a library with citations, not a chat feature — 2026-10-30
+Trigger: the product could fetch and cite inside one reply, but sources vanished with the turn; with no search provider, research depended on a configured model.
+
+Options considered: (A) **workspace projects + fetched-or-pasted sources + findings that cite source ids + a locally assembled brief**; (B) store citations as message metadata only; (C) a scheduled research routine; (D) semantic search over sources. Chosen: A.
+
+Why not B: the same source is reused across questions and must remain numbered and manageable. Why not C: it requires a working model, and the owner's gateway balance is zero. Why not D: this Postgres has no pgvector; keyword/structural retrieval is honest and enough for a curated library.
+
+Design: `research_sources` uses the partial unique `(project_id, url) WHERE url <> ''` so pasted notes are unlimited but a URL is saved once. Fetches go through `webFetch` unchanged, so https-only, public-address and body-cap rules apply. `researchBrief` numbers pinned sources first and resolves finding ids to those numbers; the client copies it. Findings validate source ids against their own project in SQL before insert.
+
+Cost: three tables, eight actions, one pane. Reversibility: drop the tables and the rail entry. Evidence: 284/284 tests; `.impeccable/research-proof.mjs` passes live; Chrome sees the project and source.

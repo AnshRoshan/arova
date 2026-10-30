@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, approvals, channels, delegations, events, externalEffects, memories, runs, runSteps, sandboxes, teams, workspaces } from "@/db/schema";
+import { agents, approvals, channels, delegations, events, externalEffects, memories, researchFindings, researchProjects, researchSources, runs, runSteps, sandboxes, teams, workspaces } from "@/db/schema";
 import { readActor } from "@/lib/auth-sessions";
 import { redactTarget } from "@/lib/channels";
 
@@ -26,7 +26,7 @@ export async function GET() {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
   if (!workspace) return NextResponse.json({ error: "Workspace not found." }, { status: 401 });
 
-  const [agentRows, teamRows, eventRows, runRows, stepRows, approvalRows, delegationRows, memoryRows, channelRows, sandboxRows, effectRows] = await Promise.all([
+  const [agentRows, teamRows, eventRows, runRows, stepRows, approvalRows, delegationRows, memoryRows, channelRows, sandboxRows, effectRows, researchProjectRows, researchSourceRows, researchFindingRows] = await Promise.all([
     db.select().from(agents).where(eq(agents.workspaceId, workspaceId)),
     db.select().from(teams).where(eq(teams.workspaceId, workspaceId)),
     db.select().from(events).where(eq(events.workspaceId, workspaceId)).orderBy(desc(events.createdAt)).limit(LIMIT),
@@ -38,6 +38,9 @@ export async function GET() {
     db.select().from(channels).where(eq(channels.workspaceId, workspaceId)).orderBy(desc(channels.createdAt)),
     db.select().from(sandboxes).where(eq(sandboxes.workspaceId, workspaceId)),
     db.select().from(externalEffects).where(eq(externalEffects.workspaceId, workspaceId)).orderBy(desc(externalEffects.createdAt)).limit(LIMIT),
+    db.select().from(researchProjects).where(eq(researchProjects.workspaceId, workspaceId)).orderBy(desc(researchProjects.createdAt)).limit(LIMIT),
+    db.select().from(researchSources).where(eq(researchSources.workspaceId, workspaceId)).orderBy(desc(researchSources.createdAt)).limit(LIMIT),
+    db.select().from(researchFindings).where(eq(researchFindings.workspaceId, workspaceId)).orderBy(desc(researchFindings.createdAt)).limit(LIMIT),
   ]);
 
   const payload = {
@@ -54,6 +57,11 @@ export async function GET() {
     memories: memoryRows.map(m => ({ id: m.id, teamId: m.teamId, agentId: m.agentId, kind: m.kind, text: m.text, pinned: m.pinned, supersedes: m.supersedes, sourceIds: m.sourceIds, hits: m.hits, lastUsedAt: m.lastUsedAt, createdAt: m.createdAt })),
     channels: channelRows.map(c => ({ name: c.name, kind: c.kind, targetHost: redactTarget(c.target), teamId: c.teamId, enabled: c.enabled, delivered: c.delivered, failed: c.failed, lastStatus: c.lastStatus, lastError: c.lastError, lastDeliveryAt: c.lastDeliveryAt, lastInboundAt: c.lastInboundAt, createdAt: c.createdAt })),
     sandboxes: sandboxRows.map(s => ({ agentId: s.agentId, provider: s.provider, status: s.status, createdAt: s.createdAt })),
+    research: {
+      projects: researchProjectRows,
+      sources: researchSourceRows,
+      findings: researchFindingRows,
+    },
     // The ledger is exported as evidence, but a stored command is typed input: the export keeps the
     // fact of the attempt and the key, not the text that was typed.
     externalEffects: effectRows.map(e => ({

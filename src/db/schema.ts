@@ -204,3 +204,45 @@ export const evalResults = pgTable("eval_results", {
   durationMs: integer("duration_ms").notNull().default(0),
   createdAt: created(),
 }, t => [index("eval_results_task_index").on(t.taskId, t.createdAt), index("eval_results_workspace_index").on(t.workspaceId, t.createdAt)]);
+
+/**
+ * A research project is a question with a curated source list. Sources are fetched through the same
+ * SSRF policy as web_fetch or pasted as an excerpt, and findings are claims that point at the
+ * sources they stand on. Nothing here calls a model: collecting and citing works with no key.
+ */
+export const researchProjects = pgTable("research_projects", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  question: text("question").notNull().default(""),
+  status: text("status").notNull().default("ACTIVE"),
+  agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }),
+  teamId: uuid("team_id").references(() => teams.id, { onDelete: "set null" }),
+  createdAt: created(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, t => [index("research_projects_workspace_index").on(t.workspaceId, t.createdAt)]);
+
+export const researchSources = pgTable("research_sources", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => researchProjects.id, { onDelete: "cascade" }),
+  url: text("url").notNull().default(""),
+  host: text("host").notNull().default(""),
+  title: text("title").notNull().default(""),
+  excerpt: text("excerpt").notNull().default(""),
+  note: text("note").notNull().default(""),
+  tag: text("tag").notNull().default(""),
+  pinned: boolean("pinned").notNull().default(false),
+  addedBy: text("added_by").notNull().default("person"),
+  fetchedAt: timestamp("fetched_at", { withTimezone: true }),
+  createdAt: created(),
+}, t => [index("research_sources_project_index").on(t.projectId, t.createdAt), uniqueIndex("research_sources_project_url_unique").on(t.projectId, t.url).where(sql`${t.url} <> ''`)]);
+
+export const researchFindings = pgTable("research_findings", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").notNull().references(() => researchProjects.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  sourceIds: jsonb("source_ids").$type<string[]>().notNull().default([]),
+  createdAt: created(),
+}, t => [index("research_findings_project_index").on(t.projectId, t.createdAt)]);

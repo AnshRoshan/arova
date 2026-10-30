@@ -79,6 +79,8 @@ assert.ok(agentId, "agent created");
 const evalTask = await act("createEvalTask", { agentId, name: "Spec suite task", prompt: "Say one.", expected: "one" });
 const evalTaskId = evalTask.taskId;
 await act("createSuite", { name: "Spec suite", agentId, taskIds: [evalTaskId], callCeiling: 3 });
+const research = await act("createResearchProject", { name: "Spec research", question: "What changed this week?" });
+await act("addResearchSource", { projectId: research.projectId, text: "A pasted excerpt long enough to be a real source.", title: "Notes", tag: "spec" });
 // C-10: a remembered seat opens that thread after a reload.
 await read(`localStorage.setItem('arova.lastAgent', ${JSON.stringify(agentId)})`);
 await send("Page.reload");
@@ -129,6 +131,15 @@ assert.match(evalText, /SQL counts over every scored attempt/, "the pass rate na
 assert.match(evalText, /SUITES/i, "the suites section renders");
 assert.match(evalText, /Spec suite/i, "the stored suite is listed");
 await shot("05-evals-scope.png");
+
+// The research surface: a project, a pasted source and its numbered list.
+assert.equal(await read(`(() => { const b = document.querySelector('.rail-btn[aria-label="Research"]'); if (!b) return false; b.click(); return true; })()`), true, "the Research rail item opens");
+await sleep(1000);
+const researchText = await read(`document.querySelector('.pane')?.innerText ?? ''`);
+assert.match(researchText, /Spec research/i, "the project renders");
+assert.match(researchText, /Notes/, "the pasted source renders");
+assert.match(researchText, /Findings/i, "findings section renders");
+await shot("06-research.png");
 
 assert.deepEqual(consoleErrors, [], `console errors: ${consoleErrors.join(" | ")}`);
 console.log("spec 25 UI: all checks passed");

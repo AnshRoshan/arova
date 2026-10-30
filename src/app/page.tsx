@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import {
   Activity, ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bot, CalendarDays, Check, CircleHelp, Compass, Copy,
   Globe2, LayoutDashboard, Menu, Network, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun,
-  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, Pencil, type LucideIcon,
+  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, Pencil, BookOpen, ExternalLink, type LucideIcon,
 } from "lucide-react";
 import { TOOL_REGISTRY, mcpSummary, resolveTools, tokenBudgetFor, type Capabilities as ToolCaps } from "@/lib/tools";
 import { SKILL_REGISTRY, resolveSkills } from "@/lib/skills";
 import { parseMarkdown, splitReasoning, type Block, type Inline as MdInline } from "@/lib/markdown";
 import { hueFor, hueVars, sectionColor } from "@/lib/identity";
 import { describeSchedule } from "@/lib/scheduler";
+import { researchBrief } from "@/lib/research";
 import { AlwaysOn, type SchedulerInfo } from "./AlwaysOn";
 import { ScheduleBuilder } from "./ScheduleBuilder";
 import { orgTree, type OrgNode } from "@/lib/org";
@@ -48,6 +49,9 @@ type ChannelDelivery = { id: string; channelId: string; direction: string; event
 type EvalTask = { id: string; agentId: string; name: string; prompt: string; expected: string; createdAt: string };
 type EvalResultRow = { id: string; taskId: string; agentId: string; runId: string | null; status: string; score: number; detail: string; durationMs: number; createdAt: string };
 type EvalSummary = { attempts: number; passed: number; failed: number; skipped: number; passRate: number | null; medianMs: number | null };
+type ResearchProject = { id: string; name: string; question: string; status: string; agentId: string | null; teamId: string | null; createdAt: string; updatedAt: string; sourceCount: number; findingCount: number };
+type ResearchSource = { id: string; projectId: string; url: string; host: string; title: string; excerpt: string; note: string; tag: string; pinned: boolean; addedBy: string; fetchedAt: string | null; createdAt: string };
+type ResearchFinding = { id: string; projectId: string; text: string; sourceIds: string[]; createdAt: string };
 type EvalSuite = { id: string; agentId: string; name: string; taskIds: string[]; callCeiling: number; status: string; passed: number; failed: number; skipped: number; errored: number; modelCalls: number; passRate: number | null; startedAt: string | null; finishedAt: string | null; createdAt: string };
 type Board = {
   workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
@@ -63,11 +67,12 @@ type Board = {
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
   channels: Channel[]; channelDeliveries: ChannelDelivery[];
   evals: { tasks: EvalTask[]; results: EvalResultRow[]; suites: EvalSuite[]; summary: EvalSummary };
+  research: { projects: ResearchProject[]; sources: ResearchSource[]; findings: ResearchFinding[] };
   registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
 };
-type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel";
+type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel" | "research";
 type Tone = "ran" | "waiting" | "fault" | "idle";
 
 const faces: Record<string, LucideIcon> = { sparkles: Sparkles, globe: Globe2, palette: WandSparkles, sun: Sun, bot: Bot, zap: Zap };
@@ -226,6 +231,8 @@ export default function Workbench() {
   const [channelOutput, setChannelOutput] = useState<{ token: string } | null>(null);
   const [evalForm, setEvalForm] = useState({ name: "", agentId: "", prompt: "", expected: "" });
   const [suiteForm, setSuiteForm] = useState<{ name: string; agentId: string; callCeiling: number; taskIds: string[] }>({ name: "", agentId: "", callCeiling: 10, taskIds: [] });
+  const [researchId, setResearchId] = useState<string | null>(null);
+  const [researchForm, setResearchForm] = useState({ name: "", question: "", agentId: "", teamId: "" });
   const [registryQuery, setRegistryQuery] = useState("");
   const [activity, setActivity] = useState(false);
   const [draft, setDraft] = useState("");
@@ -252,8 +259,8 @@ export default function Workbench() {
     if (why) { setToast(why); window.history.replaceState(null, "", window.location.pathname); }
   }, []);
   const [atBottom, setAtBottom] = useState(true);
-  const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox"; id: string; name: string } | null>(null);
+  const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | "research" | Run>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox" | "research"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -327,6 +334,10 @@ export default function Workbench() {
   /** The eval form needs a seat before it can save; adopt the first one once, not on every poll. */
   useEffect(() => { if (!evalForm.agentId && data?.agents.length) setEvalForm(f => ({ ...f, agentId: data.agents[0].id })); }, [data, evalForm.agentId]);
   useEffect(() => { if (!suiteForm.agentId && data?.agents.length) setSuiteForm(f => ({ ...f, agentId: data.agents[0].id })); }, [data, suiteForm.agentId]);
+  useEffect(() => {
+    const projects = data?.research.projects ?? [];
+    if (projects.length && (!researchId || !projects.some(p => p.id === researchId))) setResearchId(projects[0].id);
+  }, [data, researchId]);
   useEffect(() => { if (!sandboxAgent && data?.agents.length) setSandboxAgent(data.agents[0].id); }, [data, sandboxAgent]);
 
   async function act(action: string, payload: Record<string, unknown> = {}, say?: string) {
@@ -656,13 +667,14 @@ export default function Workbench() {
   const realPending = pendingApprovals.filter(a => !a.detail.includes("Sample approval"));
   // The channel is reached from the bench, so the bench stays on screen while the channel is open.
   const section: Pane | "agents" = !pane || pane === "channel" ? "agents" : pane;
-  const panelTitle = { overview: "Shortcuts", agents: "The bench", org: "Reporting lines", scheduler: "Routines", tools: "Connectors", settings: "Workspace" }[section];
+  const panelTitle = { overview: "Shortcuts", agents: "The bench", org: "Reporting lines", scheduler: "Routines", tools: "Connectors", settings: "Workspace", research: "Projects" }[section];
   const agentMatch = (a: Agent) => (!filter || `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase())) && (agentTab === "all" || (agentTab === "active") === (a.status === "ACTIVE"));
   const activeTeam = data.teams.find(t => t.id === orgSel) ?? data.teams[0];
   const railItems: { id: Pane | "agents"; label: string; icon: LucideIcon; badge?: number }[] = [
     { id: "overview", label: "Overview", icon: LayoutDashboard, badge: data.overview.pendingApprovals },
     { id: "agents", label: "Agents", icon: Bot },
     { id: "org", label: "Organisation", icon: Network },
+    { id: "research", label: "Research", icon: BookOpen },
     { id: "scheduler", label: "Automations", icon: CalendarDays },
     { id: "tools", label: "Integrations", icon: Compass },
     { id: "settings", label: "Settings", icon: Settings2 },
@@ -714,7 +726,7 @@ export default function Workbench() {
       const post = d.messageId ? data.messages.find(m => m.id === d.messageId) : undefined;
       recordRows.push({ id: `d${d.id}`, label: `${asked} asked ${peer}`, note: d.question, tone: "idle", time: d.createdAt, open: () => { if (post?.teamId) openChannel(post.teamId); else openSeat(d.fromAgentId); } });
     }
-    for (const e of data.events.filter(x => ["org.created", "org.briefed", "org.lead", "team.created", "run.cancelled", "run.interrupted", "approval.requested", "approval.withheld", "routine.created", "routine.fatigued", "trigger.created", "trigger.revoked", "memory.saved", "memory.distilled", "agent.created"].includes(x.type))) {
+    for (const e of data.events.filter(x => ["org.created", "org.briefed", "org.lead", "team.created", "run.cancelled", "run.interrupted", "approval.requested", "approval.withheld", "routine.created", "routine.fatigued", "trigger.created", "trigger.revoked", "memory.saved", "memory.distilled", "agent.created", "research.project.created", "research.source.added", "research.source.updated", "research.finding.saved"].includes(x.type))) {
       recordRows.push({ id: `e${e.id}`, label: e.type.replace(/\./g, " · ").replace(/_/g, " "), note: e.detail, tone: "idle", time: e.createdAt });
     }
     for (const a of data.approvals) {
@@ -745,9 +757,10 @@ export default function Workbench() {
     <aside className={`sidepanel ${rail ? "open" : ""}`} aria-label={`${panelTitle} panel`}>
       <div className="sp-head">
         <div className="sp-title"><h2>{panelTitle}</h2></div>
-        {(section === "agents" || section === "org" || section === "scheduler") && <button className="sp-icon" title={section === "agents" ? "New agent" : section === "org" ? "New team" : "New routine"} aria-label="Create new" onClick={() => {
+        {(section === "agents" || section === "org" || section === "scheduler" || section === "research") && <button className="sp-icon" title={section === "agents" ? "New agent" : section === "org" ? "New team" : section === "research" ? "New project" : "New routine"} aria-label="Create new" onClick={() => {
           if (section === "agents") setDialog("agent");
           else if (section === "org") setDialog("team");
+          else if (section === "research") setDialog("research");
           else { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }
         }}><Plus size={16} /></button>}
         <button className="sp-icon sp-collapse" title="Collapse panel" aria-label="Collapse panel" onClick={() => { setPanelOpen(false); setRail(false); }}><PanelLeftClose size={15} /></button>
@@ -868,6 +881,18 @@ export default function Workbench() {
         <p className="sp-note">Nothing is shown as connected until a credential exists on the server. Per-seat grants live in Agent › Capabilities.</p>
       </div>}
 
+      {section === "research" && <div className="sp-scroll">
+        <div className="sp-group">Projects</div>
+        {data.research.projects.map(p => <button key={p.id} className={`sp-item ${researchId === p.id ? "on" : ""}`} onClick={() => { setResearchId(p.id); setPane("research"); setRail(false); }}>
+          <span className="sp-item-icon"><BookOpen size={16} /></span>
+          <span className="sp-item-main"><b>{p.name}</b><em>{p.status === "ARCHIVED" ? "archived · " : ""}{p.sourceCount} source{p.sourceCount === 1 ? "" : "s"} · {p.findingCount} finding{p.findingCount === 1 ? "" : "s"}</em></span>
+          {p.sourceCount > 0 && <span className="sp-count">{p.sourceCount}</span>}
+        </button>)}
+        {!data.research.projects.length && <p className="sp-note">A project is a question, the sources behind it, and the findings that cite them.</p>}
+        <div className="sp-group">The rule</div>
+        <p className="sp-note">A source is fetched through the same https-only policy as the model's web tool, or pasted with its excerpt. Collecting and citing calls no model.</p>
+      </div>}
+
       {section === "settings" && <div className="sp-scroll">
         <div className="sp-group">Preferences</div>
         {([
@@ -901,7 +926,7 @@ export default function Workbench() {
           <button className="ghost" onClick={() => { setOrgSel(channel.id); setPane("org"); }}><SlidersHorizontal size={15} /><span className="only-wide">Organisation</span></button>
         </> : pane ? <>
           {pane !== "overview" && <button className="icon-btn only-narrow" onClick={() => setPane("overview")} aria-label="Back to overview"><ArrowLeft size={16} /></button>}
-          <div className="page-heading"><h1>{pane === "overview" ? "Overview" : pane === "org" ? "Organisation" : pane === "scheduler" ? "Automations" : pane === "tools" ? "Integrations" : "Settings"}</h1></div>
+          <div className="page-heading"><h1>{pane === "overview" ? "Overview" : pane === "org" ? "Organisation" : pane === "scheduler" ? "Automations" : pane === "tools" ? "Integrations" : pane === "research" ? "Research" : "Settings"}</h1></div>
           <div className="push" />
           {pane !== "overview" && <button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button>}
           {pane === "overview" && <><span className="header-date">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</span><button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button><button className="header-create" onClick={() => setDialog("agent")}><Plus size={16} /> New agent</button></>}
@@ -1395,7 +1420,22 @@ export default function Workbench() {
           </div>))}</div> : <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities. It is stored and shown, and nothing connects until a transport exists.</p></div>}</div>
         </div>}
 
-        {pane === "settings" && <div className="pane">
+        {pane === "research" && <ResearchPane
+        projects={data.research.projects}
+        sources={data.research.sources}
+        findings={data.research.findings}
+        agents={data.agents}
+        teams={data.teams}
+        projectId={researchId}
+        onSelect={id => setResearchId(id)}
+        busy={busy}
+        act={act}
+        notify={setToast}
+        onAskDelete={(id, name) => setAskDelete({ kind: "research", id, name })}
+        onNew={() => setDialog("research")}
+      />}
+
+      {pane === "settings" && <div className="pane">
           <div className="pane-head"><div><h1>Settings</h1><p>What this workspace is, and exactly what it cannot do.</p></div></div>
           <div className="stack">
             <div className={`block ${settingsTab !== "workspace" ? "is-hidden" : ""}`}>
@@ -1585,6 +1625,19 @@ export default function Workbench() {
         <div className="dialog-actions"><button type="button" className="ghost" onClick={() => setDialog(null)}>Cancel</button><button className="primary" disabled={busy}>Save routine</button></div>
       </form>}
 
+      {dialog === "research" && <form className="dialog" onSubmit={async e => {
+        e.preventDefault();
+        const r = await act("createResearchProject", { name: researchForm.name, question: researchForm.question, ...(researchForm.agentId ? { agentId: researchForm.agentId } : {}), ...(researchForm.teamId ? { teamId: researchForm.teamId } : {}) }, "Research project created");
+        if (r) { setDialog(null); setResearchId(String((r as { projectId?: string }).projectId ?? "")); setPane("research"); setResearchForm({ name: "", question: "", agentId: "", teamId: "" }); }
+      }}>
+        <div className="dialog-top"><span className="mark"><BookOpen size={14} /></span><h2>New research project</h2><button type="button" className="icon-btn x" onClick={() => setDialog(null)} aria-label="Close"><X size={15} /></button></div>
+        <div className="field"><label htmlFor="rs-name">Name</label><input id="rs-name" maxLength={80} placeholder="Q4 pricing" value={researchForm.name} onChange={e => setResearchForm({ ...researchForm, name: e.target.value })} /></div>
+        <div className="field"><label htmlFor="rs-q">Question</label><textarea id="rs-q" rows={3} maxLength={1000} placeholder="What do competitors charge per seat, and what is included?" value={researchForm.question} onChange={e => setResearchForm({ ...researchForm, question: e.target.value })} /></div>
+        <div className="field"><label htmlFor="rs-agent">Seat (optional)</label><select id="rs-agent" value={researchForm.agentId} onChange={e => setResearchForm({ ...researchForm, agentId: e.target.value })}><option value="">Unassigned</option>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+        <div className="field"><label htmlFor="rs-team">Organisation (optional)</label><select id="rs-team" value={researchForm.teamId} onChange={e => setResearchForm({ ...researchForm, teamId: e.target.value })}><option value="">None</option>{data.teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+        <div className="dialog-actions"><button type="button" className="ghost" onClick={() => setDialog(null)}>Cancel</button><button className="primary" disabled={busy || !researchForm.name.trim()}>Create project</button></div>
+      </form>}
+
       {dialog === "team" && <form className="dialog" onSubmit={async e => { e.preventDefault(); const r = await act("createEmptyTeam", teamForm, `${teamForm.name} created`); if (r) { setDialog(null); setOrgTab("teams"); setOrgSel(String((r as { teamId?: string }).teamId ?? "")); setPane("org"); setTeamForm({ name: "", brief: "" }); } }}>
         <div className="dialog-top"><span className="mark"><Network size={14} /></span><h2>New team</h2><button type="button" className="icon-btn x" onClick={() => setDialog(null)} aria-label="Close"><X size={15} /></button></div>
         <div className="field"><label htmlFor="tn">Team name</label><input id="tn" required maxLength={60} placeholder="Growth" value={teamForm.name} onChange={e => setTeamForm({ ...teamForm, name: e.target.value })} /></div>
@@ -1606,10 +1659,10 @@ export default function Workbench() {
     {askDelete && <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) setAskDelete(null); }}>
       <div className="dialog" style={{ width: 'min(380px, 100%)' }}>
         <div className="dialog-top"><span className="mark" style={{ background: 'var(--fault)' }}><Trash2 size={14} /></span><h2>Delete {askDelete.name}?</h2><button type="button" className="icon-btn x" onClick={() => setAskDelete(null)} aria-label="Close"><X size={15} /></button></div>
-        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'suite' ? 'The suite and its stored counts are removed. The eval results it already measured stay.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
+        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'suite' ? 'The suite and its stored counts are removed. The eval results it already measured stay.' : askDelete.kind === 'research' ? 'The project, every source and every finding in it are removed. Nothing outside this workspace is touched.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'research') await act('deleteResearchProject', { projectId: target.id }, 'Project deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}
@@ -1638,6 +1691,133 @@ function SeatBranch({ node, depth, members, current, toneOfSeat, counts, lastAt,
     />}
     {node.children.map(c => <SeatBranch key={c.name} node={c} depth={depth + 1} members={members} current={current} toneOfSeat={toneOfSeat} counts={counts} lastAt={lastAt} visible={visible} onOpen={onOpen} />)}
   </>;
+}
+
+/**
+ * The research surface. It is deliberately model-free: a source is fetched through the same policy
+ * as the model's web tool or pasted with its excerpt, and a finding may cite only sources in its own
+ * project. The brief is assembled locally so it can be copied even when no provider is configured.
+ */
+function ResearchPane({ projects, sources, findings, agents, teams, projectId, onSelect, busy, act, notify, onAskDelete, onNew }: {
+  projects: ResearchProject[]; sources: ResearchSource[]; findings: ResearchFinding[];
+  agents: Agent[]; teams: Team[]; projectId: string | null; onSelect: (id: string) => void;
+  busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>;
+  notify: (message: string) => void; onAskDelete: (id: string, name: string) => void; onNew: () => void;
+}) {
+  const project = projects.find(p => p.id === projectId) ?? projects[0] ?? null;
+  const [editing, setEditing] = useState(false);
+  const [edit, setEdit] = useState({ name: "", question: "", agentId: "", teamId: "" });
+  const [mode, setMode] = useState<"fetch" | "paste">("fetch");
+  const [src, setSrc] = useState({ url: "", text: "", title: "", note: "", tag: "" });
+  const [finding, setFinding] = useState({ text: "", sourceIds: [] as string[] });
+  useEffect(() => {
+    if (project) setEdit({ name: project.name, question: project.question, agentId: project.agentId ?? "", teamId: project.teamId ?? "" });
+  }, [project?.id]);
+
+  if (!project) return <div className="pane">
+    <div className="pane-head"><div><h1>Research</h1><p>A project is a question, the sources behind it, and the findings that cite them.</p></div><div className="push" /><button className="primary" onClick={onNew}><Plus size={15} />New project</button></div>
+    <div className="blank"><h3>No research yet</h3><p>Start with a question. Sources can be fetched or pasted, and the brief stays copyable without a model.</p><button className="primary" onClick={onNew}><Plus size={14} />Create a project</button></div>
+  </div>;
+
+  const ordered = sources.filter(s => s.projectId === project.id).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.createdAt.localeCompare(a.createdAt));
+  const numbers = new Map(ordered.map((source, index) => [source.id, index + 1]));
+  const findingsFor = findings.filter(f => f.projectId === project.id);
+  const archived = project.status === "ARCHIVED";
+  const copyBrief = async () => {
+    try {
+      await navigator.clipboard.writeText(researchBrief(project, ordered, findingsFor));
+      notify("Brief copied — question, findings and numbered sources.");
+    } catch { notify("The browser refused the clipboard. Select the source text instead."); }
+  };
+  const saveEdit = async () => {
+    const r = await act("updateResearchProject", { projectId: project.id, name: edit.name, question: edit.question, agentId: edit.agentId || null, teamId: edit.teamId || null }, "Project saved");
+    if (r) setEditing(false);
+  };
+  const addSource = async () => {
+    const payload = mode === "fetch"
+      ? { projectId: project.id, url: src.url, note: src.note, tag: src.tag }
+      : { projectId: project.id, ...(src.url.trim() ? { url: src.url } : {}), text: src.text, title: src.title, note: src.note, tag: src.tag };
+    const r = await act("addResearchSource", payload, mode === "fetch" ? "Source fetched and saved" : "Excerpt saved");
+    if (r) setSrc({ url: "", text: "", title: "", note: "", tag: "" });
+  };
+  const saveFinding = async () => {
+    const r = await act("saveResearchFinding", { projectId: project.id, text: finding.text, sourceIds: finding.sourceIds }, "Finding saved with its sources");
+    if (r) setFinding({ text: "", sourceIds: [] });
+  };
+
+  return <div className="pane">
+    <div className="pane-head">
+      <div><h1>{project.name}</h1><p>{project.question || "No question recorded yet — add one so the brief says what this answers."}</p></div>
+      <div className="push" />
+      <button className="ghost" onClick={copyBrief}><Copy size={14} />Copy brief</button>
+      <button className="ghost" onClick={() => setEditing(v => !v)}><Pencil size={14} />{editing ? "Close" : "Edit"}</button>
+      <button className="ghost" onClick={async () => { await act("updateResearchProject", { projectId: project.id, status: archived ? "ACTIVE" : "ARCHIVED" }, archived ? "Project reopened" : "Project archived"); }}><ShieldCheck size={14} />{archived ? "Reopen" : "Archive"}</button>
+      <button className="icon-btn" title="Delete this project" onClick={() => onAskDelete(project.id, project.name)}><Trash2 size={15} /></button>
+    </div>
+    <div className="facts research-facts">
+      <span className={`fact ${archived ? "" : "live"}`}><i className="fact-dot" />{archived ? "archived" : "active"}</span>
+      <span className="fact">{ordered.length} source{ordered.length === 1 ? "" : "s"}</span>
+      <span className="fact">{findingsFor.length} finding{findingsFor.length === 1 ? "" : "s"}</span>
+      {project.agentId && <span className="fact">{agents.find(a => a.id === project.agentId)?.name ?? "assigned seat"}</span>}
+      {project.teamId && <span className="fact">{teams.find(t => t.id === project.teamId)?.name ?? "organisation"}</span>}
+    </div>
+
+    {editing && <div className="stack"><div className="block">
+      <div className="field"><label htmlFor="rp-name">Name</label><input id="rp-name" maxLength={80} value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })} /></div>
+      <div className="field"><label htmlFor="rp-q">Question</label><textarea id="rp-q" rows={3} maxLength={1000} value={edit.question} onChange={e => setEdit({ ...edit, question: e.target.value })} /></div>
+      <div className="field"><label htmlFor="rp-agent">Seat</label><select id="rp-agent" value={edit.agentId} onChange={e => setEdit({ ...edit, agentId: e.target.value })}><option value="">Unassigned</option>{agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+      <div className="field"><label htmlFor="rp-team">Organisation</label><select id="rp-team" value={edit.teamId} onChange={e => setEdit({ ...edit, teamId: e.target.value })}><option value="">None</option>{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+      <button className="primary" disabled={busy || !edit.name.trim()} onClick={saveEdit}>Save project</button>
+    </div></div>}
+
+    <h2 className="pane-h2">Add a source<span className="mono">{mode === "fetch" ? "https only · same policy as web_fetch" : "pasted excerpt · no network call"}</span></h2>
+    <div className="stack"><div className="block">
+      <div className="seg" role="group" aria-label="Source mode">
+        <button type="button" className={mode === "fetch" ? "on" : ""} onClick={() => setMode("fetch")}>Fetch a URL</button>
+        <button type="button" className={mode === "paste" ? "on" : ""} onClick={() => setMode("paste")}>Paste an excerpt</button>
+      </div>
+      {mode === "fetch" ? <>
+        <div className="field"><label htmlFor="src-url">URL</label><input id="src-url" maxLength={2000} placeholder="https://example.com/report" value={src.url} onChange={e => setSrc({ ...src, url: e.target.value })} /><span className="hint">Public https only, no credentials, no ports, three redirects. The readable excerpt is stored with the final URL.</span></div>
+        <div className="field"><label htmlFor="src-note">Why it matters (optional)</label><input id="src-note" maxLength={600} placeholder="Supports the per-seat pricing claim" value={src.note} onChange={e => setSrc({ ...src, note: e.target.value })} /></div>
+        <div className="field"><label htmlFor="src-tag">Tag (optional)</label><input id="src-tag" maxLength={40} placeholder="pricing" value={src.tag} onChange={e => setSrc({ ...src, tag: e.target.value })} /></div>
+        <button className="primary" disabled={busy || !src.url.trim()} onClick={addSource}>Fetch and save</button>
+      </> : <>
+        <div className="field"><label htmlFor="src-text">Excerpt</label><textarea id="src-text" rows={5} maxLength={20000} placeholder="Paste the passage you are relying on." value={src.text} onChange={e => setSrc({ ...src, text: e.target.value })} /></div>
+        <div className="field"><label htmlFor="src-title">Title</label><input id="src-title" maxLength={300} placeholder="Interview notes, 12 March" value={src.title} onChange={e => setSrc({ ...src, title: e.target.value })} /></div>
+        <div className="field"><label htmlFor="src-purl">Source URL (optional)</label><input id="src-purl" maxLength={2000} placeholder="https://…" value={src.url} onChange={e => setSrc({ ...src, url: e.target.value })} /></div>
+        <div className="field"><label htmlFor="src-pnote">Why it matters (optional)</label><input id="src-pnote" maxLength={600} value={src.note} onChange={e => setSrc({ ...src, note: e.target.value })} /></div>
+        <button className="primary" disabled={busy || src.text.trim().length < 10} onClick={addSource}>Save excerpt</button>
+      </>}
+    </div></div>
+
+    <h2 className="pane-h2">Sources<span className="mono">{ordered.length} · numbered the same way in the brief</span></h2>
+    {ordered.length ? <div className="rows">{ordered.map(source => <div className="row" key={source.id}>
+      <span className="row-face mono">[{numbers.get(source.id)}]</span>
+      <span className="row-main">
+        <strong>{source.url ? <a href={source.url} target="_blank" rel="noreferrer">{source.title || source.host || source.url}</a> : source.title || "Pasted note"} {source.pinned && <Pin size={11} />}</strong>
+        <span>{source.host || "pasted"} · {source.tag ? `${source.tag} · ` : ""}{source.fetchedAt ? `fetched ${stamp(source.fetchedAt)}` : `saved ${stamp(source.createdAt)}`}</span>
+        {source.note && <span className="row-when">{source.note}</span>}
+        <details className="research-excerpt"><summary>Excerpt</summary><p>{source.excerpt || "No excerpt stored."}</p></details>
+      </span>
+      <span className="row-actions">
+        <button className="icon-btn" title={source.pinned ? "Unpin" : "Pin to the top of the brief"} disabled={busy} onClick={() => void act("updateResearchSource", { sourceId: source.id, pinned: !source.pinned }, source.pinned ? "Unpinned" : "Pinned")}>{source.pinned ? <PinOff size={14} /> : <Pin size={14} />}</button>
+        {source.url && <a className="icon-btn" href={source.url} target="_blank" rel="noreferrer" title="Open the source"><ExternalLink size={14} /></a>}
+        <button className="icon-btn" title="Remove this source" disabled={busy} onClick={() => { if (window.confirm("Remove this source? The findings that cited it keep their text.")) void act("deleteResearchSource", { sourceId: source.id }, "Source removed"); }}><Trash2 size={14} /></button>
+      </span>
+    </div>)}</div> : <div className="blank"><h3>No sources yet</h3><p>Fetch a public page or paste an excerpt. Nothing is invented to fill the gap.</p></div>}
+
+    <h2 className="pane-h2">Findings<span className="mono">{findingsFor.length} · cite sources by number</span></h2>
+    <div className="stack"><div className="block">
+      <div className="field"><label htmlFor="fd-text">What did you establish?</label><textarea id="fd-text" rows={3} maxLength={2000} placeholder="Every rival charges per seat; only one includes audit history." value={finding.text} onChange={e => setFinding({ ...finding, text: e.target.value })} /></div>
+      <div className="field"><label>Sources behind it</label>{ordered.length ? ordered.map(source => <label key={source.id} className="check-row"><input type="checkbox" checked={finding.sourceIds.includes(source.id)} onChange={e => setFinding({ ...finding, sourceIds: e.target.checked ? [...finding.sourceIds, source.id] : finding.sourceIds.filter(id => id !== source.id) })} /><span>[{numbers.get(source.id)}] {source.title || source.host || "Pasted note"}</span></label>) : <span className="hint">Add a source first; a finding may cite only sources in this project.</span>}</div>
+      <button className="primary" disabled={busy || finding.text.trim().length < 3} onClick={saveFinding}>Save finding</button>
+    </div></div>
+    {findingsFor.length ? <div className="rows">{findingsFor.map(item => <div className="row" key={item.id}>
+      <span className="row-face"><Brain size={14} /></span>
+      <span className="row-main"><strong>{item.text}</strong><span>{item.sourceIds.length ? `cites ${item.sourceIds.map(id => numbers.has(id) ? `[${numbers.get(id)}]` : "[removed]").join(" ")}` : "no source cited"} · {stamp(item.createdAt)}</span></span>
+      <span className="row-actions"><button className="icon-btn" title="Delete finding" disabled={busy} onClick={() => { if (window.confirm("Delete this finding? Sources stay.")) void act("deleteResearchFinding", { findingId: item.id }, "Finding removed"); }}><Trash2 size={14} /></button></span>
+    </div>)}</div> : <div className="blank"><h3>No findings yet</h3><p>A finding is a sentence you can defend, with the sources that support it.</p></div>}
+  </div>;
 }
 
 function CapabilitiesEditor({ caps, setCaps, teammates, toolNotes }: { caps: Capabilities; setCaps: (c: Capabilities) => void; teammates: { id: string; name: string; role: string }[]; toolNotes: Record<string, string> }) {
