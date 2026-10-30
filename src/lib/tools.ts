@@ -22,6 +22,22 @@ export type ToolSpec = {
   whyUnavailable?: string;
 };
 
+/** Why a tool the model cannot use is shown as unavailable. Provider-aware: with a working
+ * sandbox a person has a console, but the model still has no shell and no GUI. */
+export function unavailableReason(id: string, opts: { sandboxActive: boolean }): string | undefined {
+  if (id === "browser") {
+    return opts.sandboxActive
+      ? "The sandbox runs shell commands only — there is no desktop or browser stream. A person can use the console; the model cannot drive a page here."
+      : "No sandbox provider is wired, so nothing can host a browser session.";
+  }
+  if (id === "run_command") {
+    return opts.sandboxActive
+      ? "The sandbox console is person-only. You can run a command; the model is not given a shell."
+      : "No isolated runtime exists here; commands would run on your machine, so this stays off.";
+  }
+  return undefined;
+}
+
 export const TOOL_REGISTRY: ToolSpec[] = [
   { id: "consult_teammate", label: "Consult a teammate", description: "Ask one teammate a question and use their answer, keeping the floor yourself.", kind: "delegation", writes: false, available: true },
   { id: "handoff", label: "Hand off", description: "Transfer the turn to a teammate, who then answers the user directly.", kind: "delegation", writes: false, available: true },

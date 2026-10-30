@@ -399,3 +399,36 @@ Design: `scripts/reap-orphans.mjs` kills only a node process whose command line 
 Cost: two scripts, one `package.json` line, one scheduled task, one service-recovery setting. Reversibility: `npm i`-free revert of the `dev` script to `next dev`; `Unregister-ScheduledTask PSGuard-NextOrphans`; `sc failure postgresql-x64-18 reset= 0 actions= ""`. Evidence: reaper killed 2 fabricated dead-parent workers and left a live parent's worker alone; `npm run dev -- -p 3100` served `/` 200, `/api/health` 200 `{"ok":true}`, `/api/board` 200; stopping the tree left 0 arova node processes; guard task last result 0 with heartbeat `11:47:40 matched=0 reaped=0`; `sc qfailure` shows the three restart actions.
 
 Known trap found while proving it: two servers can bind `:3000` at once on this host (a `sel-nexus/sdlc-mcp` vite server and this app), so `curl :3000` can answer from the wrong app — 404s on `/api/health` were that, not this code. Use `-p 3100` when another project may be up.
+
+## D-37: a model is verified against the gateway before it is trusted — 2026-10-30
+Trigger: the configured `OPENAI_BASE_URL` is a Token Harbor gateway, but `OPENAI_MODEL` was unset, so the built-in default `gpt-4o-mini` was sent and refused with 404. Every model-backed feature — chat, routines, evals, briefs — was dead while Settings said "ready" because a key existed.
+
+Options considered: (A) **probe `GET /v1/models` once per provider (10-minute cache), and when the model was not pinned in env, use the first served chat model in a cheap-first order, recording the choice in the board; a pinned model is reported, never replaced**; (B) keep the vendor default and tell the owner to set `OPENAI_MODEL`; (C) silently fall back to any listed model on a 404; (D) hard-code the gateway's current model name. Chosen: A.
+
+Why not B: the failure is indistinguishable from a broken key in the UI, and the app is supposed to be honest about what it can run. Why not C: unpinned and pinned are different promises; a pinned model must not move. Why not D: the catalogue changes, and the product's rule is that adding a vendor is configuration.
+
+Design: `fetchModelCatalog`, pure `chooseServedModel` (never embeddings/audio/image; prefers flash/mini/fast; penalises opus/pro/reasoning), `ensureServedModel` cache, `modelSelections()` in the board payload, and `checkProvider` as an explicit action. `requestCompletion` probes before the first real call (tests inject `fetchImpl` and never hit the network) and retries once after a model-missing 404. A 402/balance refusal now prints "the gateway account has no balance" instead of a generic failure.
+
+Cost: one cached catalogue request per provider; a fallback model the owner did not name is shown as automatic. Reversibility: remove the board field and the probe; the gateway still serves whatever `OPENAI_MODEL` names. Evidence: `.impeccable/api-sweep.mjs`; live `modelSelections` selected `gemini-3.6-flash`; the account balance is $0, so no completion has succeeded.
+
+## D-38: the database moves forward with an idempotent script, not `push --force` — 2026-10-30
+Trigger: every board load filters one workspace and sorts by time on messages, runs, events, approvals and delegations with no supporting index; `delegations.messageId` and `channelDeliveries.runId` were loose ids. `drizzle-kit push --force` is the only application path today, and it is destructive by definition.
+
+Options considered: (A) **`src/db/schema.ts` stays the source, and `deploy/schema-hardening.sql` is an idempotent forward script (10 indexes, 2 FKs added `NOT VALID` then validated, provider default) that an existing database can run safely**; (B) convert the project to versioned migrations now; (C) leave the schema and rely on small data; (D) drop and recreate. Chosen: A.
+
+Why not B: a baseline migration for 23 existing tables needs a journal backfill, which is more risk than the gap warrants; the audit's own scope keeps migrations out. Why not C: the queries are the product's hot path. Why not D: it destroys the demo's recorded work.
+
+Design: composite indexes match the actual `where workspace_id … order by created_at/started_at` shape; FKs are `SET NULL` because the audit row should outlive a deleted message or run; `sandboxes.provider` defaults to `unconfigured` and `minutesUsed` leaves the export because it was always zero.
+
+Cost: ten indexes on a small database; a second artifact to keep in step with `schema.ts`. Reversibility: `DROP INDEX`/`ALTER TABLE … DROP CONSTRAINT`. Evidence: the script applied with `ON_ERROR_STOP=1`; `pg_indexes`/`pg_constraint` list all ten indexes and both constraints as validated; provider default reads `'unconfigured'::text`; 15 empty workspaces removed.
+
+## D-39: an inbound retry is the same run, and a finished run cannot be relabelled — 2026-10-30
+Trigger: spec 25. A webhook retry after the 60-second cooldown started a second brief; cron and trigger accepted the secret on the query string; `executeRoutine`'s `finish` overwrote a cancellation with COMPLETED and still notified channels.
+
+Options considered: (A) **idempotency key on runs (`Idempotency-Key`, else `sha256(token + body)`), checked before the cooldown with the unique index as the backstop; secrets from `Authorization` only; every run finish is `UPDATE … WHERE status = 'RUNNING'` and a lost update keeps CANCELLED**; (B) rely on the cooldown alone; (C) a separate idempotency table; (D) log the secret but redact it. Chosen: A.
+
+Why not B: the cooldown is deliberately short and a retry after it is exactly the lost-response case. Why not C: `runs` already has a per-workspace unique idempotency key. Why not D: logs are the leak.
+
+Design: `runBrief` accepts a key and inserts with `ON CONFLICT DO NOTHING`; the channel/trigger routes return the stored run when the key exists; `finish`, `finishRun`, `cancelRun` and the sandbox completion all guard on `RUNNING`; the cancel summary names the steps that actually ran, and a person-only console is described as such.
+
+Cost: one extra SELECT per inbound request; a run that finishes while a cancel is in flight is reported as "finished before the stop landed". Reversibility: remove the key parameter and the guards. Evidence: API sweep returns `deduplicated: true` and the same run id; a query-string token is 401; `run-contract-proof.mjs` passes; 264/264 tests.

@@ -24,8 +24,8 @@ async function handle(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret) return NextResponse.json({ error: "CRON_SECRET is not set on this server, so /api/cron is closed. Set it to a long random string and restart." }, { status: 503 });
   const bearer = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  const given = bearer || request.headers.get("x-cron-secret") || new URL(request.url).searchParams.get("secret") || "";
-  if (!given || !same(given, secret)) return NextResponse.json({ error: "Wrong or missing cron secret." }, { status: 401 });
+  // Header only. A secret in a query string is written to access logs, proxy logs and history.
+  if (!bearer || !same(bearer, secret)) return NextResponse.json({ error: "Wrong or missing cron secret. Send Authorization: Bearer <CRON_SECRET>." }, { status: 401 });
   const started = Date.now();
   const result = await tickAllWorkspaces("cron", { wait: true });
   return NextResponse.json({ ok: true, ...result, tookMs: Date.now() - started, at: new Date().toISOString() });

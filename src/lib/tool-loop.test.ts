@@ -122,6 +122,20 @@ test("the loop is bounded and says it stopped", async () => {
   assert.equal(result.partial, true);
   assert.match(result.content, /Stopped after 2 tool steps/);
   assert.equal(result.used.length, 2);
+  assert.equal(result.stepLimit, true, "the step cap is named as itself, not as the output-token budget");
+});
+
+test("a stop is not a step-cap event", async () => {
+  const result = await runToolLoop({
+    messages: [{ role: "user", content: "go" }],
+    tools: toolDefinitions(["calc"], false),
+    allowed: ["calc"],
+    maxSteps: 2,
+    shouldStop: () => true,
+    complete: async () => ({ content: "partial", toolCalls: [] }),
+  });
+  assert.equal(result.stopped, true);
+  assert.equal(result.stepLimit, false);
 });
 
 test("a reader who leaves stops the loop before the next model call is paid for", async () => {

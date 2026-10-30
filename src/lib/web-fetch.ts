@@ -15,6 +15,7 @@
  */
 
 import { lookup as dnsLookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 export type FetchPolicy = { lookup?: (host: string) => Promise<{ address: string; family: number | string }[]> };
 
@@ -26,20 +27,63 @@ const inCidr = (ip: number, base: string, prefix: number): boolean => {
 };
 const V4_BLOCKED: [string, number][] = [["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["224.0.0.0", 4], ["240.0.0.0", 4]];
 
+/** URL syntax keeps brackets and zone ids on a literal address; the policy works on the address. */
+function bareHost(host: string): string {
+  return host.trim().replace(/^\[/, "").replace(/\]$/, "").replace(/%.*$/, "");
+}
+
+/** Eight 16-bit groups, or null. Handles `::` compression and a dotted IPv4 tail. */
+function parseV6(raw: string): number[] | null {
+  const address = raw.replace(/%.*$/, "");
+  if (!address.includes(":")) return null;
+  let text = address;
+  let tail: number[] = [];
+  const dotted = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(text);
+  if (dotted) {
+    const parts = dotted[1].split(".").map(Number);
+    if (parts.some(part => part > 255)) return null;
+    tail = [(parts[0] << 8) | parts[1], (parts[2] << 8) | parts[3]];
+    text = text.slice(0, -dotted[1].length).replace(/:$/, "");
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(":") : [];
+  const right = halves[1] ? halves[1].split(":") : [];
+  const groups = [...left, ...right];
+  if (!groups.every(group => /^[0-9a-f]{1,4}$/i.test(group))) return null;
+  const total = groups.length + tail.length;
+  if (halves.length === 1 && total !== 8) return null;
+  const fill = halves.length === 2 ? 8 - total : 0;
+  if (fill < 0) return null;
+  const nums = [...left, ...Array.from({ length: fill }, () => "0"), ...right].map(group => parseInt(group, 16));
+  return [...nums, ...tail];
+}
+
+const dotted = (hi: number, lo: number) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+
 export function isPublicAddress(address: string): boolean {
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(address);
-  if (v4) {
-    const octets = v4.slice(1, 5).map(Number);
-    if (octets.some(o => o > 255)) return false;
+  const host = bareHost(address);
+  if (isIP(host) === 4) {
+    const octets = host.split(".").map(Number);
     const ip = v4ToLong(octets);
     return !V4_BLOCKED.some(([base, prefix]) => inCidr(ip, base, prefix));
   }
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
-  if (mapped) return isPublicAddress(mapped[1]);
-  if (address === "::" || address === "::1") return false;
-  const lower = address.toLowerCase();
-  if (lower.startsWith("fe80:") || lower.startsWith("fc") || lower.startsWith("fd")) return false;
-  return lower.includes(":");
+  const v6 = parseV6(host);
+  if (!v6) return false;
+  const [a, b, c, d, e, f, g, h] = v6;
+  // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (deprecated IPv4-compatible) carry a v4 address.
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0xffff) return isPublicAddress(dotted(g, h));
+  if (a === 0 && b === 0 && c === 0 && d === 0 && e === 0 && f === 0 && (g || h)) return isPublicAddress(dotted(g, h));
+  if (a === 0) return false; // ::, ::1 and anything else in the zero prefix
+  if ((a & 0xffc0) === 0xfe80) return false; // link-local fe80::/10
+  if ((a & 0xfe00) === 0xfc00) return false; // unique-local fc00::/7
+  if ((a & 0xffc0) === 0xfec0) return false; // site-local (deprecated) fec0::/10
+  if ((a & 0xff00) === 0xff00) return false; // multicast ff00::/8
+  if (a === 0x2002) return isPublicAddress(dotted(b, c)); // 6to4 embeds v4 in groups 2-3
+  if (a === 0x0064 && b === 0xff9b) return isPublicAddress(dotted(g, h)); // NAT64
+  if (a === 0x2001 && b === 0x0000) return false; // Teredo
+  if (a === 0x2001 && b === 0x0db8) return false; // documentation 2001:db8::/32
+  return true;
 }
 
 export async function validateFetchTarget(raw: string, policy: FetchPolicy = {}): Promise<{ url: URL; ips: string[] } | { error: string }> {
@@ -50,8 +94,10 @@ export async function validateFetchTarget(raw: string, policy: FetchPolicy = {})
   if (url.port && url.port !== "443") return { error: `Port ${url.port} is outside the policy; only standard https is fetched.` };
   if (["localhost", "metadata.google.internal"].includes(url.hostname.toLowerCase())) return { error: `${url.hostname} is inside this network, not on the public web.` };
 
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) || url.hostname.includes(":")) {
-    return isPublicAddress(url.hostname) ? { url, ips: [url.hostname] } : { error: "That address is inside private or reserved space, so it is not fetched." };
+  // `URL.hostname` keeps the brackets on a literal IPv6 address; the policy checks the address.
+  const literal = bareHost(url.hostname);
+  if (isIP(literal)) {
+    return isPublicAddress(literal) ? { url, ips: [literal] } : { error: "That address is inside private or reserved space, so it is not fetched." };
   }
   let answers: { address: string }[];
   try {
@@ -85,6 +131,33 @@ export function extractReadable(body: string): { title: string; text: string } {
 const MAX_BYTES = 512_000;
 const MAX_HOPS = 3;
 
+/** Stop reading at the cap and close the connection; never buffer a whole body first. */
+export async function readCapped(res: Response, cap = MAX_BYTES): Promise<Uint8Array> {
+  const reader = res.body?.getReader();
+  if (!reader) return new Uint8Array(await res.arrayBuffer()).subarray(0, cap);
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < cap) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      size += value.length;
+    }
+  } finally {
+    if (size >= cap) await reader.cancel().catch(() => {});
+  }
+  const out = new Uint8Array(Math.min(size, cap));
+  let offset = 0;
+  for (const chunk of chunks) {
+    if (offset >= out.length) break;
+    const take = Math.min(chunk.length, out.length - offset);
+    out.set(chunk.subarray(0, take), offset);
+    offset += take;
+  }
+  return out;
+}
+
 /** Fetch one public web page inside the policy and return a readable excerpt. */
 export async function webFetch(raw: string, deps: FetchPolicy & { fetchImpl?: typeof fetch } = {}): Promise<{ ok: true; output: string; title: string; url: string } | { ok: false; error: string }> {
   const doFetch = deps.fetchImpl ?? fetch;
@@ -108,8 +181,8 @@ export async function webFetch(raw: string, deps: FetchPolicy & { fetchImpl?: ty
     if (!res.ok) return { ok: false, error: `The page answered ${res.status}.` };
     const type = res.headers.get("content-type") ?? "";
     if (!/text\/|json|xml/.test(type)) return { ok: false, error: `That is ${type.split(";")[0] || "an unknown type"}, not readable text — this tool does not download files.` };
-    const full = new Uint8Array(await res.arrayBuffer());
-    const { title, text } = extractReadable(new TextDecoder().decode(full.subarray(0, MAX_BYTES)));
+    const full = await readCapped(res);
+    const { title, text } = extractReadable(new TextDecoder().decode(full));
     if (!text) return { ok: false, error: "The page carried no readable text." };
     // The final URL is the one a citation must carry: a redirect is still the page that was read.
     return { ok: true, output: `${title ? `${title} · ` : ""}${res.status} · ${target.url.hostname}\n${text}`, title: title || target.url.hostname, url: target.url.toString() };

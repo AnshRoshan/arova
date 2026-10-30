@@ -6,18 +6,18 @@ import { db } from "@/db";
 import { agents, approvals, channelDeliveries, channels, connections, delegations, evalResults, evalTasks, events, memories, messages, modelUsage, routines, runs, runSteps, sandboxes, schedulerHeartbeats, teams, triggers, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validateChannelTarget, type ChannelEvent } from "@/lib/channels";
-import { scoreEval, summariseEvalResults } from "@/lib/evals";
+import { scoreEval } from "@/lib/evals";
 import { buildRegistry, type RegistryStats } from "@/lib/registry";
 import { skillPrompt } from "@/lib/skills";
-import { DEFAULT_RESERVE_TOKENS, completionMessage, completionText, estimateTokens, finishReason, loadProfiles, readSseText, requestCompletion, resolveForAgent, sseDelta, trimToTokenBudget, usageFromJson, usageFromSseLine, type ModelMessage, type ProviderProfile } from "@/lib/model-gateway";
+import { DEFAULT_RESERVE_TOKENS, completionMessage, completionText, ensureServedModel, estimateTokens, finishReason, loadProfiles, modelSelections, readSseText, requestCompletion, resolveForAgent, sseDelta, trimToTokenBudget, usageFromJson, usageFromSseLine, type ModelMessage, type ProviderProfile } from "@/lib/model-gateway";
 import { loadSearchProfile } from "@/lib/web-search";
 import { READONLY_TOOL_IDS, runToolLoop, toolDefinitions } from "@/lib/tool-loop";
 import { ORG_SYSTEM, buildPeerPrompt, decollide, extractJsonObject, extractRoster, fallbackRoster, isOrgIntent, mentionConsult, isTeamIntent, normaliseRoster, parseRouting, parseTurn, resolvePeer, routingPrompt, type Roster, type Routing } from "@/lib/orchestration";
-import { DEFAULT_CAPABILITIES, TOOL_REGISTRY, allowsAction, mcpSummary, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor, type Capabilities } from "@/lib/tools";
+import { DEFAULT_CAPABILITIES, TOOL_REGISTRY, allowsAction, mcpSummary, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor, unavailableReason, type Capabilities } from "@/lib/tools";
 import { runLocalTool } from "@/lib/local-tools";
 import { webFetch } from "@/lib/web-fetch";
 import { MAX_MEMBERS, decollideOrg, normaliseOrg, orgTemplate, type Org } from "@/lib/org";
-import { nextRunAt } from "@/lib/scheduler";
+import { missedIntervalMs, nextRunAt, parseSchedule } from "@/lib/scheduler";
 import { alwaysOn, cronState, driverState, schedulerIntervalSeconds, workerEnabled } from "@/lib/worker-config";
 import { nextFatigue } from "@/lib/fatigue";
 import { withProvenance } from "@/lib/provenance";
@@ -131,7 +131,7 @@ async function initialize() {
 
 /** What the browser may know about a provider: never the key, and never the raw base URL. */
 function publicProfiles(profiles: ProviderProfile[]) {
-  return profiles.map(p => ({ name: p.name, label: p.label, model: p.model, configured: p.configured, builtIn: p.builtIn, maxContextTokens: p.maxContextTokens }));
+  return profiles.map(p => ({ name: p.name, label: p.label, model: p.model, configured: p.configured, builtIn: p.builtIn, modelPinned: Boolean(p.modelPinned), maxContextTokens: p.maxContextTokens }));
 }
 
 async function board(workspaceId: string) {
@@ -141,7 +141,7 @@ async function board(workspaceId: string) {
   // loadEarlier action. The completed-runs total is counted in SQL over ALL rows, so windowing the
   // payload never changes a number the board claims.
   const MESSAGE_WINDOW = 200, RUN_WINDOW = 60, STEP_WINDOW = 300, APPROVAL_WINDOW = 60;
-  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, runStats, pendingStats, routineStats, totalsRows] = await Promise.all([
+  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, runStats, pendingStats, routineStats, totalsRows] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
     db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt), desc(messages.id)).limit(MESSAGE_WINDOW + 1),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
@@ -160,6 +160,15 @@ async function board(workspaceId: string) {
     db.select().from(channelDeliveries).where(eq(channelDeliveries.workspaceId, workspaceId)).orderBy(desc(channelDeliveries.createdAt)).limit(40),
     db.select().from(evalTasks).where(eq(evalTasks.workspaceId, workspaceId)).orderBy(desc(evalTasks.createdAt)),
     db.select().from(evalResults).where(eq(evalResults.workspaceId, workspaceId)).orderBy(desc(evalResults.createdAt)).limit(100),
+    // The pass rate is the whole workspace's record, not whatever fits in the 100-row window the
+    // board shows. The registry already refuses windowed counts; evals use the same rule.
+    db.select({
+      attempts: sql<number>`count(*)::int`,
+      passed: sql<number>`(count(*) filter (where ${evalResults.status} = 'PASS'))::int`,
+      failed: sql<number>`(count(*) filter (where ${evalResults.status} = 'FAIL'))::int`,
+      skipped: sql<number>`(count(*) filter (where ${evalResults.status} = 'SKIPPED'))::int`,
+      medianMs: sql<number | null>`(percentile_cont(0.5) within group (order by ${evalResults.durationMs}) filter (where ${evalResults.status} in ('PASS', 'FAIL')))`,
+    }).from(evalResults).where(eq(evalResults.workspaceId, workspaceId)),
     db.select({
       agentId: runs.agentId,
       count: sql<number>`count(*)::int`,
@@ -219,7 +228,17 @@ async function board(workspaceId: string) {
     evals: {
       tasks: evalTaskList.map(t => ({ id: t.id, agentId: t.agentId, name: t.name, prompt: t.prompt, expected: t.expected, createdAt: t.createdAt.toISOString() })),
       results: evalResultList.map(r => ({ id: r.id, taskId: r.taskId, agentId: r.agentId, runId: r.runId, status: r.status, score: r.score, detail: r.detail, durationMs: r.durationMs, createdAt: r.createdAt.toISOString() })),
-      summary: summariseEvalResults(evalResultList),
+      summary: (() => {
+        const totals = evalTotals[0];
+        const passed = Number(totals?.passed ?? 0), failed = Number(totals?.failed ?? 0);
+        const scored = passed + failed;
+        return {
+          attempts: Number(totals?.attempts ?? 0), passed, failed,
+          skipped: Number(totals?.skipped ?? 0),
+          passRate: scored ? passed / scored : null,
+          medianMs: totals?.medianMs == null ? null : Math.round(Number(totals.medianMs)),
+        };
+      })(),
     },
     registry: buildRegistry(agentList, teamList, registryStats),
     scheduler: (() => {
@@ -235,9 +254,14 @@ async function board(workspaceId: string) {
     })(),
     sandboxProvider: sandboxProvider.name,
     sandbox: { provider: sandboxProvider.name, capabilities: sandboxProvider.capabilities },
+    toolNotes: {
+      browser: unavailableReason("browser", { sandboxActive: sandboxProvider.name !== "unconfigured" }),
+      run_command: unavailableReason("run_command", { sandboxActive: sandboxProvider.name !== "unconfigured" }),
+    },
     profiles: publicProfiles(profiles),
     providers: Object.fromEntries(profiles.map(p => [p.name, p.configured])) as Record<string, boolean>,
     modelConfigured: profiles.some(p => p.configured),
+    modelSelections: modelSelections(),
     teams: teamList,
     delegations: delegationList,
     limits: { dailyModelCalls: dailyCallLimit(), usage, maxDelegations: maxDelegations() },
@@ -261,8 +285,9 @@ const inFlight = new Set<string>();
 const liveRuns = new Set<string>();
 
 /**
- * The scheduler tick. There is no daemon in this deployment, so due work is claimed when the
- * workspace is read — and the UI says so rather than implying a background service.
+ * The scheduler tick. The in-process worker calls this too. A board read still claims due work
+ * so a workspace opened with the worker off does not silently skip. The UI names which clock
+ * actually beat.
  */
 async function tickSchedules(workspaceId: string): Promise<Promise<unknown>[]> {
   const now = new Date();
@@ -286,13 +311,15 @@ async function tickSchedules(workspaceId: string): Promise<Promise<unknown>[]> {
     // row lock, so a second tab that races us finds it no longer due and skips. Comparing the
     // timestamp itself would never match: the column keeps microseconds, a JS Date keeps milliseconds.
     const next = nextRunAt(routine.schedule, routine.timezone || ws?.timezone || "UTC", now);
+    const schedule = parseSchedule(routine.schedule);
+    const missed = schedule && routine.nextRunAt ? missedIntervalMs(schedule, routine.nextRunAt, now) : false;
     const [claimed] = await db.update(routines)
       .set({ lastRunAt: now, nextRunAt: next, lastStatus: "RUNNING" })
       .where(and(eq(routines.id, routine.id), lte(routines.nextRunAt, now)))
       .returning();
     if (!claimed) continue;
     inFlight.add(routine.id);
-    started.push(executeRoutine(workspaceId, routine, now, claimed.nextRunAt).catch(error => console.error("Routine failed", error instanceof Error ? error.message : "unknown error")).finally(() => inFlight.delete(routine.id)));
+    started.push(executeRoutine(workspaceId, routine, now, claimed.nextRunAt, undefined, missed).catch(error => console.error("Routine failed", error instanceof Error ? error.message : "unknown error")).finally(() => inFlight.delete(routine.id)));
   }
   return started;
 }
@@ -362,16 +389,23 @@ export async function markWorkerStarted() {
 }
 
 /** One scheduled execution: a real run, real steps, and the answer posted into the agent's thread. */
-async function executeRoutine(workspaceId: string, routine: typeof routines.$inferSelect, startedAt: Date, nextRun: Date | null, manual?: { idempotencyKey: string }): Promise<{ runId: string; status: string; summary: string }> {
-  const [run] = await db.insert(runs).values({ workspaceId, agentId: routine.agentId, routineId: routine.id, title: routine.name, status: "RUNNING", summary: manual ? "Started by you with Run now" : `Scheduled for ${startedAt.toISOString()}`, initiator: manual ? "person" : "routine", idempotencyKey: manual?.idempotencyKey, startedAt }).returning();
+async function executeRoutine(workspaceId: string, routine: typeof routines.$inferSelect, startedAt: Date, nextRun: Date | null, manual?: { idempotencyKey: string }, missed = false): Promise<{ runId: string; status: string; summary: string }> {
+  const [run] = await db.insert(runs).values({ workspaceId, agentId: routine.agentId, routineId: routine.id, title: routine.name, status: "RUNNING", summary: manual ? "Started by you with Run now" : missed ? "The scheduled instant was missed; this is the single catch-up." : `Scheduled for ${startedAt.toISOString()}`, initiator: manual ? "person" : "routine", idempotencyKey: manual?.idempotencyKey, startedAt }).returning();
   let outcome = { runId: run.id, status: "RUNNING", summary: "" };
   let agentName = "";
   let teamId: string | null = null;
   const step = (title: string, detail = "") => db.insert(runSteps).values({ workspaceId, runId: run.id, title, detail });
   const finish = async (status: string, summary: string): Promise<{ runId: string; status: string; summary: string }> => {
-    outcome = { runId: run.id, status, summary };
-    void notifyChannels(workspaceId, teamId, { kind: "run", title: routine.name, status, summary, agentName, runId: run.id });
-    await db.update(runs).set({ status, summary, completedAt: new Date() }).where(eq(runs.id, run.id));
+    const storedSummary = missed ? `Missed the scheduled slot; caught up once. ${summary}`.slice(0, 280) : summary;
+    // A cancel that already landed wins: the run row is only ours while it is still RUNNING.
+    const [updated] = await db.update(runs).set({ status, summary: storedSummary, completedAt: new Date() })
+      .where(and(eq(runs.id, run.id), eq(runs.status, "RUNNING"))).returning();
+    if (!updated) {
+      if (!manual) await db.update(routines).set({ lastStatus: "CANCELLED" }).where(eq(routines.id, routine.id));
+      return { runId: run.id, status: "CANCELLED", summary: "Cancelled by a person while this run was in flight. Nothing further was sent; what already ran is in its steps." };
+    }
+    outcome = { runId: run.id, status, summary: storedSummary };
+    void notifyChannels(workspaceId, teamId, { kind: "run", title: routine.name, status, summary: storedSummary, agentName, runId: run.id });
     if (manual) {
       // A person pressing Run now neither moves the schedule nor counts toward the fatigue streak.
       await db.update(routines).set({ lastStatus: status, lastRunAt: new Date() }).where(eq(routines.id, routine.id));
@@ -385,15 +419,16 @@ async function executeRoutine(workspaceId: string, routine: typeof routines.$inf
     await db.update(routines).set({ lastStatus: status, nextRunAt: nextRun ?? routine.nextRunAt, failStreak: f.streak, ...(f.off ? { enabled: false } : {}) }).where(eq(routines.id, routine.id));
     await audit(workspaceId, routine.agentId, "routine.ran", `${routine.name}: ${status.toLowerCase()}`);
     if (f.message === "first") {
-      await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: `${routine.name} did not produce an answer: ${summary} This is the first failure since it last worked, so it is reported once. Nine more in a row and the routine switches itself off.`, kind: "message", metadata: { fatigue: "first", routineId: routine.id, runId: run.id, scheduled: true } });
+      await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: `${routine.name} did not produce an answer: ${storedSummary} This is the first failure since it last worked, so it is reported once. Nine more in a row and the routine switches itself off.`, kind: "message", metadata: { fatigue: "first", routineId: routine.id, runId: run.id, scheduled: true } });
     }
     if (f.message === "final") {
-      await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: `${routine.name} has failed ${f.streak} runs in a row, so it is switched off and nothing more will fire. Last failure: ${summary} Fix what it needs — a paused seat, a missing key, the daily budget — then switch it back on.`, kind: "message", metadata: { fatigue: "final", routineId: routine.id, runId: run.id, scheduled: true } });
+      await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: `${routine.name} has failed ${f.streak} runs in a row, so it is switched off and nothing more will fire. Last failure: ${storedSummary} Fix what it needs — a paused seat, a missing key, the daily budget — then switch it back on.`, kind: "message", metadata: { fatigue: "final", routineId: routine.id, runId: run.id, scheduled: true } });
       await audit(workspaceId, routine.agentId, "routine.fatigued", `${routine.name}: switched off after ${f.streak} consecutive failures`);
     }
     return outcome;
   };
   await step(manual ? "Started" : "Claimed", manual ? "Run now" : `${routine.schedule} · ${routine.timezone}`);
+  if (missed) await step("Missed the scheduled instant", "The app was closed long enough that at least one interval went by. This one catch-up stands in for the missed runs; the schedule moves to its next occurrence.");
   try {
     const agent = await ownedAgent(workspaceId, routine.agentId);
     agentName = agent.name;
@@ -407,6 +442,7 @@ async function executeRoutine(workspaceId: string, routine: typeof routines.$inf
     const task = `${routine.description}
 
 (This is a scheduled run of "${routine.name}", not a message from the user. Answer it directly; state anything you could not verify.)`;
+    await step("Calling the model", profile.label);
     const response = await requestCompletion({ profile, messages: [{ role: "system", content: systemPrompt(agent, await peersOf(workspaceId, agent)) }, ...history.filter(m => m.role === "user" || m.role === "assistant").slice(-8).map(m => ({ role: m.role, content: m.content })), { role: "user", content: task }], maxTokens: tokenBudgetFor(caps), stream: false, timeoutMs: requestTimeoutMs() });
     const body = await response.json();
     const answer = completionText(body).trim();
@@ -460,7 +496,11 @@ const LOCAL_REPLY: Reply = { content: "I can help organize this workspace, but l
 function routineProposal(content: string): Reply {
   const name = /inbox|email/.test(content) ? "Inbox briefing" : /news|industry|research/.test(content) ? "Research digest" : /week|priority/.test(content) ? "Weekly check-in" : "New routine";
   const schedule = /weekday/.test(content) ? "Weekdays at 8:00 AM" : /friday/.test(content) ? "Every Friday at 4:00 PM" : /monday|weekly|every week/.test(content) ? "Every Monday at 9:00 AM" : "Every day at 8:00 AM";
-  return { content: "I can set that up as a routine. Review the schedule and confirm when you're ready. Scheduled execution needs a worker; creating a routine does not run it automatically.", kind: "routine_proposal", metadata: { name, description: content, schedule } };
+  // The confirm path already states the worker truth; the proposal must not contradict it.
+  const workerNote = workerEnabled()
+    ? `The always-on scheduler checks for due routines every ${schedulerIntervalSeconds()} seconds while this server is running.`
+    : "The in-process scheduler is switched off on this server, so a routine fires only when an outside clock calls /api/cron or when you open the workspace.";
+  return { content: `I can set that up as a routine. Review the schedule and confirm when you're ready. ${workerNote}`, kind: "routine_proposal", metadata: { name, description: content, schedule } };
 }
 
 function quotaReply(profile: ProviderProfile): Reply {
@@ -470,7 +510,15 @@ function quotaReply(profile: ProviderProfile): Reply {
 function failureReply(profile: ProviderProfile, error: unknown): Reply {
   const detail = error instanceof Error ? error.message : "unknown error";
   console.error("Chat provider failed", profile.name, detail);
-  return { content: `I couldn't get an answer from ${profile.label}. Your message was saved, but no reply was generated. (${detail})`, kind: "provider_error", metadata: { provider: profile.name, detail } };
+  // A gateway with no balance is a different problem from a model that is down, and the owner can
+  // fix only the first one. Naming it saves a debugging session.
+  const unpaid = /\b402\b|balance|insufficient (funds|balance|credit)|credit/i.test(detail);
+  return {
+    content: unpaid
+      ? `${profile.label} refused the call because the gateway account has no balance. Your message was saved; no answer was produced. Top up the gateway account, or point this provider at one that has credit. (${detail})`
+      : `I couldn't get an answer from ${profile.label}. Your message was saved, but no reply was generated. (${detail})`,
+    kind: "provider_error", metadata: { provider: profile.name, detail, ...(unpaid ? { billing: true } : {}) },
+  };
 }
 
 /**
@@ -624,6 +672,17 @@ async function overQuota(workspaceId: string, profile: ProviderProfile) {
   return (rows.find(r => r.provider === profile.name)?.calls ?? 0) >= limit;
 }
 
+/** A cap hit between the first check and this call. Carries the profile so the caller can print the
+ * same sentence the pre-flight check would have printed. */
+class QuotaExceeded extends Error {
+  constructor(readonly profile: ProviderProfile) { super(quotaReply(profile).content); this.name = "QuotaExceeded"; }
+}
+
+/** Every model call on the chat path passes through this immediately before it spends anything. */
+async function requireBudget(workspaceId: string, profile: ProviderProfile) {
+  if (await overQuota(workspaceId, profile)) throw new QuotaExceeded(profile);
+}
+
 const ROSTER_SYSTEM = `You design small teams of AI teammates for a workspace. Reply with ONLY a JSON object, no prose, shaped exactly like:
 {"team":"<name>","agents":[{"name":"<first name>","role":"<speciality>","instructions":"<what it should do>"}]}
 Give 2 to 4 agents, each with a distinct speciality that the others do not cover, names that are not already taken, and instructions written as duties. No markdown fences.`;
@@ -757,6 +816,7 @@ async function planReply(workspaceId: string, agent: ChatAgent, history: Turn[])
 async function routeDecision(question: string, peers: Peer[], profile: ProviderProfile, workspaceId: string, allowed: { consult: boolean; handoff: boolean; approval: boolean; build: boolean }, signal?: AbortSignal): Promise<Routing> {
   if (!allowed.consult && !allowed.handoff && !allowed.approval && !allowed.build) return { action: "none" };
   try {
+    await requireBudget(workspaceId, profile);
     const response = await requestCompletion({
       profile,
       messages: [{ role: "system", content: "You are a router. Reply with only the JSON object requested. No prose, no explanation." }, { role: "user", content: routingPrompt(question, peers, allowed) }],
@@ -815,6 +875,7 @@ async function consultPeer(
       }
     }
   }
+  await requireBudget(workspaceId, profile);
   const response = await requestCompletion({ profile, messages: [{ role: "system", content: buildPeerPrompt({ name: peer.name, role: peer.role, instructions: peer.instructions }, question, asker.name) + gathered }], maxTokens: 700, stream: false, timeoutMs: requestTimeoutMs(), signal: chain.signal });
   const body = await response.json();
   const answer = completionText(body);
@@ -870,6 +931,7 @@ async function runAgentToolLoop(workspaceId: string, agent: ChatAgent, plan: Mod
     onEvent: event => send({ type: "tool", name: event.name, status: event.status, ...(event.detail ? { detail: event.detail } : {}) }),
     audit: detail => { void audit(workspaceId, agent.id, "tool.called", detail); },
     complete: async (turnMessages, tools) => {
+      await requireBudget(workspaceId, plan.profile);
       const response = await requestCompletion({ profile: plan.profile, messages: turnMessages, maxTokens: tokenBudgetFor(plan.caps), stream: false, timeoutMs: requestTimeoutMs(), tools, signal: control.signal });
       const body = await response.json();
       const message = completionMessage(body);
@@ -897,7 +959,7 @@ function toolLoopMetadata(result: Awaited<ReturnType<typeof runAgentToolLoop>>, 
     ...(result.used.length ? { toolsUsed: result.used } : {}),
     ...(result.sources.length ? { sources: result.sources } : {}),
     citations: result.citations,
-    ...(result.partial ? { incomplete: true, truncated: true } : {}),
+    ...(result.stopped ? { incomplete: true, stopped: true } : result.partial ? { incomplete: true, ...(result.stepLimit ? { stepLimit: true } : { truncated: true }) } : {}),
     ...(hop ? { consulted: [{ name: hop.peer.name, question: hop.question }] } : {}),
   };
 }
@@ -929,6 +991,7 @@ async function buildReply(workspaceId: string, agent: ChatAgent, history: Turn[]
       const result = await runAgentToolLoop(workspaceId, agent, plan, chat, () => {});
       return { content: result.content, kind: "message", metadata: toolLoopMetadata(result, plan.profile, hop) };
     }
+    await requireBudget(workspaceId, plan.profile);
     const response = await requestCompletion({ profile: plan.profile, messages: chat, maxTokens: tokenBudgetFor(plan.caps), stream: false, timeoutMs: requestTimeoutMs() });
     const replyBody = await response.json();
     const rawContent = completionText(replyBody);
@@ -938,6 +1001,7 @@ async function buildReply(workspaceId: string, agent: ChatAgent, history: Turn[]
     const content = stripped.text || (stripped.consult ? `I asked ${stripped.consult.agent}: ${stripped.consult.question}` : rawContent);
     return { content, kind: "message", metadata: { provider: plan.profile.name, model: plan.profile.model, ...(hop ? { consulted: [{ name: hop.peer.name, question: hop.question }] } : {}), ...(plan.memory.count ? { memory: plan.memory } : {}) } };
   } catch (error) {
+    if (error instanceof QuotaExceeded) return quotaReply(error.profile);
     return failureReply(plan.profile, error);
   }
 }
@@ -1027,19 +1091,38 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, cli
                 ...chatMessages(target, history, targetProfile, []),
               ];
               if (targetProfile.configured) {
-                const hResponse = await requestCompletion({ profile: targetProfile, messages: handoffChat, maxTokens: tokenBudgetFor(normaliseCapabilities(target.capabilities)), stream: true, timeoutMs: streamTimeoutMs() });
-                const handed = await readSseText(hResponse, text => send({ type: "delta", text }), () => closed);
+                if (await overQuota(workspaceId, targetProfile)) {
+                  await persist(quotaReply(targetProfile), targetProfile.name, null, false);
+                  return;
+                }
+                let handed: Awaited<ReturnType<typeof readSseText>>;
+                try {
+                  const hResponse = await requestCompletion({ profile: targetProfile, messages: handoffChat, maxTokens: tokenBudgetFor(normaliseCapabilities(target.capabilities)), stream: true, timeoutMs: streamTimeoutMs(), signal: stop.signal });
+                  handed = await readSseText(hResponse, text => send({ type: "delta", text }), () => closed);
+                } catch (error) {
+                  if (closed) {
+                    await audit(workspaceId, agent.id, "chat.stopped", `Stopped during a handoff to ${target.name}; no answer was stored.`);
+                    return;
+                  }
+                  await persist(failureReply(targetProfile, error), targetProfile.name, null, false);
+                  return;
+                }
                 answer = handed.text; finish = handed.finish; handedUsage = handed.usage;
-                // A reader that went away makes streamText return early, not throw. Without this
-                // check a cut-off answer would be stored as though the model had finished it.
-                if (closed && answer.trim()) {
-                  await persist({ content: answer.trim(), kind: "message", metadata: { provider: targetProfile.name, model: targetProfile.model, authoredBy: target.id, authoredByName: target.name, handoffFrom: agent.name, incomplete: true, stopped: true } });
+                // A reader that went away makes readSseText return early, not throw. A partial answer
+                // is stored as incomplete/stopped; with no text there is nothing to store at all.
+                if (closed) {
+                  if (answer.trim()) await persist({ content: answer.trim(), kind: "message", metadata: { provider: targetProfile.name, model: targetProfile.model, authoredBy: target.id, authoredByName: target.name, handoffFrom: agent.name, incomplete: true, stopped: true } });
+                  else await audit(workspaceId, agent.id, "chat.stopped", `Stopped during a handoff to ${target.name} before any text arrived; no answer was stored.`);
                   return;
                 }
               }
-              const text = answer.trim() || `${agent.name} handed this to ${target.name}, but ${targetProfile.label} is not configured on this server, so no answer was produced.`;
-              const row = await persist({ content: text, kind: "message", metadata: { provider: targetProfile.name, model: targetProfile.model, authoredBy: target.id, authoredByName: target.name, handoffFrom: agent.name, reason, ...(finish === "length" ? { incomplete: true, truncated: true } : {}) } }, targetProfile.name);
-              await db.insert(delegations).values({ workspaceId, messageId: row.id, fromAgentId: agent.id, toAgentId: target.id, mode: "handoff", question: asked.slice(0, 2000), answer: text, model: targetProfile.model, inputTokens: estimateTokens(asked), outputTokens: estimateTokens(text) });
+              // "Not configured" is true only when the target really has no key. An empty or stopped
+              // reply is a different event and is named as one, never blamed on the wrong cause.
+              const text = targetProfile.configured
+                ? answer.trim() || `${target.name} received the handoff, but ${targetProfile.label} returned no text. Nothing further was sent.`
+                : `${agent.name} handed this to ${target.name}, but ${targetProfile.label} is not configured on this server, so no answer was produced.`;
+              const row = await persist({ content: text, kind: targetProfile.configured && !answer.trim() ? "provider_error" : "message", metadata: { provider: targetProfile.name, model: targetProfile.model, authoredBy: target.id, authoredByName: target.name, handoffFrom: agent.name, reason, ...(targetProfile.configured ? {} : { unconfigured: true }), ...(finish === "length" ? { incomplete: true, truncated: true } : {}) } }, targetProfile.name, handedUsage, Boolean(handedUsage));
+              await db.insert(delegations).values({ workspaceId, messageId: row.id, fromAgentId: agent.id, toAgentId: target.id, mode: "handoff", question: asked.slice(0, 2000), answer: answer.trim(), model: targetProfile.model, inputTokens: estimateTokens(asked), outputTokens: estimateTokens(answer) });
               return;
             }
           }
@@ -1069,9 +1152,17 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, cli
                 await noteStopped();
                 return;
               }
+              if (error instanceof QuotaExceeded) {
+                await persist(quotaReply(error.profile), error.profile.name, null, false);
+                return;
+              }
               await persist(failureReply(profile, error));
               return;
             }
+          }
+          if (await overQuota(workspaceId, profile)) {
+            await persist(quotaReply(profile), profile.name, null, false);
+            return;
           }
           const response = await requestCompletion({
             profile,
@@ -1079,6 +1170,7 @@ function streamReply(workspaceId: string, agent: ChatAgent, agentId: string, cli
             maxTokens: tokenBudgetFor(plan.caps),
             stream: true,
             timeoutMs: streamTimeoutMs(),
+            signal: stop.signal,
           });
           try {
             const streamed = await readSseText(response, text => send({ type: "delta", text }), () => closed);
@@ -1150,10 +1242,17 @@ const plainLine = (text: string, limit = 280) => {
  * `isClosed` is polled so a reader that went away still gets its partial stored; a trigger
  * passes a no-op sink and never-closed answer, and the same code path serves both.
  */
-export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string, send: (payload: Record<string, unknown>) => void, isClosed: () => boolean, initiator: "person" | "trigger" = "person", signal?: AbortSignal): Promise<{ runId: string; status: string; summary: string }> {
+export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string, send: (payload: Record<string, unknown>) => void, isClosed: () => boolean, initiator: "person" | "trigger" = "person", signal?: AbortSignal, idempotencyKey?: string): Promise<{ runId: string; status: string; summary: string }> {
   const NL = String.fromCharCode(10);
   const briefId = crypto.randomUUID();
-  const [run] = await db.insert(runs).values({ workspaceId, agentId: lead.id, title: `Brief · ${team.name}`, status: "RUNNING", summary: asked.slice(0, 240), initiator, startedAt: new Date() }).returning();
+  const [run] = await db.insert(runs).values({ workspaceId, agentId: lead.id, title: `Brief · ${team.name}`, status: "RUNNING", summary: asked.slice(0, 240), initiator, idempotencyKey, startedAt: new Date() })
+    .onConflictDoNothing({ target: [runs.workspaceId, runs.idempotencyKey] }).returning();
+  if (!run) {
+    // A retry of the same inbound request: return the run already on record instead of buying it twice.
+    const [existing] = await db.select().from(runs)
+      .where(and(eq(runs.workspaceId, workspaceId), eq(runs.idempotencyKey, idempotencyKey ?? ""))).limit(1);
+    return { runId: existing?.id ?? "", status: existing?.status ?? "UNKNOWN", summary: existing?.summary ?? "" };
+  }
   liveRuns.add(run.id);
   const step = (title: string, detail = "") => db.insert(runSteps).values({ workspaceId, runId: run.id, title, detail });
   // What the caller is told when it is not a browser: a trigger needs an outcome to answer with.
@@ -1162,8 +1261,11 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     outcome.status = status;
     outcome.summary = summary;
     liveRuns.delete(run.id);
+    // A stop that already landed owns the row; this pass may not relabel it.
+    const [updated] = await db.update(runs).set({ status, summary, completedAt: new Date() })
+      .where(and(eq(runs.id, run.id), eq(runs.status, "RUNNING"))).returning();
+    if (!updated) return;
     void notifyChannels(workspaceId, team.id, { kind: "run", title: `Brief · ${team.name}`, status, summary, agentName: lead.name, teamName: team.name, runId: run.id });
-    await db.update(runs).set({ status, summary, completedAt: new Date() }).where(eq(runs.id, run.id));
   };
   const post = async (reply: Reply, author: { id: string; name: string }) => {
     const row = await postToChannel(workspaceId, team.id, "assistant", { ...reply, metadata: { ...reply.metadata, briefId, runId: run.id } }, author);
@@ -1800,9 +1902,15 @@ export async function POST(request: NextRequest) {
         if (existing) result = { runId: existing.id };
         else if (inFlight.has(routine.id)) throw new Error(`${routine.name} is already running. Wait for it to finish.`);
         else {
+          // The scheduler claims by setting lastStatus; Run now takes the same claim so a click and a
+          // tick, or two clicks in two processes, cannot both execute this routine.
+          const [claimed] = await db.update(routines).set({ lastStatus: "RUNNING" })
+            .where(and(eq(routines.id, routine.id), eq(routines.workspaceId, workspaceId), sql`${routines.lastStatus} is distinct from 'RUNNING'`))
+            .returning();
+          if (!claimed) throw new Error(`${routine.name} is already running. Wait for it to finish.`);
+          inFlight.add(routine.id);
           // Real execution: the same code path the scheduler uses, held open until the model answers so the
           // run row, the thread message and the board you get back all show the true outcome.
-          inFlight.add(routine.id);
           try {
             await audit(workspaceId, routine.agentId, "routine.run.requested", routine.name);
             const outcome = await executeRoutine(workspaceId, routine, new Date(), routine.nextRunAt, { idempotencyKey: key });
@@ -1815,8 +1923,17 @@ export async function POST(request: NextRequest) {
       const [run] = await db.select().from(runs).where(and(eq(runs.id, runId), eq(runs.workspaceId, workspaceId))).limit(1);
       if (!run) throw new Error("Run not found");
       if (["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"].includes(run.status)) throw new Error("This run has already finished.");
-      await db.update(runs).set({ status: "CANCELLED", completedAt: new Date(), summary: "Cancelled by user. No external actions were performed." }).where(eq(runs.id, run.id));
-      await db.insert(runSteps).values({ workspaceId, runId: run.id, title: "Run cancelled", detail: "Cancelled by user", status: "CANCELLED" });
+      // Name what actually happened before the stop. The old sentence claimed nothing external had
+      // run even after a model call or a sandbox command had already been made.
+      const steps = await db.select({ title: runSteps.title }).from(runSteps).where(eq(runSteps.runId, run.id));
+      const began = steps.map(s => s.title).filter(title => !["Claimed", "Started", "Run cancelled", "Missed the scheduled instant"].includes(title));
+      const summary = began.length
+        ? `Cancelled by user after: ${began.slice(-3).join(", ")}. Nothing further will run; what already ran is in this run's steps.`
+        : "Cancelled by user. No external actions were performed.";
+      const [cancelled] = await db.update(runs).set({ status: "CANCELLED", completedAt: new Date(), summary })
+        .where(and(eq(runs.id, run.id), eq(runs.status, "RUNNING"))).returning();
+      if (!cancelled) throw new Error("This run finished before the stop landed. Nothing was left running.");
+      await db.insert(runSteps).values({ workspaceId, runId: run.id, title: "Run cancelled", detail: summary, status: "CANCELLED" });
       await audit(workspaceId, run.agentId, "run.cancelled", run.title);
     } else if (action === "decideApproval") {
       const approvalId = uuid.parse(body.approvalId);
@@ -1864,11 +1981,22 @@ export async function POST(request: NextRequest) {
       // the stale time passes.
       await db.update(routines).set({ nextRunAt: null }).where(eq(routines.workspaceId, workspaceId));
       await audit(workspaceId, null, "workspace.updated", `Timezone: ${timezone}`);
-    } else if (action === "sandboxAction") {
-      await ownedAgent(workspaceId, body.agentId);
-      throw new Error(sandboxProvider.name === "unconfigured"
-        ? "Computer runtime is not configured. Set AROVA_SANDBOX_PROVIDER=local-os and install the sandbox runtime, or configure another provider."
-        : "Use runSandboxCommand for the local OS sandbox. It runs shell commands only; it has no desktop or browser stream.");
+    } else if (action === "checkProvider") {
+      // Ask the gateway what it actually serves instead of trusting a model name from a file. The
+      // probe is forced so a model fixed in env is picked up on the next message, not a restart.
+      const wanted = typeof body.provider === "string" ? body.provider : "";
+      const checked = loadProfiles().filter(p => p.configured && p.name !== "local" && (!wanted || p.name === wanted));
+      if (!checked.length) throw new Error("No provider with a key on this server matches that check, so there is nothing to ask.");
+      result = {
+        providers: await Promise.all(checked.map(async p => {
+          const resolved = await ensureServedModel(p, { force: true });
+          return {
+            name: p.name, label: p.label, model: resolved.profile.model, pinned: Boolean(p.modelPinned),
+            reachable: resolved.count !== undefined, served: resolved.served ?? null, auto: resolved.auto,
+            count: resolved.count ?? null, suggestion: resolved.suggestion ?? null, error: resolved.error ?? null,
+          };
+        })),
+      };
     } else if (action === "runSandboxCommand") {
       const input = z.object({ agentId: uuid, command: z.string().trim().min(1).max(2000) }).parse(body);
       const agent = await ownedAgent(workspaceId, input.agentId);
@@ -1878,15 +2006,23 @@ export async function POST(request: NextRequest) {
         const created = await sandboxProvider.create({ workspaceId, agentId: agent.id });
         await db.insert(sandboxes).values({ workspaceId, agentId: agent.id, provider: sandboxProvider.name, status: created.status })
           .onConflictDoUpdate({ target: sandboxes.agentId, set: { provider: sandboxProvider.name, status: created.status } });
+        await step("Running the command", input.command.slice(0, 200));
         const executed = await sandboxProvider.execute(agent.id, { type: "computer", action: "exec", input: { command: input.command } });
         await step("Command completed", executed.output);
-        await db.update(runs).set({ status: "COMPLETED", summary: executed.output.slice(0, 240), completedAt: new Date() }).where(eq(runs.id, sandboxRun.id));
-        await audit(workspaceId, agent.id, "sandbox.ran", `${agent.name}: ${input.command.slice(0, 120)}`);
-        result = { sandbox: { ok: true, output: executed.output, runId: sandboxRun.id, provider: sandboxProvider.name } };
+        // A cancel that landed while the command ran is final: do not overwrite it with COMPLETED.
+        const [done] = await db.update(runs).set({ status: "COMPLETED", summary: executed.output.slice(0, 240), completedAt: new Date() })
+          .where(and(eq(runs.id, sandboxRun.id), eq(runs.status, "RUNNING"))).returning();
+        if (!done) {
+          result = { sandbox: { ok: false, error: "Cancelled by a person while the command was running. Its output was not recorded against a completed run.", runId: sandboxRun.id, provider: sandboxProvider.name } };
+        } else {
+          await audit(workspaceId, agent.id, "sandbox.ran", `${agent.name}: ${input.command.slice(0, 120)}`);
+          result = { sandbox: { ok: true, output: executed.output, runId: sandboxRun.id, provider: sandboxProvider.name } };
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "The sandbox command failed.";
         await step("Refused", message, "FAILED");
-        await db.update(runs).set({ status: "FAILED", summary: message.slice(0, 240), completedAt: new Date() }).where(eq(runs.id, sandboxRun.id));
+        await db.update(runs).set({ status: "FAILED", summary: message.slice(0, 240), completedAt: new Date() })
+          .where(and(eq(runs.id, sandboxRun.id), eq(runs.status, "RUNNING")));
         await db.insert(sandboxes).values({ workspaceId, agentId: agent.id, provider: sandboxProvider.name, status: "ERROR" })
           .onConflictDoUpdate({ target: sandboxes.agentId, set: { provider: sandboxProvider.name, status: "ERROR" } });
         await audit(workspaceId, agent.id, "sandbox.refused", message.slice(0, 240));
@@ -1913,9 +2049,6 @@ export async function POST(request: NextRequest) {
       await db.update(runs).set({ status: executed.ok ? "COMPLETED" : "FAILED", completedAt: new Date(), summary: executed.ok ? `Ran: ${input.toolInput.slice(0, 100)} → ${String(executed.output).slice(0, 100)}` : `Refused: ${executed.error ?? "unknown"}`.slice(0, 240) }).where(eq(runs.id, toolRun.id));
       await audit(workspaceId, runner.id, "tool.ran", `${spec.label} (${runner.name}): ${executed.ok ? "completed" : "refused"}`);
       result = { tool: { id: spec.id, ...executed }, runId: toolRun.id };
-    } else if (action === "connectTool") {
-      await ownedAgent(workspaceId, body.agentId);
-      throw new Error("OAuth is not configured in this deployment. No account was connected. Add provider credentials to enable this integration.");
     } else {
       throw new Error("Unknown action");
     }

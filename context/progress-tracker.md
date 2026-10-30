@@ -304,3 +304,38 @@ Owner review: the left panel repeated the page (especially Integrations), five t
 **Redesign unit 2.** Automations had two tab strips; the panel now follows the pane's single segmented control. Organisation's four paper stat cards became one hairline strip. Settings forms cap at 780px. The thread and composer centre on one measure (960/880) so the closed activity column leaves balanced margins rather than a dead right strip. Every remaining 10–24px radius joined the 4/7/8/10/12 ladder. Verified by the extended `.impeccable/cdp-shell-check.mjs` and `redesign-9-*.png`. D-35.
 
 **Redesign unit 3.** The phone sheet header stacked four rows; under 600px it now keeps identity + Activity on one row, the Agent/Routine actions on the next, and the facts scroll horizontally on a single line (scrollbar hidden). The rail is icon-only on phones. `cdp-shell-check.mjs` now also asserts no horizontal overflow at 390 and zero visible rail labels. Final set: `redesign-13-*.png`.
+
+## Session 2026-10-30 — spec 25 boundary repairs, and the two config defects under them
+
+**Verified before touching code.** `GET /api/board` 200; PostgreSQL `arova_demo` holds all 23 tables;
+the scheduler worker had 55 ticks with no error; a full action sweep (`.impeccable/api-sweep.mjs`)
+exercised 34 API paths. The sweep found the product's model half broken: `OPENAI_BASE_URL` points at
+a Token Harbor gateway that does not serve the default `gpt-4o-mini`, so chat, routines, evals and
+briefs all failed with 404. **The gateway balance is also $0**, which no model-name fix can cover.
+Model discovery now reads `/v1/models`, records the choice in `modelSelections`, and names a zero
+balance instead of blaming the model. **No model call has succeeded in this session.**
+
+**Second config defect.** Next inferred its workspace root as `C:\Users\Ansh` because of a stray
+lockfile, so Arova's `.env.local` was never loaded and the app ran on whatever the shell exported.
+`next.config.ts` pins `turbopack.root`; the "Environments" warning is gone.
+
+**Spec 25 (C-1…C-19).** Implemented as written: IPv6/6to4/NAT64/ULA policy with four literal-URL
+tests and a capped body reader; `finish` only updates a run while it is `RUNNING`, with a truthful
+cancel summary and steps that name the model call; Run now takes the scheduler's `lastStatus` claim;
+`missedIntervalMs` marks a catch-up; per-call budget checks on router/consult/tool turns and streamed
+replies, abort signals on the main and handoff streams; a handoff with no text is not called
+"unconfigured"; Stop during a brief's summons; `stepLimit` is not `truncated`; worker copy, first-screen
+thread, temperature removal, permission help, SQL eval totals, provider-aware tool reasons, WSL reset,
+the empty-history affordance; header-only cron/trigger secrets and inbound idempotency; schema defaults
+and two real foreign keys.
+
+**Proofs.** `npm test` **264/264** (12 new: IPv6/body-cap/model catalogue/step cap). `tsc --noEmit` ✓,
+`npm run build` ✓. `.impeccable/api-sweep.mjs` **34/34** on :3100, including query-string trigger
+tokens refused and a retried inbound body returning the first run. `.impeccable/run-contract-proof.mjs`:
+a routine three days overdue was claimed once, its summary starts "Missed the scheduled slot", its
+steps include the missed instant and the model call, and Run now was refused while it was RUNNING.
+`.impeccable/cdp-spec25-check.mjs` on real Chrome: first visit Overview, remembered seat opens its
+thread, no Temperature control, "Auto and Default behave the same", browser reason names the person-only
+console, WSL reset enabled, eval scope sentence present, `CONSOLE: []`; shots `shots/spec25/`.
+`deploy/schema-hardening.sql` applied: 10 indexes, 2 validated FKs, provider default `unconfigured`;
+15 empty workspaces removed (24 → 15 with data).

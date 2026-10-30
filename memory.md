@@ -203,3 +203,10 @@ The owner asked for a redesign: use the left chrome or drop it, decompress Integ
 **Redesign unit 2:** one control per surface (Automations panel no longer repeats the tabs), org stats are one inline strip, settings forms cap at 780px, thread/composer centre on 960/880, and all leftovers joined the radius ladder (7/8/9/10/12). Extended `cdp-shell-check.mjs` asserts all of it. Next: the channel surface and the phone header density.
 
 **Redesign unit 3:** phone header compacted to two rows + a scrollable facts line, rail icon-only; shell check now asserts 390px overflow and hidden labels. Redesign is committed in three units (8bfe5f7, 5107fe9, this one).
+
+## Session 2026-10-29 — audit, no behaviour change
+
+Read the app against its specs and against the root OpenDots record. Defects are
+`context/current-issues.md` (C-1…C-20, S-1…S-5). New contracts: specs 25–28. Docs that still
+described "no worker / no tools / no sandbox" were corrected. The first fix is spec 25, and the
+first line of it is the IPv6 hole in `validateFetchTarget`. No test gate was run; nothing was committed.

@@ -1,5 +1,11 @@
 # Feature 08 — Schedules that execute
 
+**Superseded in one place (2026-10-29).** An in-process worker now ticks on a
+timer, and `/api/cron` is a second clock. The body below is the original
+contract: catch-up on read, one run, flagged when late. The "no background
+process" sentences describe the deployment this spec was written for. The flag
+for a late run is still unbuilt (`context/current-issues.md` C-17).
+
 Goal: a routine that says "every weekday at 8:00 AM" produces a real run at 8:00 AM, with a real
 answer in the thread, instead of a row that waits forever for a worker nobody configured.
 

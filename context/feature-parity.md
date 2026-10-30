@@ -141,8 +141,8 @@ not have is a golden-task suite with cost and step metrics, or a published pass 
 - **Security is the adoption tax.** Prompt injection, memory poisoning and tool-supply-chain risk are
   now standard enterprise-agent concerns (C, multiple 2026 guides). Arova's current answer is real but
   partial: approvals, a denial breaker, metadata-only desktop audit (planned with the desktop),
-  same-origin writes and a per-workspace write bucket. It has no effect ledger for external actions
-  and no sandbox, so it cannot yet claim a full action boundary.
+  same-origin writes and a per-workspace write bucket, plus a person-only shell sandbox. It has no
+  effect ledger for external actions, so it cannot yet claim a full action boundary.
 - **Implication.** A self-host product that gives a small team an agent registry, an attributable
   record and reviewable memory is selling the thing the market is already paying a governance layer
   for. That is a stronger position than "another agent with a computer".
@@ -239,9 +239,9 @@ pretending.
 | Durable record | Activity | Not documented | Not documented | Not documented | Not documented | Audit/registry | Task history | Chat | Chat | Channel | Channel + runs + delegations + events |
 | Org chart | No | No | No | No | No | Registry, not chart | No | No | No | No | `manager_id` tree |
 | Memory | Account + dot | Account, editable | Not per-note | Editable files | Shared, not editable | n/a | Not documented | Local files | Persistent, self-created skills | Managed Intelligence | Org-scoped keyword, reviewable |
-| Tools/computer | Cloud computer | Cloud VM | Cloud VM | Cloud VM | Own VMs | n/a | Hosted | Local | Local | gVisor + shell | **None** (honest refusal) |
+| Tools/computer | Cloud computer | Cloud VM | Cloud VM | Cloud VM | Own VMs | n/a | Hosted | Local | Local | gVisor + shell | Shell/files only (`wsl` or `local-os`); no GUI |
 | Connectors | 4k apps | 6,000 tools | Workspace apps | Apps/WhatsApp | 7 + MCP | n/a | Some | 20+ channels | 28 adapters | MCP catalogue | **None** |
-| Grounding/citations | Browser | Tools | Google | Apps | Web/X | n/a | Research | Web | Web | Tools | `web_fetch` only; no citations |
+| Grounding/citations | Browser | Tools | Google | Apps | Web/X | n/a | Research | Web | Web | Tools | Read-only loop: `web_fetch` + `web_search`, one citation ledger |
 | Scheduling | Routines | Checks | Scheduled | Recurring | Automations | n/a | Tasks | Heartbeat | Events | Routines | Time routines + worker/trigger |
 | Approvals | Auto-review + rules | Classifiers | Not documented | Purchase approval | Review model | Policy layer | Not documented | Not documented | Not documented | CEL gateway | Approvals + denial breaker |
 | Budget visibility | Not per dot | Plan quota | Plan quota | Plan quota | Plan quota | n/a | Credits | Model bill | Model bill | Not documented | Per-provider/day calls, estimated vs reported |
@@ -278,8 +278,8 @@ infrastructure decision the owner has not made.** This is not a wish list.
 2. **A real computer**: E2B (or the provider chosen by the root Phase 1 measurements). **Do not
    implement before Phase 1**: the root project's own backlogs says the resume/login measurements
    decide the design. The cost is ~$0.05–0.12/hr; the risk class is the blocker.
-3. **Search with citations**: needs a tool-calling loop, not just a search key. The current model has
-   no autonomous tools; adding a search console without the loop would be cosmetic. Spec it first.
+3. **Search with citations**: shipped as specs 21–22 (read-only loop, one citation ledger). A real
+   search provider and vendor model are still unverified without a key.
 4. **Golden-task suite**: 10–20 tasks per archetype, cost/steps per task, a trend view. The current
    harness measures one prompt at a time; the market claim needs a suite.
 5. **Packaging**: a self-host support model, an install path, and a clear statement that there is no
@@ -351,7 +351,7 @@ will not load is not evidence.
 
 ---
 
-## Appendix A — Arova today (code-verified 2026-10-28)
+## Appendix A — Arova today (code-verified 2026-10-28, corrected 2026-10-29)
 
 - **Identity**: cookie workspace for the demo; OIDC sign-in foundation (`users`, `memberships`,
   `sessions`, hashed session token) with owner/member roles; no production auth claim.
@@ -364,15 +364,18 @@ will not load is not evidence.
 - **Automation**: wall-clock routines with timezone/DST projection, claim-by-predicate, in-process
   worker plus `/api/cron`, fatigue off after 10 consecutive failures, inbound trigger with atomic
   cooldown.
-- **Tools**: calc, world clock, JSON transform, checksum, `web_fetch` behind an SSRF policy; browser,
-  shell, files, connectors and MCP transport remain refused with their reasons.
+- **Tools**: calc, world clock, JSON transform, checksum, `web_fetch` behind an SSRF policy (IPv6
+  literals are an open hole, C-1); an opt-in read-only tool loop with `web_search` and a citation
+  ledger. Browser, model shell, connectors and MCP transport remain refused.
+- **Sandbox**: person-only shell/files via `wsl` (live check passed) or `local-os` (fails closed in
+  an RDP session). No GUI, snapshot, or takeover.
 - **New this pass**: generic webhook channels with inbound org tokens and a delivery ledger; eval
   tasks with a substring scorer and honest skipped/error states; exact agent registry.
-- **Gates**: `npm test` **208/208**, `next typegen`, `tsc --noEmit`, `npm run build` all green on this
-  tree; live API checks covered a delivered webhook, a failed webhook, inbound run + 429 cooldown, a
-  skipped eval and the registry.
-- **Not present, and never to be inferred**: a sandbox, a real computer, autonomous model tool calls,
-  citations from the web, a production hosted service, billing, or a measured pass rate.
+- **Gates**: `npm test` **252/252** at D-35; typegen, `tsc --noEmit` and `npm run build` were green
+  on 2026-10-28. Live API checks that day covered a delivered webhook, a failed webhook, inbound
+  run + 429 cooldown, a skipped eval and the registry.
+- **Not present, and never to be inferred**: a persistent desktop, production hosted service,
+  billing, or a measured pass rate.
 
 ## Appendix B — detailed product notes
 
