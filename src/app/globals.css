@@ -955,3 +955,5 @@ button.sp-item:hover, button.node:hover { background: color-mix(in srgb, var(--s
 .people .kv .push { display: flex; gap: 6px; }
 .people .kv .mono { color: var(--ink-3); font-size: 11px; }
 .load-earlier { display: flex; align-items: center; gap: 6px; margin: 2px auto 10px; font-size: 11.5px; color: var(--ink-3); padding: 4px 12px; }
+
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); }

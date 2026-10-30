@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import { and, desc, eq, gt, lt, lte, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agents, approvals, channelDeliveries, channels, connections, delegations, evalResults, evalTasks, events, memories, messages, modelUsage, routines, runs, runSteps, sandboxes, schedulerHeartbeats, teams, triggers, workspaces } from "@/db/schema";
+import { agents, approvals, channelDeliveries, channels, connections, delegations, evalResults, evalSuites, evalTasks, events, memories, messages, modelUsage, routines, runs, runSteps, sandboxes, schedulerHeartbeats, teams, triggers, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validateChannelTarget, type ChannelEvent } from "@/lib/channels";
 import { scoreEval } from "@/lib/evals";
@@ -36,6 +36,10 @@ import { audit } from "@/lib/audit";
 import { finishRun } from "@/lib/run-contract";
 import { drizzleRunStore } from "@/lib/run-contract-drizzle";
 import { runSandboxCommand } from "@/lib/sandbox-run";
+import { ensureAgentVersion } from "@/lib/versions-drizzle";
+import { executeEvalTask } from "@/lib/eval-runner";
+import { runSuiteTasks, suitePassRate } from "@/lib/suite";
+import { dailyCallLimit, num, overQuota, recordUsage, usageToday } from "@/lib/budget";
 
 export const dynamic = "force-dynamic";
 /** An eval run is one synchronous model call; a slow reasoning model can take the whole ceiling. */
@@ -44,14 +48,11 @@ export const cookieName = "arova_workspace";
 const uuid = z.string().uuid();
 const text = z.string().trim().min(1).max(4000);
 
-const num = (value: string | undefined, fallback: number) => (value === undefined || value === "" || Number.isNaN(Number(value)) ? fallback : Number(value));
 const maxOutputTokens = () => num(process.env.MODEL_MAX_TOKENS, 800);
 const requestTimeoutMs = () => num(process.env.MODEL_TIMEOUT_MS, 45000);
 /** A stream is slow by design, so it gets its own ceiling rather than the unary one. */
 const streamTimeoutMs = () => Math.max(requestTimeoutMs(), num(process.env.MODEL_STREAM_TIMEOUT_MS, 120000));
 /** Absent = 60 calls/workspace/provider/day; 0 = unlimited. Counts only calls that reached a vendor. */
-const dailyCallLimit = () => num(process.env.DAILY_MODEL_CALLS_LIMIT, 60);
-const utcDay = () => new Date().toISOString().slice(0, 10);
 /** Peer hops one reply may spend. Each hop is extra model calls, so the ceiling is explicit. */
 const maxDelegations = () => num(process.env.MAX_DELEGATIONS, 1);
 /** A summons answers the question it was asked and does not run a chain of its own. */
@@ -92,24 +93,6 @@ async function recordDelivery(workspaceId: string, channel: { id: string }, even
   });
 }
 
-/** Atomic increment: a read-modify-write here would undercount concurrent chats. */
-/**
- * `exact` is true only when the server itself reported the counts. A day that mixes an estimated
- * call with an exact one stays flagged, because the figure on screen is then only partly real.
- */
-async function recordUsage(workspaceId: string, provider: string, inputTokens: number, outputTokens: number, exact = false) {
-  await db.insert(modelUsage).values({ workspaceId, provider, day: utcDay(), calls: 1, inputTokens, outputTokens, estimated: !exact })
-    .onConflictDoUpdate({
-      target: [modelUsage.workspaceId, modelUsage.provider, modelUsage.day],
-      set: { calls: sql`${modelUsage.calls} + 1`, inputTokens: sql`${modelUsage.inputTokens} + ${inputTokens}`, outputTokens: sql`${modelUsage.outputTokens} + ${outputTokens}`, estimated: sql`${modelUsage.estimated} OR ${!exact}` },
-    });
-}
-
-async function usageToday(workspaceId: string) {
-  const rows = await db.select().from(modelUsage).where(and(eq(modelUsage.workspaceId, workspaceId), eq(modelUsage.day, utcDay())));
-  return rows.map(r => ({ provider: r.provider, calls: r.calls, inputTokens: r.inputTokens, outputTokens: r.outputTokens, estimated: r.estimated }));
-}
-
 async function initialize() {
   // A live session outranks the anonymous cookie: the workspace it names is the one it belongs to.
   const actor = await readActor();
@@ -141,7 +124,7 @@ async function board(workspaceId: string) {
   // loadEarlier action. The completed-runs total is counted in SQL over ALL rows, so windowing the
   // payload never changes a number the board claims.
   const MESSAGE_WINDOW = 200, RUN_WINDOW = 60, STEP_WINDOW = 300, APPROVAL_WINDOW = 60;
-  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, runStats, pendingStats, routineStats, totalsRows] = await Promise.all([
+  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, suiteList, runStats, pendingStats, routineStats, totalsRows] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
     db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt), desc(messages.id)).limit(MESSAGE_WINDOW + 1),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
@@ -169,6 +152,7 @@ async function board(workspaceId: string) {
       skipped: sql<number>`(count(*) filter (where ${evalResults.status} = 'SKIPPED'))::int`,
       medianMs: sql<number | null>`(percentile_cont(0.5) within group (order by ${evalResults.durationMs}) filter (where ${evalResults.status} in ('PASS', 'FAIL')))`,
     }).from(evalResults).where(eq(evalResults.workspaceId, workspaceId)),
+    db.select().from(evalSuites).where(eq(evalSuites.workspaceId, workspaceId)).orderBy(desc(evalSuites.createdAt)),
     db.select({
       agentId: runs.agentId,
       count: sql<number>`count(*)::int`,
@@ -228,6 +212,11 @@ async function board(workspaceId: string) {
     evals: {
       tasks: evalTaskList.map(t => ({ id: t.id, agentId: t.agentId, name: t.name, prompt: t.prompt, expected: t.expected, createdAt: t.createdAt.toISOString() })),
       results: evalResultList.map(r => ({ id: r.id, taskId: r.taskId, agentId: r.agentId, runId: r.runId, status: r.status, score: r.score, detail: r.detail, durationMs: r.durationMs, createdAt: r.createdAt.toISOString() })),
+      suites: suiteList.map(s => ({
+        id: s.id, agentId: s.agentId, name: s.name, taskIds: s.taskIds, callCeiling: s.callCeiling, status: s.status,
+        passed: s.passed, failed: s.failed, skipped: s.skipped, errored: s.errored, modelCalls: s.modelCalls,
+        passRate: suitePassRate(s), startedAt: s.startedAt?.toISOString() ?? null, finishedAt: s.finishedAt?.toISOString() ?? null, createdAt: s.createdAt.toISOString(),
+      })),
       summary: (() => {
         const totals = evalTotals[0];
         const passed = Number(totals?.passed ?? 0), failed = Number(totals?.failed ?? 0);
@@ -432,6 +421,7 @@ async function executeRoutine(workspaceId: string, routine: typeof routines.$inf
     const agent = await ownedAgent(workspaceId, routine.agentId);
     agentName = agent.name;
     teamId = agent.teamId;
+    await db.update(runs).set({ agentVersionId: await ensureAgentVersion(agent) }).where(eq(runs.id, run.id));
     if (agent.status !== "ACTIVE") return finish("FAILED", `${agent.name} is paused, so the schedule did not run. Resume the agent to continue.`);
     const profile = resolveForAgent(agent.provider, loadProfiles());
     if (!profile.configured) return finish("FAILED", `${profile.label} has no key on this server, so nothing was executed.`);
@@ -662,13 +652,6 @@ async function recentTurns(workspaceId: string, agentId: string): Promise<Turn[]
   const rows = await db.select({ role: messages.role, content: messages.content, kind: messages.kind }).from(messages)
     .where(and(eq(messages.workspaceId, workspaceId), eq(messages.agentId, agentId))).orderBy(desc(messages.createdAt)).limit(64);
   return rows.reverse();
-}
-
-async function overQuota(workspaceId: string, profile: ProviderProfile) {
-  const limit = dailyCallLimit();
-  if (!limit) return false;
-  const rows = await usageToday(workspaceId);
-  return (rows.find(r => r.provider === profile.name)?.calls ?? 0) >= limit;
 }
 
 /** A cap hit between the first check and this call. Carries the profile so the caller can print the
@@ -1244,7 +1227,8 @@ const plainLine = (text: string, limit = 280) => {
 export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAgent, asked: string, send: (payload: Record<string, unknown>) => void, isClosed: () => boolean, initiator: "person" | "trigger" = "person", signal?: AbortSignal, idempotencyKey?: string): Promise<{ runId: string; status: string; summary: string }> {
   const NL = String.fromCharCode(10);
   const briefId = crypto.randomUUID();
-  const [run] = await db.insert(runs).values({ workspaceId, agentId: lead.id, title: `Brief · ${team.name}`, status: "RUNNING", summary: asked.slice(0, 240), initiator, idempotencyKey, startedAt: new Date() })
+  const leadVersionId = await ensureAgentVersion(lead);
+  const [run] = await db.insert(runs).values({ workspaceId, agentId: lead.id, agentVersionId: leadVersionId, title: `Brief · ${team.name}`, status: "RUNNING", summary: asked.slice(0, 240), initiator, idempotencyKey, startedAt: new Date() })
     .onConflictDoNothing({ target: [runs.workspaceId, runs.idempotencyKey] }).returning();
   if (!run) {
     // A retry of the same inbound request: return the run already on record instead of buying it twice.
@@ -1532,6 +1516,7 @@ export async function POST(request: NextRequest) {
         newManagerId = boss.id;
       }
       const [agent] = await db.insert(agents).values({ workspaceId, ...fields, teamId: newTeamId ?? null, managerId: newManagerId, capabilities: normaliseCapabilities(rawCaps) }).returning();
+      await ensureAgentVersion(agent);
       await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "assistant", content: newTeamId ? `I'm ${agent.name}, ${agent.role.toLowerCase()}. I was added to this organisation, so ask me something and I will bring the right seat in when the work needs it.` : `Hey, I’m ${agent.name}. What would you like to work on together?` });
       if (newTeamId) {
         const [joined] = await db.select().from(teams).where(and(eq(teams.id, newTeamId), eq(teams.workspaceId, workspaceId))).limit(1);
@@ -1549,6 +1534,8 @@ export async function POST(request: NextRequest) {
       const patch = { ...fields, ...(rawCaps !== undefined ? { capabilities: normaliseCapabilities(rawCaps) } : {}) };
       if (input.provider && !knownProvider(input.provider)) throw new Error(`Unknown model "${input.provider}". List it in PROVIDERS first.`);
       await db.update(agents).set(patch).where(and(eq(agents.id, agent.id), eq(agents.workspaceId, workspaceId)));
+      // Publishing happens here: the live row moves, and the snapshot a later run pins is written.
+      await ensureAgentVersion({ ...agent, ...patch });
       if (patch.status === "PAUSED") await db.update(routines).set({ enabled: false }).where(and(eq(routines.agentId, agent.id), eq(routines.workspaceId, workspaceId)));
       await audit(workspaceId, agent.id, "agent.updated", JSON.stringify({ ...patch, capabilities: patch.capabilities ? "updated" : undefined }));
     } else if (action === "deleteAgent") {
@@ -1724,40 +1711,56 @@ export async function POST(request: NextRequest) {
       if (!task) throw new Error("Eval task not found");
       const agent = await ownedAgent(workspaceId, task.agentId);
       const profile = resolveForAgent(agent.provider, loadProfiles());
+      const attempt = await executeEvalTask({ workspaceId, task, agent, profile, system: systemPrompt(agent, []) });
+      result = { result: attempt };
+    } else if (action === "createSuite") {
+      const input = z.object({ name: z.string().trim().min(1).max(80), agentId: uuid, taskIds: z.array(uuid).min(1).max(50), callCeiling: z.number().int().min(1).max(50).default(10) }).parse(body);
+      const agent = await ownedAgent(workspaceId, input.agentId);
+      const tasks = await db.select().from(evalTasks).where(and(eq(evalTasks.workspaceId, workspaceId), inArray(evalTasks.id, input.taskIds)));
+      if (tasks.length !== input.taskIds.length) throw new Error("Every task in a suite must still exist in this workspace.");
+      if (tasks.some(t => t.agentId !== agent.id)) throw new Error(`Every task in a suite must belong to ${agent.name}.`);
+      const [suite] = await db.insert(evalSuites).values({ workspaceId, agentId: agent.id, name: input.name, taskIds: input.taskIds, callCeiling: input.callCeiling }).returning();
+      await audit(workspaceId, agent.id, "suite.created", `${suite.name}: ${tasks.length} task(s), ceiling ${suite.callCeiling}`);
+      result = { suiteId: suite.id };
+    } else if (action === "runSuite") {
+      const suiteId = uuid.parse(body.suiteId);
+      const [suite] = await db.select().from(evalSuites).where(and(eq(evalSuites.id, suiteId), eq(evalSuites.workspaceId, workspaceId))).limit(1);
+      if (!suite) throw new Error("Suite not found");
+      const agent = await ownedAgent(workspaceId, suite.agentId);
+      const profile = resolveForAgent(agent.provider, loadProfiles());
+      const rows = await db.select().from(evalTasks).where(and(eq(evalTasks.workspaceId, workspaceId), inArray(evalTasks.id, suite.taskIds)));
+      const order = new Map(suite.taskIds.map((id, index) => [id, index]));
+      const tasks = rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
       const startedAt = new Date();
-      const [evalRun] = await db.insert(runs).values({ workspaceId, agentId: agent.id, title: `Eval · ${task.name}`, status: "RUNNING", summary: task.prompt.slice(0, 240), initiator: "person", startedAt }).returning();
-      const stop = async (status: string, detail: string) => {
-        await db.update(runs).set({ status: "FAILED", summary: detail.slice(0, 240), completedAt: new Date() }).where(eq(runs.id, evalRun.id));
-        const [row] = await db.insert(evalResults).values({ workspaceId, taskId: task.id, agentId: agent.id, runId: evalRun.id, status, score: 0, detail: detail.slice(0, 600), durationMs: Date.now() - startedAt.getTime() }).returning();
-        await audit(workspaceId, agent.id, "eval.skipped", `${task.name}: ${status}`);
-        result = { result: { id: row.id, status: row.status, score: row.score, detail: row.detail, durationMs: row.durationMs } };
-      };
-      if (profile.name === "local" || !profile.configured) { await stop("SKIPPED", `${profile.label} is not configured on this server, so nothing was called.`); }
-      else if (await overQuota(workspaceId, profile)) { await stop("SKIPPED", `The daily model budget is spent; nothing was called.`); }
-      else {
-        try {
-          const caps = normaliseCapabilities(agent.capabilities);
-          const response = await requestCompletion({ profile, messages: [{ role: "system", content: systemPrompt(agent, []) }, { role: "user", content: task.prompt }], maxTokens: tokenBudgetFor(caps), stream: false, timeoutMs: requestTimeoutMs() });
-          const evalBody = await response.json();
-          const answer = completionText(evalBody);
-          const counted = usageFromJson(evalBody);
-          await recordUsage(workspaceId, profile.name, counted?.input ?? estimateTokens(task.prompt), counted?.output ?? estimateTokens(answer), Boolean(counted));
-          const verdict = scoreEval(answer, task.expected);
-          const durationMs = Date.now() - startedAt.getTime();
-          await db.insert(runSteps).values({ workspaceId, runId: evalRun.id, title: verdict.passed ? "Passed" : "Failed", detail: verdict.detail, status: verdict.passed ? "COMPLETED" : "FAILED" });
-          await db.update(runs).set({ status: verdict.passed ? "COMPLETED" : "FAILED", summary: verdict.detail.slice(0, 240), completedAt: new Date() }).where(eq(runs.id, evalRun.id));
-          const [row] = await db.insert(evalResults).values({ workspaceId, taskId: task.id, agentId: agent.id, runId: evalRun.id, status: verdict.passed ? "PASS" : "FAIL", score: verdict.passed ? 1 : 0, detail: `${verdict.detail} Answer: ${answer.slice(0, 600)}`, durationMs }).returning();
-          await audit(workspaceId, agent.id, "eval.ran", `${task.name}: ${row.status}`);
-          result = { result: { id: row.id, status: row.status, score: row.score, detail: row.detail, durationMs } };
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : "The eval run failed.";
-          await db.update(runs).set({ status: "FAILED", summary: detail.slice(0, 240), completedAt: new Date() }).where(eq(runs.id, evalRun.id));
-          const [row] = await db.insert(evalResults).values({ workspaceId, taskId: task.id, agentId: agent.id, runId: evalRun.id, status: "ERROR", score: 0, detail: detail.slice(0, 600), durationMs: Date.now() - startedAt.getTime() }).returning();
-          await audit(workspaceId, agent.id, "eval.errored", `${task.name}: ${detail.slice(0, 120)}`);
-          result = { result: { id: row.id, status: row.status, score: row.score, detail: row.detail, durationMs: row.durationMs } };
-        }
+      let counts = { passed: 0, failed: 0, skipped: 0, errored: 0, modelCalls: 0 };
+      let status: "COMPLETE" | "STOPPED_AT_CEILING" | "SKIPPED" = "COMPLETE";
+      if (!tasks.length) {
+        status = "SKIPPED";
+      } else if (profile.name === "local" || !profile.configured) {
+        status = "SKIPPED";
+        counts = { ...counts, skipped: tasks.length };
+      } else {
+        const system = systemPrompt(agent, []);
+        const outcome = await runSuiteTasks(tasks, suite.callCeiling, task => executeEvalTask({ workspaceId, task, agent, profile, system }).then(a => a.outcome));
+        counts = outcome.counts;
+        status = outcome.status;
       }
-    } else if (action === "createTeam") {
+      const [updated] = await db.update(evalSuites).set({ ...counts, status, startedAt, finishedAt: new Date() }).where(eq(evalSuites.id, suite.id)).returning();
+      await audit(workspaceId, agent.id, "suite.ran", `${suite.name}: ${status}, ${counts.modelCalls} call(s)`);
+      result = {
+        suite: {
+          id: updated.id, name: updated.name, status: updated.status, passed: updated.passed, failed: updated.failed,
+          skipped: updated.skipped, errored: updated.errored, modelCalls: updated.modelCalls,
+          passRate: suitePassRate(updated), callCeiling: updated.callCeiling,
+        },
+      };
+    } else if (action === "deleteSuite") {
+      const suiteId = uuid.parse(body.suiteId);
+      const [suite] = await db.select().from(evalSuites).where(and(eq(evalSuites.id, suiteId), eq(evalSuites.workspaceId, workspaceId))).limit(1);
+      if (!suite) throw new Error("Suite not found");
+      await db.delete(evalSuites).where(eq(evalSuites.id, suite.id));
+      await audit(workspaceId, null, "suite.deleted", suite.name);
+    } else if (action === "createTeam") {    } else if (action === "createTeam") {
       const input = z.object({
         team: z.string().trim().min(1).max(60),
         brief: z.string().max(300).default(""),
@@ -1998,7 +2001,7 @@ export async function POST(request: NextRequest) {
     } else if (action === "runSandboxCommand") {
       const input = z.object({ agentId: uuid, command: z.string().trim().min(1).max(2000) }).parse(body);
       const agent = await ownedAgent(workspaceId, input.agentId);
-      result = { sandbox: await runSandboxCommand({ workspaceId, agentId: agent.id, agentName: agent.name, command: input.command }) };
+      result = { sandbox: await runSandboxCommand({ workspaceId, agentId: agent.id, agentName: agent.name, agentVersionId: await ensureAgentVersion(agent), command: input.command }) };
     } else if (action === "resetSandbox") {
       const agent = await ownedAgent(workspaceId, body.agentId);
       await sandboxProvider.destroy(agent.id);
@@ -2014,11 +2017,13 @@ export async function POST(request: NextRequest) {
       if (!spec) throw new Error(`"${input.toolId}" is not a tool this deployment can genuinely run.`);
       const caps = normaliseCapabilities(runner.capabilities);
       if (!resolveTools(caps, { hasTeam: true }).includes(spec.id)) throw new Error(`${runner.name} is not granted "${spec.label}". Turn it on in ${runner.name} › Capabilities.`);
-      const [toolRun] = await db.insert(runs).values({ workspaceId, agentId: runner.id, title: `Tool · ${spec.label}`, status: "RUNNING", summary: input.toolInput.slice(0, 240), initiator: "person", startedAt: new Date() }).returning();
+      const [toolRun] = await db.insert(runs).values({ workspaceId, agentId: runner.id, agentVersionId: await ensureAgentVersion(runner), title: `Tool · ${spec.label}`, status: "RUNNING", summary: input.toolInput.slice(0, 240), initiator: "person", startedAt: new Date() }).returning();
       const executed = spec.id === "web_fetch" ? await webFetch(input.toolInput) : runLocalTool(spec.id, input.toolInput);
       await db.insert(runSteps).values({ workspaceId, runId: toolRun.id, title: executed.ok ? `${spec.label} ran in this process` : `${spec.label} refused`, detail: (executed.ok ? executed.output ?? "" : executed.error ?? "").slice(0, 4000), status: executed.ok ? "COMPLETED" : "FAILED" });
-      await db.update(runs).set({ status: executed.ok ? "COMPLETED" : "FAILED", completedAt: new Date(), summary: executed.ok ? `Ran: ${input.toolInput.slice(0, 100)} → ${String(executed.output).slice(0, 100)}` : `Refused: ${executed.error ?? "unknown"}`.slice(0, 240) }).where(eq(runs.id, toolRun.id));
-      await audit(workspaceId, runner.id, "tool.ran", `${spec.label} (${runner.name}): ${executed.ok ? "completed" : "refused"}`);
+      const toolSummary = executed.ok ? `Ran: ${input.toolInput.slice(0, 100)} → ${String(executed.output).slice(0, 100)}` : `Refused: ${executed.error ?? "unknown"}`;
+      if (await finishRun(drizzleRunStore, toolRun.id, executed.ok ? "COMPLETED" : "FAILED", toolSummary.slice(0, 240)) === "updated") {
+        await audit(workspaceId, runner.id, "tool.ran", `${spec.label} (${runner.name}): ${executed.ok ? "completed" : "refused"}`);
+      }
       result = { tool: { id: spec.id, ...executed }, runId: toolRun.id };
     } else {
       throw new Error("Unknown action");
