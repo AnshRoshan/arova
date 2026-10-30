@@ -880,7 +880,7 @@ export default function Workbench() {
       <header className="sheet-bar">
         <button className="icon-btn only-mobile" onClick={() => setRail(true)} aria-label="Open the section menu"><Menu size={17} /></button>
         {pane === "channel" && channel ? <>
-          <button className="icon-btn" onClick={() => setPane(null)} aria-label="Back to the seat thread"><ArrowLeft size={16} /></button>
+          <button className="icon-btn only-narrow" onClick={() => setPane(null)} aria-label="Back to the seat thread"><ArrowLeft size={16} /></button>
           <div className="ident" style={hueOf(briefLead?.id)}>
             <span className="ident-tile"><Network size={17} /></span>
             <div className="ident-main">
@@ -888,16 +888,16 @@ export default function Workbench() {
               <p className="ident-role">{channelSeats.length} seat{channelSeats.length === 1 ? "" : "s"} · {briefLead ? `led by ${briefLead.name}` : "no seat to brief yet"}</p>
             </div>
           </div>
-          <div className="facts">
+          <div className="facts channel-facts">
             <span className="fact mono" title="posts stored for this organisation">{channelFeed.length} post{channelFeed.length === 1 ? "" : "s"}</span>
             <span className="fact" title={`The server allows ${data.limits.maxDelegations} hop(s) per reply and ${briefLead?.name ?? "the lead"} is allowed ${briefLead?.capabilities?.maxTurns ?? "its default"} turns, so a brief pulls in at most ${leadCeiling} teammate(s).`}>{leadCeiling === 0 ? "summons off" : <>≤{leadCeiling} summons<small>/brief</small></>}</span>
             {leadAnswering && <span className="fact"><b>{leadAnswering.label}</b><s>{leadAnswering.model}</s></span>}
           </div>
           <div className="push" />
           <button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button>
-          <button className="ghost" onClick={() => { setOrgSel(channel.id); setPane("org"); }}><SlidersHorizontal size={15} />Organisation</button>
+          <button className="ghost" onClick={() => { setOrgSel(channel.id); setPane("org"); }}><SlidersHorizontal size={15} /><span className="only-wide">Organisation</span></button>
         </> : pane ? <>
-          {pane !== "overview" && <button className="icon-btn" onClick={() => setPane("overview")} aria-label="Back to overview"><ArrowLeft size={16} /></button>}
+          {pane !== "overview" && <button className="icon-btn only-narrow" onClick={() => setPane("overview")} aria-label="Back to overview"><ArrowLeft size={16} /></button>}
           <div className="page-heading"><h1>{pane === "overview" ? "Overview" : pane === "org" ? "Organisation" : pane === "scheduler" ? "Automations" : pane === "tools" ? "Integrations" : "Settings"}</h1></div>
           <div className="push" />
           {pane !== "overview" && <button className="ghost only-narrow" onClick={() => setActivity(true)}><Activity size={15} />Activity</button>}
