@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, approvals, channels, delegations, events, memories, runs, runSteps, sandboxes, teams, workspaces } from "@/db/schema";
+import { agents, approvals, channels, delegations, events, externalEffects, memories, runs, runSteps, sandboxes, teams, workspaces } from "@/db/schema";
 import { readActor } from "@/lib/auth-sessions";
 import { redactTarget } from "@/lib/channels";
 
@@ -14,7 +14,7 @@ const LIMIT = 5000;
 
 /**
  * A workspace audit export. It is deliberately narrower than a database dump: no message bodies,
- * no channel target URLs or inbound tokens, no model keys, no session tokens, no agent instructions.
+ * no channel target URLs or inbound tokens, no model keys, no session tokens, no agent instructions, and no typed sandbox commands.
  * The caller is the workspace that already sees these rows; the file is for a human or an auditor.
  */
 export async function GET() {
@@ -26,7 +26,7 @@ export async function GET() {
   const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
   if (!workspace) return NextResponse.json({ error: "Workspace not found." }, { status: 401 });
 
-  const [agentRows, teamRows, eventRows, runRows, stepRows, approvalRows, delegationRows, memoryRows, channelRows, sandboxRows] = await Promise.all([
+  const [agentRows, teamRows, eventRows, runRows, stepRows, approvalRows, delegationRows, memoryRows, channelRows, sandboxRows, effectRows] = await Promise.all([
     db.select().from(agents).where(eq(agents.workspaceId, workspaceId)),
     db.select().from(teams).where(eq(teams.workspaceId, workspaceId)),
     db.select().from(events).where(eq(events.workspaceId, workspaceId)).orderBy(desc(events.createdAt)).limit(LIMIT),
@@ -37,6 +37,7 @@ export async function GET() {
     db.select().from(memories).where(eq(memories.workspaceId, workspaceId)).orderBy(desc(memories.createdAt)).limit(LIMIT),
     db.select().from(channels).where(eq(channels.workspaceId, workspaceId)).orderBy(desc(channels.createdAt)),
     db.select().from(sandboxes).where(eq(sandboxes.workspaceId, workspaceId)),
+    db.select().from(externalEffects).where(eq(externalEffects.workspaceId, workspaceId)).orderBy(desc(externalEffects.createdAt)).limit(LIMIT),
   ]);
 
   const payload = {
@@ -53,6 +54,13 @@ export async function GET() {
     memories: memoryRows.map(m => ({ id: m.id, teamId: m.teamId, agentId: m.agentId, kind: m.kind, text: m.text, pinned: m.pinned, supersedes: m.supersedes, sourceIds: m.sourceIds, hits: m.hits, lastUsedAt: m.lastUsedAt, createdAt: m.createdAt })),
     channels: channelRows.map(c => ({ name: c.name, kind: c.kind, targetHost: redactTarget(c.target), teamId: c.teamId, enabled: c.enabled, delivered: c.delivered, failed: c.failed, lastStatus: c.lastStatus, lastError: c.lastError, lastDeliveryAt: c.lastDeliveryAt, lastInboundAt: c.lastInboundAt, createdAt: c.createdAt })),
     sandboxes: sandboxRows.map(s => ({ agentId: s.agentId, provider: s.provider, status: s.status, createdAt: s.createdAt })),
+    // The ledger is exported as evidence, but a stored command is typed input: the export keeps the
+    // fact of the attempt and the key, not the text that was typed.
+    externalEffects: effectRows.map(e => ({
+      id: e.id, runId: e.runId, agentVersionId: e.agentVersionId, idempotencyKey: e.idempotencyKey,
+      kind: e.kind, status: e.status, createdAt: e.createdAt,
+      metadata: Object.fromEntries(Object.entries(e.metadata ?? {}).map(([key, value]) => [key, key === "command" ? "[redacted from export]" : value])),
+    })),
   };
 
   return new NextResponse(JSON.stringify(payload, null, 2), {

@@ -13,10 +13,34 @@ export const teams = pgTable("teams", { id: id(), workspaceId: uuid("workspace_i
   // push cannot create. Both are cleared in the same transaction that deletes the seat.
   creatorAgentId: uuid("creator_agent_id"), leadAgentId: uuid("lead_agent_id"), createdAt: created() }, t => [uniqueIndex("teams_workspace_name_unique").on(t.workspaceId, t.name)]);
 export const agents = pgTable("agents", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), teamId: uuid("team_id").references(() => teams.id, { onDelete: "set null" }), managerId: uuid("manager_id").references((): AnyPgColumn => agents.id, { onDelete: "set null" }), name: text("name").notNull(), role: text("role").notNull(), instructions: text("instructions").notNull().default(""), avatar: text("avatar").notNull().default("sparkles"), color: text("color").notNull().default("violet"), status: text("status").notNull().default("ACTIVE"), provider: text("provider").notNull().default("auto"), capabilities: jsonb("capabilities").$type<Record<string, unknown>>(), createdAt: created(), deletedAt: timestamp("deleted_at", { withTimezone: true }) });
+/**
+ * What a seat was told and allowed at a moment. Instructions are edited in place on the agent; a run
+ * pins the version it actually used, so a later edit cannot rewrite the past. Runs created before
+ * this table existed carry a null version, and the UI says so rather than guessing.
+ */
+export const agentVersions = pgTable("agent_versions", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), version: integer("version").notNull(), instructions: text("instructions").notNull().default(""), capabilities: jsonb("capabilities").$type<Record<string, unknown>>(), provider: text("provider").notNull().default("auto"), createdAt: created() }, t => [uniqueIndex("agent_versions_agent_version_unique").on(t.agentId, t.version), index("agent_versions_agent_index").on(t.agentId, t.createdAt)]);
 /** A row belongs to one seat's thread or to an organisation's channel — never both, never neither. */
 export const messages = pgTable("messages", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }), teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }), role: text("role").notNull(), content: text("content").notNull(), kind: text("kind").notNull().default("message"), metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}), createdAt: created() }, t => [check("messages_addressed_to_one_subject", sql`(${t.agentId} is not null) <> (${t.teamId} is not null)`), index("messages_workspace_created_index").on(t.workspaceId, t.createdAt), index("messages_team_created_index").on(t.teamId, t.createdAt)]);
 export const routines = pgTable("routines", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), name: text("name").notNull(), description: text("description").notNull(), schedule: text("schedule").notNull(), timezone: text("timezone").notNull().default("America/New_York"), enabled: boolean("enabled").notNull().default(true), icon: text("icon").notNull().default("sparkles"), lastRunAt: timestamp("last_run_at", { withTimezone: true }), nextRunAt: timestamp("next_run_at", { withTimezone: true }), lastStatus: text("last_status"), /** Consecutive runs that produced nothing. Ten and the routine switches itself off (fatigue.ts). */ failStreak: integer("fail_streak").notNull().default(0), createdAt: created() }, t => [index("routines_due_index").on(t.enabled, t.nextRunAt)]);
-export const runs = pgTable("runs", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), routineId: uuid("routine_id").references(() => routines.id, { onDelete: "set null" }), title: text("title").notNull(), status: text("status").notNull().default("QUEUED"), summary: text("summary").notNull().default(""), /** What started this run — a person typing, a schedule firing, or a trigger calling in (D-17). */ initiator: text("initiator").notNull().default("person"), idempotencyKey: text("idempotency_key"), startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(), completedAt: timestamp("completed_at", { withTimezone: true }) }, t => [uniqueIndex("runs_idempotency_unique").on(t.workspaceId, t.idempotencyKey), index("runs_workspace_started_index").on(t.workspaceId, t.startedAt), index("runs_status_started_index").on(t.status, t.startedAt)]);
+export const runs = pgTable("runs", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), routineId: uuid("routine_id").references(() => routines.id, { onDelete: "set null" }), /** The instructions/capabilities this run actually used; null for runs before agent_versions. */ agentVersionId: uuid("agent_version_id").references(() => agentVersions.id, { onDelete: "set null" }), title: text("title").notNull(), status: text("status").notNull().default("QUEUED"), summary: text("summary").notNull().default(""), /** What started this run — a person typing, a schedule firing, or a trigger calling in (D-17). */ initiator: text("initiator").notNull().default("person"), idempotencyKey: text("idempotency_key"), startedAt: timestamp("started_at", { withTimezone: true }).defaultNow().notNull(), completedAt: timestamp("completed_at", { withTimezone: true }) }, t => [uniqueIndex("runs_idempotency_unique").on(t.workspaceId, t.idempotencyKey), index("runs_workspace_started_index").on(t.workspaceId, t.startedAt), index("runs_status_started_index").on(t.status, t.startedAt)]);
+
+/**
+ * A side effect written down before it is attempted. `pending` means the attempt began; `succeeded`
+ * and `uncertain` are terminal for automatic retries — the same key returns the row and does not run
+ * again. `uncertain` is the honest state for a timeout: something may have happened. Read-only tools
+ * do not create rows; they stay on the audit event.
+ */
+export const externalEffects = pgTable("external_effects", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  runId: uuid("run_id").references(() => runs.id, { onDelete: "set null" }),
+  agentVersionId: uuid("agent_version_id").references(() => agentVersions.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key").notNull(),
+  kind: text("kind").notNull(),
+  status: text("status").notNull().default("pending"),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: created(),
+}, t => [uniqueIndex("external_effects_idempotency_unique").on(t.workspaceId, t.idempotencyKey), index("external_effects_run_index").on(t.runId), check("external_effects_status_check", sql`${t.status} in ('pending', 'succeeded', 'failed', 'uncertain')`)]);
 export const runSteps = pgTable("run_steps", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }), title: text("title").notNull(), detail: text("detail").notNull().default(""), status: text("status").notNull().default("COMPLETED"), createdAt: created() });
 export const approvals = pgTable("approvals", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), title: text("title").notNull(), detail: text("detail").notNull(), risk: text("risk").notNull().default("WRITE"), status: text("status").notNull().default("PENDING"), createdAt: created() }, t => [index("approvals_workspace_status_index").on(t.workspaceId, t.status, t.createdAt)]);
 export const connections = pgTable("connections", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), slug: text("slug").notNull(), /** No connector exists yet; a row must not claim a live account by default. */ status: text("status").notNull().default("DISCONNECTED"), createdAt: created() }, t => [uniqueIndex("connections_agent_slug_unique").on(t.agentId, t.slug)]);
@@ -142,6 +166,30 @@ export const evalTasks = pgTable("eval_tasks", {
   expected: text("expected").notNull(),
   createdAt: created(),
 });
+
+/**
+ * A named list of eval tasks with a cost ceiling. Running it stores its own counts, including the
+ * number of model calls it actually spent, so the rate can name its scope instead of looking like a
+ * benchmark. A suite with no scored task shows no percentage.
+ */
+export const evalSuites = pgTable("eval_suites", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  agentId: uuid("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  taskIds: jsonb("task_ids").$type<string[]>().notNull().default([]),
+  callCeiling: integer("call_ceiling").notNull().default(10),
+  /** READY before the first run; COMPLETE, STOPPED_AT_CEILING, or SKIPPED after it. */
+  status: text("status").notNull().default("READY"),
+  passed: integer("passed").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  errored: integer("errored").notNull().default(0),
+  modelCalls: integer("model_calls").notNull().default(0),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  createdAt: created(),
+}, t => [uniqueIndex("eval_suites_workspace_name_unique").on(t.workspaceId, t.name), index("eval_suites_workspace_index").on(t.workspaceId, t.createdAt)]);
 
 /** One measured attempt. `detail` holds the answer excerpt and the scorer's sentence. */
 export const evalResults = pgTable("eval_results", {

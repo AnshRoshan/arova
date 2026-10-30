@@ -75,6 +75,10 @@ await shot("01-first-visit-overview.png");
 const seeded = await act("createAgent", { name: "Verity", role: "auditor" });
 agentId = seeded.agentId ?? seeded.board?.agents?.find(a => a.name === "Verity")?.id;
 assert.ok(agentId, "agent created");
+// One suite so the Evals pane has something to render, not just an empty state.
+const evalTask = await act("createEvalTask", { agentId, name: "Spec suite task", prompt: "Say one.", expected: "one" });
+const evalTaskId = evalTask.taskId;
+await act("createSuite", { name: "Spec suite", agentId, taskIds: [evalTaskId], callCeiling: 3 });
 // C-10: a remembered seat opens that thread after a reload.
 await read(`localStorage.setItem('arova.lastAgent', ${JSON.stringify(agentId)})`);
 await send("Page.reload");
@@ -122,6 +126,8 @@ assert.equal(await clickContains("Evals"), true, "Evals tab opens");
 await sleep(500);
 const evalText = await read(`document.querySelector('.pane')?.innerText ?? ''`);
 assert.match(evalText, /SQL counts over every scored attempt/, "the pass rate names its scope");
+assert.match(evalText, /SUITES/i, "the suites section renders");
+assert.match(evalText, /Spec suite/i, "the stored suite is listed");
 await shot("05-evals-scope.png");
 
 assert.deepEqual(consoleErrors, [], `console errors: ${consoleErrors.join(" | ")}`);

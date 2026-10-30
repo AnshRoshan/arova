@@ -21,7 +21,7 @@ type Agent = { id: string; name: string; role: string; instructions: string; ava
 /** A row belongs to one seat's thread or to one organisation's channel — `teamId` set means channel. */
 type Message = { id: string; agentId: string | null; teamId: string | null; role: string; content: string; kind: string; metadata: Record<string, unknown>; createdAt: string };
 type Routine = { id: string; agentId: string; name: string; description: string; schedule: string; timezone: string; enabled: boolean; lastRunAt: string | null; nextRunAt: string | null; lastStatus: string | null; failStreak: number };
-type Run = { id: string; agentId: string; routineId: string | null; title: string; status: string; summary: string; initiator: string; startedAt: string; completedAt: string | null };
+type Run = { id: string; agentId: string; routineId: string | null; agentVersionId: string | null; title: string; status: string; summary: string; initiator: string; startedAt: string; completedAt: string | null };
 type Step = { id: string; runId: string; title: string; detail: string; createdAt: string };
 type Approval = { id: string; agentId: string; title: string; detail: string; status: string; createdAt: string };
 type Profile = { name: string; label: string; model: string; configured: boolean; builtIn: boolean; modelPinned?: boolean; maxContextTokens: number };
@@ -48,6 +48,7 @@ type ChannelDelivery = { id: string; channelId: string; direction: string; event
 type EvalTask = { id: string; agentId: string; name: string; prompt: string; expected: string; createdAt: string };
 type EvalResultRow = { id: string; taskId: string; agentId: string; runId: string | null; status: string; score: number; detail: string; durationMs: number; createdAt: string };
 type EvalSummary = { attempts: number; passed: number; failed: number; skipped: number; passRate: number | null; medianMs: number | null };
+type EvalSuite = { id: string; agentId: string; name: string; taskIds: string[]; callCeiling: number; status: string; passed: number; failed: number; skipped: number; errored: number; modelCalls: number; passRate: number | null; startedAt: string | null; finishedAt: string | null; createdAt: string };
 type Board = {
   workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
   overview: { activeAgents: number; enabledRoutines: number; completedRuns: number; pendingApprovals: number; messagesToday: number };
@@ -61,7 +62,7 @@ type Board = {
   identity: { signedIn: { name: string; email: string; role: "owner" | "member" } | null; people: { id: string; name: string; email: string; role: string; addedAt: string; lastSeenAt: string | null; sessions: number }[] };
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
   channels: Channel[]; channelDeliveries: ChannelDelivery[];
-  evals: { tasks: EvalTask[]; results: EvalResultRow[]; summary: EvalSummary };
+  evals: { tasks: EvalTask[]; results: EvalResultRow[]; suites: EvalSuite[]; summary: EvalSummary };
   registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
@@ -224,6 +225,7 @@ export default function Workbench() {
   const [channelForm, setChannelForm] = useState({ name: "", kind: "webhook", target: "", teamId: "" });
   const [channelOutput, setChannelOutput] = useState<{ token: string } | null>(null);
   const [evalForm, setEvalForm] = useState({ name: "", agentId: "", prompt: "", expected: "" });
+  const [suiteForm, setSuiteForm] = useState<{ name: string; agentId: string; callCeiling: number; taskIds: string[] }>({ name: "", agentId: "", callCeiling: 10, taskIds: [] });
   const [registryQuery, setRegistryQuery] = useState("");
   const [activity, setActivity] = useState(false);
   const [draft, setDraft] = useState("");
@@ -251,7 +253,7 @@ export default function Workbench() {
   }, []);
   const [atBottom, setAtBottom] = useState(true);
   const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "sandbox"; id: string; name: string } | null>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -324,6 +326,7 @@ export default function Workbench() {
   useEffect(() => { if (agentId) localStorage.setItem("arova.lastAgent", agentId); }, [agentId]);
   /** The eval form needs a seat before it can save; adopt the first one once, not on every poll. */
   useEffect(() => { if (!evalForm.agentId && data?.agents.length) setEvalForm(f => ({ ...f, agentId: data.agents[0].id })); }, [data, evalForm.agentId]);
+  useEffect(() => { if (!suiteForm.agentId && data?.agents.length) setSuiteForm(f => ({ ...f, agentId: data.agents[0].id })); }, [data, suiteForm.agentId]);
   useEffect(() => { if (!sandboxAgent && data?.agents.length) setSandboxAgent(data.agents[0].id); }, [data, sandboxAgent]);
 
   async function act(action: string, payload: Record<string, unknown> = {}, say?: string) {
@@ -1218,6 +1221,23 @@ export default function Workbench() {
             <div className="kv"><span>Median duration</span><span className="push mono">{data.evals.summary.medianMs === null ? "no measurement" : `${data.evals.summary.medianMs} ms`}</span></div>
             <p className="hint">These totals are SQL counts over every scored attempt in this workspace, not the newest page of results below.</p>
             <p className="hint">One prompt, one answer, one expected fragment. The score is a case-insensitive substring check, not a model judge — cheap, replayable, and exactly as narrow as it looks.</p>
+            <h2 className="pane-h2">Suites<span className="mono">tasks + a call ceiling</span></h2>
+            <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="su-name">Suite name</label><input id="su-name" maxLength={80} placeholder="Weekly baseline" value={suiteForm.name} onChange={e => setSuiteForm({ ...suiteForm, name: e.target.value })} /></div>
+              <div className="field"><label htmlFor="su-agent">Seat</label><select id="su-agent" value={suiteForm.agentId} onChange={e => setSuiteForm({ ...suiteForm, agentId: e.target.value, taskIds: [] })}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select></div>
+              <div className="field"><label htmlFor="su-ceiling">Call ceiling</label><input id="su-ceiling" type="number" min={1} max={50} value={suiteForm.callCeiling} onChange={e => setSuiteForm({ ...suiteForm, callCeiling: Math.max(1, Math.min(50, Number(e.target.value) || 1)) })} /><span className="hint">The run stops before the next task once this many model calls are spent.</span></div>
+              <div className="field"><label>Tasks</label>{data.evals.tasks.filter(t => t.agentId === suiteForm.agentId).map(t => <label key={t.id} className="check-row"><input type="checkbox" checked={suiteForm.taskIds.includes(t.id)} onChange={e => setSuiteForm({ ...suiteForm, taskIds: e.target.checked ? [...suiteForm.taskIds, t.id] : suiteForm.taskIds.filter(id => id !== t.id) })} /><span>{t.name}</span></label>)}{!data.evals.tasks.some(t => t.agentId === suiteForm.agentId) && <span className="hint">This seat has no eval tasks yet.</span>}</div>
+              <button className="primary" disabled={busy || !suiteForm.name.trim() || !suiteForm.taskIds.length} onClick={async () => { const r = await act("createSuite", suiteForm, "Suite saved"); if (r) setSuiteForm(f => ({ ...f, name: "", taskIds: [] })); }}>Save suite</button>
+            </div></div>
+            {data.evals.suites.length ? <div className="rows">{data.evals.suites.map(s => <div className="row" key={s.id}>
+              <span className="row-face"><ListChecks size={15} /></span>
+              <span className="row-main"><strong>{s.name}</strong><span>{byId(s.agentId)?.name ?? "removed agent"} · {s.taskIds.length} task(s) · ceiling {s.callCeiling} · {s.modelCalls} call(s) spent</span><span className="row-when">{s.startedAt ? `${s.passed} passed · ${s.failed} failed · ${s.skipped} skipped · ${s.errored} error · ${s.passRate === null ? "no scored attempts" : `${Math.round(s.passRate * 100)}% of scored`}` : "not run yet"}</span></span>
+              <span className="row-side"><span className={`chip ${s.status === "COMPLETE" ? "ran" : s.status === "STOPPED_AT_CEILING" ? "waiting" : "idle"}`}><i />{s.status === "STOPPED_AT_CEILING" ? "ceiling" : s.status.toLowerCase()}</span></span>
+              <span className="row-actions">
+                <button className="ghost" disabled={busy} onClick={async () => { const r = await act("runSuite", { suiteId: s.id }); const res = r?.suite as { status?: string; modelCalls?: number } | undefined; if (res?.status) setToast(`Suite ${res.status === "STOPPED_AT_CEILING" ? "stopped at the ceiling" : res.status.toLowerCase()} · ${res.modelCalls ?? 0} call(s)`); }}><Play size={14} />Run</button>
+                <button className="icon-btn" title="Delete suite" disabled={busy} onClick={() => setAskDelete({ kind: "suite", id: s.id, name: s.name })}><Trash2 size={15} /></button>
+              </span>
+            </div>)}</div> : <div className="blank"><h3>No suites yet</h3><p>Name a set of tasks and a call ceiling. Running it stores its own counts; no percentage appears until a task is scored.</p></div>}
             <h2 className="pane-h2">New task<span className="mono">agent + prompt + expected fragment</span></h2>
             <div className="stack"><div className="block">
               <div className="field"><label htmlFor="ev-name">Task name</label><input id="ev-name" maxLength={80} placeholder="Reports the current time for Berlin" value={evalForm.name} onChange={e => setEvalForm({ ...evalForm, name: e.target.value })} /></div>
@@ -1574,7 +1594,7 @@ export default function Workbench() {
 
       {typeof dialog === "object" && <div className="dialog wide">
         <div className="dialog-top"><span className="mark"><Activity size={14} /></span><h2>{dialog.title}</h2><button className="icon-btn x" onClick={() => setDialog(null)} aria-label="Close"><X size={15} /></button></div>
-        <div className="dialog-meta"><State status={dialog.status} sample={isSample(dialog)} /><span className="mono">{dayLabel(dialog.startedAt)} {clock(dialog.startedAt)}</span><span>{byId(dialog.agentId)?.name ?? "removed agent"}</span></div>
+        <div className="dialog-meta"><State status={dialog.status} sample={isSample(dialog)} /><span className="mono">{dayLabel(dialog.startedAt)} {clock(dialog.startedAt)}</span><span>{byId(dialog.agentId)?.name ?? "removed agent"}</span><span title="A run pins the instructions and capabilities it started with; a later edit cannot rewrite it.">{dialog.agentVersionId ? "instructions pinned" : "instructions were not pinned for this run"}</span></div>
         <p className="dialog-summary">{dialog.summary}</p>
         <div className="rows">{data.steps.filter(s => s.runId === dialog.id).map(s => <div className="row" key={s.id}><span className="row-face"><Check size={14} /></span><span className="row-main"><strong>{s.title}</strong><span>{s.detail}</span></span><span className="row-side"><time className="mono">{clock(s.createdAt)}</time></span></div>)}{!data.steps.some(s => s.runId === dialog.id) && <div className="row"><span className="row-main"><span>No steps recorded.</span></span></div>}</div>
         {!["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"].includes(dialog.status) && <div className="dialog-actions"><button className="ghost" disabled={busy} onClick={async () => { if (await act("cancelRun", { runId: dialog.id }, "Run cancelled")) setDialog(null); }}>Cancel run</button></div>}
@@ -1586,10 +1606,10 @@ export default function Workbench() {
     {askDelete && <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) setAskDelete(null); }}>
       <div className="dialog" style={{ width: 'min(380px, 100%)' }}>
         <div className="dialog-top"><span className="mark" style={{ background: 'var(--fault)' }}><Trash2 size={14} /></span><h2>Delete {askDelete.name}?</h2><button type="button" className="icon-btn x" onClick={() => setAskDelete(null)} aria-label="Close"><X size={15} /></button></div>
-        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
+        <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'suite' ? 'The suite and its stored counts are removed. The eval results it already measured stay.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}

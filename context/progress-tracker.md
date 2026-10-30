@@ -370,3 +370,29 @@ narrow breakpoint (the rail is the desktop navigation), and the channel header k
 on phones while the summons/model chips wait for width; its Organisation button keeps the icon and
 drops its label there. The shell proof asserts the desktop arrow is `display: none` and still shows
 no horizontal overflow at 390 with zero rail labels. 267/267 tests, `tsc` clean.
+
+## Session 2026-10-30 (specs 27 and 28) — what a run used, and what it attempted
+
+Spec 27 is real, not aspirational: `agent_versions` is written on create and on any instruction,
+provider or capability change; every run that starts (routine, brief, eval, tool, sandbox) stores the
+version id it used; the run dialog says "instructions pinned" or "instructions were not pinned for
+this run". `external_effects` is written **before** the sandbox provider is touched, keyed per run,
+and an export redacts the typed command while keeping the fact of the attempt. Read-only tools still
+write no effects row. A timeout stores `uncertain`, which no retry may re-run.
+
+Spec 28: `eval_suites` is a named task list with a call ceiling. The pure loop stops before starting
+the next task at the ceiling; the runner stores passed/failed/skipped/errored and the calls it spent;
+a seat with no provider stores `SKIPPED`, zero calls and no percentage. The Evals pane lists suites
+with their counts and ceiling and says "no scored attempts" until one is scored.
+
+The single-task Eval button and the suite now share `executeEvalTask`, so a cancelled eval run records
+no verdict. Tool and eval runs also finish through `finishRun` now — the last two paths that still
+carried their own update.
+
+**Proofs.** `npm test` **280/280** (13 new: version decisions, effects decisions and non-retry,
+suite ceiling/aggregation/rate). `tsc --noEmit` ✓, `npm run build` ✓. Live:
+`.impeccable/versions-effects-proof.mjs` (v1→v2→v3, a finished run stays pinned to v2, calc writes no
+effect, a WSL command writes one succeeded effect, export redacts the command);
+`.impeccable/suite-proof.mjs` (local seat → SKIPPED/0 calls/no rate; ceiling 1 over two tasks → one
+call, second never started); `.impeccable/cdp-spec25-check.mjs` now asserts the Suites section and a
+stored suite render in Chrome. D-41, D-42.

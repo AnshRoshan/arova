@@ -443,3 +443,25 @@ Why not B: the next `else if` copies whichever contract it reads first. Why not 
 Design: `run-contract.ts` is pure and tested with a fake store; `run-contract-drizzle.ts` holds the two guarded writes; `sandbox-run.ts` creates the run, writes the intent step before `provider.create`, and returns `cancelled` when the finish is refused. `audit` is a module. `connections` no longer defaults to CONNECTED.
 
 Cost: one more module pair; the route still owns chat and the tick. Reversibility: inline the store back into the route and delete the module. Evidence: 267/267 tests; API sweep 35/35 including a WSL command; `cancel-proof.mjs` keeps a cancelled row cancelled and names the step that had started.
+
+## D-41: a run names the instructions it used, and an effect is written before it runs — 2026-10-30
+Trigger: spec 27; `agents.instructions` was edited in place, and the sandbox stored its command then audited after executing it.
+
+Options considered: (A) **append-only `agent_versions` written on create/change and at run start, `runs.agent_version_id`, an `external_effects` row before the side effect with a unique key per workspace, and `uncertain` as a terminal state for automatic retries**; (B) store the instructions text on each run (duplicates the model); (C) keep the audit-only path until a model can write; (D) a journal. Chosen: A.
+
+Why not B: the snapshot also covers capabilities and provider, and duplicates drift. Why not C: the human sandbox already leaves the workspace, and the rule is cheap now. Why not D: spec 27 explicitly leaves the journal out.
+
+Design: `versions.ts` is the pure equality/monotonic decision; `versions-drizzle.ts` retries the unique race and is called lazily at run start so seats created by team/org builds are covered. `effects.ts` decides `run = created || status === "failed"`; `effects-drizzle.ts` relies on the unique key; `effectStatusForError` maps timeout/abort to `uncertain`. The export redacts `metadata.command`.
+
+Cost: one version row per change and one effect row per sandbox command. Reversibility: stop calling `ensureAgentVersion` and delete the tables. Evidence: 280/280 tests; `.impeccable/versions-effects-proof.mjs` passes live.
+
+## D-42: a suite is a bounded list of tasks, not a benchmark — 2026-10-30
+Trigger: spec 28; the eval harness measured one task at a time and the pass rate had no run-level cost bound.
+
+Options considered: (A) **`eval_suites` with ordered task ids and a call ceiling; a pure loop that stops before the next task when the ceiling is reached; counts and calls stored on the suite; SKIPPED when the seat has no provider**; (B) a client-side loop over the existing action; (C) an LLM judge; (D) a public leaderboard. Chosen: A.
+
+Why not B: the ceiling has to be enforced by the process that spends the calls. Why not C/D: both add unverifiable claims; the substring scorer stays.
+
+Design: `suite.ts` is pure and tested; `runSuite` loads the tasks in stored order, pre-checks the provider, and reuses `executeEvalTask`. A budget stop mid-suite is stored as `STOPPED_AT_CEILING` because it is a ceiling by another name; the remaining tasks are not counted. The UI shows the percentage only over scored attempts.
+
+Cost: one suite row and one eval run per task. Reversibility: drop `eval_suites` and the two actions. Evidence: 280/280 tests; `.impeccable/suite-proof.mjs` and the Chrome check pass.
