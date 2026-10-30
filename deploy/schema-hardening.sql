@@ -34,3 +34,6 @@ ALTER TABLE channel_deliveries VALIDATE CONSTRAINT channel_deliveries_run_id_run
 
 -- "local" was never a provider this build creates; an unset row must not imply a runtime exists.
 ALTER TABLE sandboxes ALTER COLUMN provider SET DEFAULT 'unconfigured';
+
+-- Nothing inserts a connection yet, so a row must not default to claiming a live account.
+ALTER TABLE connections ALTER COLUMN status SET DEFAULT 'DISCONNECTED';

@@ -339,3 +339,26 @@ thread, no Temperature control, "Auto and Default behave the same", browser reas
 console, WSL reset enabled, eval scope sentence present, `CONSOLE: []`; shots `shots/spec25/`.
 `deploy/schema-hardening.sql` applied: 10 indexes, 2 validated FKs, provider default `unconfigured`;
 15 empty workspaces removed (24 → 15 with data).
+
+## Session 2026-10-30 (spec 26, first slice) — one contract for finishing a run
+
+C-20 is closed: `connections.status` defaults to `DISCONNECTED`, `sandboxes.provider` to
+`unconfigured`, `minutesUsed` leaves the export, and `deploy/schema-hardening.sql` adds the ten
+indexes and two validated foreign keys. A live database was brought forward without `push --force`.
+
+The run contract now exists as a module, not a copy per path. `src/lib/run-contract.ts` is the pure
+decision (`finishRun` returns `already-finished` when the store refuses); `run-contract-drizzle.ts`
+is the only SQL; `src/lib/sandbox-run.ts` owns the person-started console end to end and writes
+"Running the command" **before** the provider is touched, so a cancel can name what may have run.
+The scheduler's routine path, Run now's claim, briefs, the sandbox and the non-stream chat reply all
+finish through it. `audit` moved to `src/lib/audit.ts`.
+
+**Proofs.** `npm test` **267/267** (3 new contract tests), `tsc --noEmit` ✓. API sweep **35/35** on
+:3100 including a real WSL command through the new module. `run-contract-proof.mjs` passes again.
+`cancel-proof.mjs`: a `sleep 2` command was cancelled mid-flight; the response reports
+`cancelled: true`, the stored row stays `CANCELLED`, and the summary reads "Cancelled by user after:
+Running the command." — the command's later success did not overwrite it.
+
+**Not done in this slice:** `tickSchedules`/`executeRoutine`/`streamReply`/`runBrief` still live in
+`board/route.ts`. The lock and finish they share is now a module, but the extraction itself is the
+next unit, not a claim. D-40.
