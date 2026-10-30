@@ -94,3 +94,45 @@ CREATE TABLE IF NOT EXISTS eval_suites (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS eval_suites_workspace_name_unique ON eval_suites (workspace_id, name);
 CREATE INDEX IF NOT EXISTS eval_suites_workspace_index ON eval_suites (workspace_id, created_at);
+
+-- Research: a question, sources fetched through the same policy as web_fetch, and findings that cite them.
+CREATE TABLE IF NOT EXISTS research_projects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  name text NOT NULL,
+  question text NOT NULL DEFAULT '',
+  status text NOT NULL DEFAULT 'ACTIVE',
+  agent_id uuid REFERENCES agents(id) ON DELETE SET NULL,
+  team_id uuid REFERENCES teams(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS research_projects_workspace_index ON research_projects (workspace_id, created_at);
+
+CREATE TABLE IF NOT EXISTS research_sources (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
+  url text NOT NULL DEFAULT '',
+  host text NOT NULL DEFAULT '',
+  title text NOT NULL DEFAULT '',
+  excerpt text NOT NULL DEFAULT '',
+  note text NOT NULL DEFAULT '',
+  tag text NOT NULL DEFAULT '',
+  pinned boolean NOT NULL DEFAULT false,
+  added_by text NOT NULL DEFAULT 'person',
+  fetched_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS research_sources_project_index ON research_sources (project_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS research_sources_project_url_unique ON research_sources (project_id, url) WHERE url <> '';
+
+CREATE TABLE IF NOT EXISTS research_findings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES research_projects(id) ON DELETE CASCADE,
+  text text NOT NULL,
+  source_ids jsonb NOT NULL DEFAULT '[]',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS research_findings_project_index ON research_findings (project_id, created_at);

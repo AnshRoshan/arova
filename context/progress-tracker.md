@@ -410,3 +410,19 @@ open structural item, and no correctness fix is waiting on it.
 **Proofs after the move:** `npm test` **280/280**, `tsc --noEmit` ✓, `npm run build` ✓. On :3100 the
 worker booted from the module, `run-contract-proof.mjs` still marks a three-day-overdue routine as a
 single catch-up and refuses Run now while it is RUNNING, and the API sweep is **35/35**.
+
+## Session 2026-10-30 (feature 29) — a research library that works without a model
+
+The product could fetch a page and cite it in one answer, then forgot the page. Research projects now
+hold a question, sources and findings: a source is fetched through the exact `web_fetch` policy (so
+https-only, public addresses, 512 KB cap) or pasted with an optional provenance URL; a URL is stored
+once per project; a finding may cite only sources in its own project; pinned sources lead the numbered
+brief. The brief is assembled locally, so copying it spends no model call. Projects can be assigned to
+a seat/organisation, archived and deleted; sources can be pinned, tagged, noted and removed. Research
+rows are in the audit export and their events in the activity record.
+
+**Proofs.** `npm test` **284/284** (4 new research helpers), `tsc --noEmit` ✓, `npm run build` ✓.
+`.impeccable/research-proof.mjs` on :3100 fetched example.com, stored its excerpt and final URL,
+refused the duplicate, saved a pasted source, pinned it, saved a two-source finding, refused a
+cross-project citation, archived the project and proved the cascade delete. Chrome opened the
+Research rail and saw the project, the pasted source and the findings section. D-44.
