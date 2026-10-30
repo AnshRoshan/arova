@@ -52,7 +52,7 @@ export async function GET() {
     delegations: delegationRows,
     memories: memoryRows.map(m => ({ id: m.id, teamId: m.teamId, agentId: m.agentId, kind: m.kind, text: m.text, pinned: m.pinned, supersedes: m.supersedes, sourceIds: m.sourceIds, hits: m.hits, lastUsedAt: m.lastUsedAt, createdAt: m.createdAt })),
     channels: channelRows.map(c => ({ name: c.name, kind: c.kind, targetHost: redactTarget(c.target), teamId: c.teamId, enabled: c.enabled, delivered: c.delivered, failed: c.failed, lastStatus: c.lastStatus, lastError: c.lastError, lastDeliveryAt: c.lastDeliveryAt, lastInboundAt: c.lastInboundAt, createdAt: c.createdAt })),
-    sandboxes: sandboxRows.map(s => ({ agentId: s.agentId, provider: s.provider, status: s.status, minutesUsed: s.minutesUsed, createdAt: s.createdAt })),
+    sandboxes: sandboxRows.map(s => ({ agentId: s.agentId, provider: s.provider, status: s.status, createdAt: s.createdAt })),
   };
 
   return new NextResponse(JSON.stringify(payload, null, 2), {

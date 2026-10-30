@@ -24,7 +24,8 @@ type Routine = { id: string; agentId: string; name: string; description: string;
 type Run = { id: string; agentId: string; routineId: string | null; title: string; status: string; summary: string; initiator: string; startedAt: string; completedAt: string | null };
 type Step = { id: string; runId: string; title: string; detail: string; createdAt: string };
 type Approval = { id: string; agentId: string; title: string; detail: string; status: string; createdAt: string };
-type Profile = { name: string; label: string; model: string; configured: boolean; builtIn: boolean; maxContextTokens: number };
+type Profile = { name: string; label: string; model: string; configured: boolean; builtIn: boolean; modelPinned?: boolean; maxContextTokens: number };
+type ModelSelection = { name: string; model: string; auto: boolean; served: boolean; checkedAt: number; suggestion?: string };
 type Usage = { provider: string; calls: number; inputTokens: number; outputTokens: number; estimated: boolean };
 type Capabilities = {
   tools: string[]; deniedTools: string[]; permissionMode: "default" | "plan" | "auto";
@@ -53,7 +54,7 @@ type Board = {
   agents: Agent[]; messages: Message[]; routines: Routine[]; runs: Run[]; steps: Step[]; approvals: Approval[];
   olderMessages: boolean;
   connections: { agentId: string; slug: string }[]; events: BoardEvent[];
-  sandboxProvider: string; modelConfigured: boolean; profiles: Profile[];
+  sandboxProvider: string; modelConfigured: boolean; profiles: Profile[]; modelSelections: ModelSelection[]; toolNotes: Record<string, string>;
   sandbox: { provider: string; capabilities: { graphical: boolean; pty: boolean; snapshots: boolean; takeover: boolean; persistentHome: boolean; multiScreen: boolean } };
   sandboxes: { id: string; agentId: string; provider: string; status: string; minutesUsed: number; createdAt: string }[];
   auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
@@ -258,6 +259,8 @@ export default function Workbench() {
   const bodyRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** One key per routine while its request is in flight: a double-click is a retry, not a second run. */
+  const runKeys = useRef(new Map<string, string>());
 
   const load = useCallback(async () => {
     if (abortRef.current) return; // a poll must never clobber a reply or brief that is still streaming
@@ -306,12 +309,17 @@ export default function Workbench() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  /** A daily driver opens where you left off, not on an overview. */
+  /** A daily driver opens where you left off, not on an overview. A first visit still gets Overview. */
   useEffect(() => {
-    if (!data?.agents.length || agentId) return;
-    const saved = localStorage.getItem("arova.lastAgent");
-    const touched = [...data.messages].reverse().find(m => data.agents.some(a => a.id === m.agentId))?.agentId;
-    setAgentId(data.agents.find(a => a.id === saved)?.id ?? data.agents.find(a => a.id === touched)?.id ?? data.agents[0].id);
+    if (!data?.agents.length) return;
+    if (!agentId) {
+      const saved = localStorage.getItem("arova.lastAgent");
+      const touched = [...data.messages].reverse().find(m => data.agents.some(a => a.id === m.agentId))?.agentId;
+      const next = data.agents.find(a => a.id === saved)?.id ?? data.agents.find(a => a.id === touched)?.id;
+      setAgentId(next ?? data.agents[0].id);
+      // Only a remembered conversation moves the opening screen; no history means Overview is the honest start.
+      if (next) setPane(null);
+    }
   }, [data, agentId]);
   useEffect(() => { if (agentId) localStorage.setItem("arova.lastAgent", agentId); }, [agentId]);
   /** The eval form needs a seat before it can save; adopt the first one once, not on every poll. */
@@ -320,8 +328,10 @@ export default function Workbench() {
 
   async function act(action: string, payload: Record<string, unknown> = {}, say?: string) {
     setBusy(true);
+    const routineKey = action === "runRoutine" ? String(payload.routineId ?? "") : "";
+    if (routineKey && !runKeys.current.has(routineKey)) runKeys.current.set(routineKey, crypto.randomUUID());
     try {
-      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json", ...(action === "runRoutine" ? { "Idempotency-Key": crypto.randomUUID() } : {}) }, body: JSON.stringify({ action, ...payload }) });
+      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json", ...(routineKey ? { "Idempotency-Key": runKeys.current.get(routineKey)! } : {}) }, body: JSON.stringify({ action, ...payload }) });
       // Read the status before parsing: a 500 rendered as HTML must surface the server's sentence, not a JSON error.
       const j = await r.json().catch(() => ({})) as { error?: string; board: Board; [key: string]: any };
       if (!r.ok) throw new Error(j.error || `The action failed (${r.status})`);
@@ -329,7 +339,7 @@ export default function Workbench() {
       if (say) setToast(say);
       return j;
     } catch (e) { setToast(e instanceof Error ? e.message : "Something went wrong"); return null; }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (routineKey) runKeys.current.delete(routineKey); }
   }
 
   /** Assistant rows in the subject the reader was watching: one seat's thread, or one channel. */
@@ -422,15 +432,15 @@ export default function Workbench() {
     setEarlierBusy(true);
     const r = await act("loadEarlier", { before: oldest.createdAt, beforeId: oldest.id });
     const earlier = Array.isArray(r?.earlier) ? (r.earlier as Message[]) : [];
-    if (earlier.length) setData(prev => prev ? { ...prev, messages: [...earlier.filter(e => !prev.messages.some(m => m.id === e.id)), ...prev.messages] } : prev);
+    setData(prev => prev ? { ...prev, messages: [...earlier.filter(e => !prev.messages.some(m => m.id === e.id)), ...prev.messages], olderMessages: earlier.length > 0 } : prev);
     setEarlierBusy(false);
   };
 
   /**
    * Brief the organisation. This is the record Feature 11 exists to make: each teammate the lead
    * pulls in lands as its own channel post while the brief runs, and the lead's report names the
-   * posts it built on. Stop is offered only once the report is streaming — aborting mid-hop would
-   * cancel a turn that has already spent its summons.
+   * posts it built on. Stop is offered for the whole brief, including summons: the server aborts
+   * whatever call is in flight and keeps every post that already landed.
    */
   async function brief(content: string): Promise<boolean> {
     if (!channel || !briefLead) return false;
@@ -678,7 +688,7 @@ export default function Workbench() {
     const fault = lastReply.kind === "provider_error";
     const model = lastReply.metadata?.model ? String(lastReply.metadata.model) : null;
     const provider = data.profiles.find(p => p.name === String(lastReply.metadata?.provider))?.label ?? (model ? "unknown provider" : "this app, no model called");
-    const state = fault ? "not answered" : lastReply.metadata?.stopped ? "stopped by you" : lastReply.metadata?.truncated ? "budget reached" : !r.answer ? "reasoning only" : lastReply.metadata?.incomplete ? "partial" : "complete";
+    const state = fault ? "not answered" : lastReply.metadata?.stopped ? "stopped by you" : lastReply.metadata?.stepLimit ? "tool-step cap" : lastReply.metadata?.truncated ? "budget reached" : !r.answer ? "reasoning only" : lastReply.metadata?.incomplete ? "partial" : "complete";
     return { r, fault, model, provider, state, saved: clock(lastReply.createdAt) };
   })();
 
@@ -1040,7 +1050,7 @@ export default function Workbench() {
               const model = m.metadata?.model ? String(m.metadata.model) : null;
               const runId = m.metadata?.runId ? String(m.metadata.runId) : "";
               const run = runId ? data.runs.find(r => r.id === runId) : undefined;
-              const state = m.kind === "budget_stop" ? "stopped at the budget" : m.kind === "channel_gap" ? "no answer" : m.metadata?.stopped ? "stopped by you" : m.metadata?.truncated ? "budget reached" : m.metadata?.incomplete ? "partial" : m.kind === "provider_error" ? "not answered" : "";
+              const state = m.kind === "budget_stop" ? "stopped at the budget" : m.kind === "channel_gap" ? "no answer" : m.metadata?.stopped ? "stopped by you" : m.metadata?.stepLimit ? "tool-step cap" : m.metadata?.truncated ? "budget reached" : m.metadata?.incomplete ? "partial" : m.kind === "provider_error" ? "not answered" : "";
               // The same split the seat thread makes: a thing that failed is a fault, a thing the
               // server refused to spend more on is only waiting.
               const bad = m.kind === "provider_error" || m.kind === "channel_gap";
@@ -1084,8 +1094,7 @@ export default function Workbench() {
                     <span className="tag">{consulting ? `asking ${consulting.to}` : live.answer || live.reasoning ? "writing the report" : "thinking"}</span>
                     <span className="entry-tools">
                       {run && <button className="ghost" type="button" onClick={() => setDialog(run)}><Gauge size={13} />Run steps</button>}
-                      {/* Mid-hop there is nothing to stop without discarding the summons already spent. */}
-                      {!consulting && stream && <button className="stop-btn" type="button" onClick={stop} title="Stop the report; every post that has landed is kept"><Square size={11} fill="currentColor" />Stop</button>}
+                      {busy && <button className="stop-btn" type="button" onClick={stop} title="Stop the brief; every post that has already landed is kept"><Square size={11} fill="currentColor" />Stop</button>}
                     </span>
                   </div>
                   {consulting && <div className="consult"><div className="consult-head"><ArrowDownLeft size={13} /><span><b>{consulting.from}</b> is asking <b>{consulting.to}</b></span></div><p className="consult-q">{consulting.question}</p></div>}
@@ -1113,7 +1122,7 @@ export default function Workbench() {
               <div style={mine ? undefined : hue} className={`entry ${mine ? "entry-user" : "entry-assistant"} ${fault ? "entry-fault" : ""}`}>
                 <span className="entry-face">{mine ? <User size={15} /> : <FaceIcon agent={agent} />}</span>
                 <div className="entry-main">
-                  <div className="entry-head"><strong>{mine ? "You" : String(m.metadata?.authoredByName ?? agent.name)}</strong>{m.metadata?.handoffFrom ? <span className="who">via {String(m.metadata.handoffFrom)}</span> : null}<time>{clock(m.createdAt)}</time>{m.metadata?.scheduled ? <span className="tag" style={{ color: "var(--ink-2)" }}>scheduled</span> : null}{fault ? <span className="tag" style={{ color: "var(--fault)" }}>not answered</span> : m.metadata?.truncated ? <span className="tag" style={{ color: "var(--waiting)" }}>budget reached</span> : m.metadata?.incomplete ? <span className="tag" style={{ color: m.metadata.stopped ? "var(--ink-2)" : "var(--waiting)" }}>{m.metadata.stopped ? "stopped" : "partial"}</span> : null}<span className="entry-tools">{!mine && !fault && <CopyBtn text={m.content} label="Copy" />}</span></div>
+                  <div className="entry-head"><strong>{mine ? "You" : String(m.metadata?.authoredByName ?? agent.name)}</strong>{m.metadata?.handoffFrom ? <span className="who">via {String(m.metadata.handoffFrom)}</span> : null}<time>{clock(m.createdAt)}</time>{m.metadata?.scheduled ? <span className="tag" style={{ color: "var(--ink-2)" }}>scheduled</span> : null}{fault ? <span className="tag" style={{ color: "var(--fault)" }}>not answered</span> : m.metadata?.stepLimit ? <span className="tag" style={{ color: "var(--waiting)" }}>tool-step cap</span> : m.metadata?.truncated ? <span className="tag" style={{ color: "var(--waiting)" }}>budget reached</span> : m.metadata?.incomplete ? <span className="tag" style={{ color: m.metadata.stopped ? "var(--ink-2)" : "var(--waiting)" }}>{m.metadata.stopped ? "stopped" : "partial"}</span> : null}<span className="entry-tools">{!mine && !fault && <CopyBtn text={m.content} label="Copy" />}</span></div>
                   {(() => { const r = splitReasoning(m.content); return <> <ReasoningFold text={m.content} model={m.metadata?.model ? String(m.metadata.model) : undefined} truncated={Boolean(m.metadata?.truncated)} />{r.answer || fault ? <div className="entry-text">{fault ? r.answer : <RichText text={r.answer} />}</div> : <div className="entry-text muted">{m.metadata?.truncated ? "The output budget this server gives the agent ran out while it was still reasoning. Raise it in Agent › Capabilities (effort or max tokens), or ask something shorter." : "The model wrote reasoning and stopped before answering. Nothing was invented to fill the gap — the block above is all it produced."}</div>}</>; })()}
                   {fault && <div className="fault-detail mono">provider: {String(m.metadata.provider)}{m.metadata.detail ? ` · ${String(m.metadata.detail).slice(0, 110)}` : ""}{m.metadata.quota ? " · daily budget reached" : ""}</div>}
                   {Array.isArray(m.metadata?.consulted) && (m.metadata.consulted as { name: string; question: string }[]).map(c => {
@@ -1175,7 +1184,7 @@ export default function Workbench() {
                       <span className="prov-provider">{provenance.provider}</span><span className="prov-model">{provenance.model ?? "no model"}</span>
                       <span className="push prov-mono">{provenance.r.answer.length} chars{provenance.r.reasoning ? ` · ${provenance.r.reasoning.length} reasoning` : ""}{provenance.model ? ` · ${est(provenance.r.answer)} tokens (est.)` : ""}{memoryNote(lastReply?.metadata)} · saved {provenance.saved}</span>
                     </summary>
-                    <p className="prov-note">{provenance.fault ? "No model answer exists for this turn. Nothing was invented to fill it." : provenance.state === "stopped by you" ? "You stopped this one. What is here is everything that had arrived; it was not replayed." : provenance.state === "partial" ? "The connection died mid-reply. What is here is what arrived; it was not replayed, because replaying would duplicate text you already watched." : provenance.state === "budget reached" ? "The provider stopped at the output budget, which this server sets per agent. The reasoning that filled it is kept verbatim; nothing was invented to close the sentence." : provenance.state === "reasoning only" ? "The model streamed reasoning and then stopped. The stored row is exactly that, and the thread says so rather than showing a blank bubble." : "Stored in PostgreSQL. Reloading shows the same text."}</p>
+                    <p className="prov-note">{provenance.fault ? "No model answer exists for this turn. Nothing was invented to fill it." : provenance.state === "stopped by you" ? "You stopped this one. What is here is everything that had arrived; it was not replayed." : provenance.state === "partial" ? "The connection died mid-reply. What is here is what arrived; it was not replayed, because replaying would duplicate text you already watched." : provenance.state === "tool-step cap" ? "The seat reached the tool-step cap for one turn. The answer above is what it had produced; nothing was invented to finish it. Ask again to continue, or raise the seat's turn ceiling." : provenance.state === "budget reached" ? "The provider stopped at the output budget, which this server sets per agent. The reasoning that filled it is kept verbatim; nothing was invented to close the sentence." : provenance.state === "reasoning only" ? "The model streamed reasoning and then stopped. The stored row is exactly that, and the thread says so rather than showing a blank bubble." : "Stored in PostgreSQL. Reloading shows the same text."}</p>
                     {memoriesUsed(lastReply?.metadata).length > 0 && <div className="mem-used">{memoriesUsed(lastReply?.metadata).map(n => <p key={n.id}><b>{n.kind}</b> · {n.text}</p>)}</div>}
                   </details>}
                 </div>
@@ -1207,6 +1216,7 @@ export default function Workbench() {
             <div className="kv"><span>Pass rate</span><span className="push mono">{data.evals.summary.passRate === null ? "no scored attempts" : `${Math.round(data.evals.summary.passRate * 100)}%`}</span></div>
             <div className="kv"><span>Attempts</span><span className="push mono">{data.evals.summary.attempts} · {data.evals.summary.passed} passed · {data.evals.summary.failed} failed · {data.evals.summary.skipped} skipped</span></div>
             <div className="kv"><span>Median duration</span><span className="push mono">{data.evals.summary.medianMs === null ? "no measurement" : `${data.evals.summary.medianMs} ms`}</span></div>
+            <p className="hint">These totals are SQL counts over every scored attempt in this workspace, not the newest page of results below.</p>
             <p className="hint">One prompt, one answer, one expected fragment. The score is a case-insensitive substring check, not a model judge — cheap, replayable, and exactly as narrow as it looks.</p>
             <h2 className="pane-h2">New task<span className="mono">agent + prompt + expected fragment</span></h2>
             <div className="stack"><div className="block">
@@ -1319,7 +1329,7 @@ export default function Workbench() {
                 const row = data.sandboxes.find(s => s.agentId === seatId);
                 const history = data.runs.filter(r => r.agentId === seatId && r.title.startsWith("Sandbox ·")).slice(0, 6);
                 return <>
-                  <div className="kv"><span>Workspace state</span><span className="push">{row ? <span className={`chip ${row.status === "READY" ? "ran" : row.status === "ERROR" ? "fault" : "idle"}`}><i />{row.status.toLowerCase()}</span> : <span className="chip idle"><i />not created</span>}<button className="icon-btn" title="Reset the per-agent workspace" disabled={busy || data.sandbox.provider !== "local-os" || !seatId} onClick={() => setAskDelete({ kind: "sandbox", id: seatId, name: `Sandbox · ${byId(seatId)?.name ?? "agent"}` })}><RotateCcw size={14} /></button></span></div>
+                  <div className="kv"><span>Workspace state</span><span className="push">{row ? <span className={`chip ${row.status === "READY" ? "ran" : row.status === "ERROR" ? "fault" : "idle"}`}><i />{row.status.toLowerCase()}</span> : <span className="chip idle"><i />not created</span>}<button className="icon-btn" title="Reset the per-agent workspace" disabled={busy || !["local-os", "wsl"].includes(data.sandbox.provider) || !seatId} onClick={() => setAskDelete({ kind: "sandbox", id: seatId, name: `Sandbox · ${byId(seatId)?.name ?? "agent"}` })}><RotateCcw size={14} /></button></span></div>
                   {history.length > 0 && <div className="rows">{history.map(r => <button className="row" key={r.id} onClick={() => setDialog(r)}><span className="row-face"><Cpu size={14} /></span><span className="row-main"><strong>{r.title}</strong><span>{r.summary}</span></span><span className="row-side"><State status={r.status} /><time>{clock(r.startedAt)}</time></span></button>)}</div>}
                 </>;
               })()}
@@ -1455,8 +1465,8 @@ export default function Workbench() {
               aria-label={`Brief ${briefLead.name}`}
               onChange={e => { setDraft(e.target.value); e.target.style.height = "auto"; e.target.style.height = `${Math.min(e.target.scrollHeight, 168)}px`; }}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} />
-            {busy && stream && !consulting
-              ? <button className="stop-btn" type="button" onClick={stop} title="Stop the report; every post that has landed is kept"><Square size={11} fill="currentColor" />Stop</button>
+            {busy
+              ? <button className="stop-btn" type="button" onClick={stop} title="Stop the brief; every post that has already landed is kept"><Square size={11} fill="currentColor" />Stop</button>
               : <button className="send" type="submit" disabled={!draft.trim() || busy || briefLead.status !== "ACTIVE"} aria-label="Brief the organisation"><ArrowRight size={17} /></button>}
           </div>
           <div className="composer-bar">
@@ -1571,7 +1581,7 @@ export default function Workbench() {
       </div>}
     </div>}
 
-    {settingsFor && byId(settingsFor) && <AgentDialog key={settingsFor} agent={byId(settingsFor)!} team={(() => { const id = byId(settingsFor)?.teamId; return id ? data.teams.find(t => t.id === id) ?? null : null; })()} tierActive={!!data.workspace.creatorAgentId} profiles={data.profiles} teammates={(() => { const target = byId(settingsFor); if (!target?.teamId) return []; return data.agents.filter(a => a.teamId === target.teamId && a.id !== target.id).map(a => ({ id: a.id, name: a.name, role: a.role })); })()} busy={busy} act={act} onClose={() => setSettingsFor(null)} onAskDelete={(id, name) => setAskDelete({ kind: "agent", id, name })} />}
+    {settingsFor && byId(settingsFor) && <AgentDialog key={settingsFor} agent={byId(settingsFor)!} team={(() => { const id = byId(settingsFor)?.teamId; return id ? data.teams.find(t => t.id === id) ?? null : null; })()} tierActive={!!data.workspace.creatorAgentId} profiles={data.profiles} teammates={(() => { const target = byId(settingsFor); if (!target?.teamId) return []; return data.agents.filter(a => a.teamId === target.teamId && a.id !== target.id).map(a => ({ id: a.id, name: a.name, role: a.role })); })()} busy={busy} act={act} toolNotes={data.toolNotes} onClose={() => setSettingsFor(null)} onAskDelete={(id, name) => setAskDelete({ kind: "agent", id, name })} />}
 
     {askDelete && <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) setAskDelete(null); }}>
       <div className="dialog" style={{ width: 'min(380px, 100%)' }}>
@@ -1610,7 +1620,7 @@ function SeatBranch({ node, depth, members, current, toneOfSeat, counts, lastAt,
   </>;
 }
 
-function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; setCaps: (c: Capabilities) => void; teammates: { id: string; name: string; role: string }[] }) {
+function CapabilitiesEditor({ caps, setCaps, teammates, toolNotes }: { caps: Capabilities; setCaps: (c: Capabilities) => void; teammates: { id: string; name: string; role: string }[]; toolNotes: Record<string, string> }) {
   const effective = new Set(resolveTools(caps as unknown as ToolCaps, { hasTeam: teammates.length > 0 }));
   const toggleTool = (id: string) => setCaps({ ...caps, tools: caps.tools.includes(id) ? caps.tools.filter(t => t !== id) : [...caps.tools, id] });
   const toggleSkill = (id: string) => setCaps({ ...caps, skills: caps.skills.includes(id) ? caps.skills.filter(x => x !== id) : [...caps.skills, id] });
@@ -1627,9 +1637,9 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
       {TOOL_REGISTRY.map(t => {
         const granted = caps.tools.includes(t.id);
         const dormant = t.available && granted && !effective.has(t.id);
-        return <label key={t.id} className={`tool-row ${t.available ? "" : "off"} ${dormant ? "dormant" : ""}`} title={t.available ? t.description : t.whyUnavailable}>
+        return <label key={t.id} className={`tool-row ${t.available ? "" : "off"} ${dormant ? "dormant" : ""}`} title={t.available ? t.description : (toolNotes[t.id] ?? t.whyUnavailable)}>
           <input type="checkbox" disabled={!t.available} checked={granted} onChange={() => toggleTool(t.id)} />
-          <span className="tool-row-main"><b>{t.label}</b><em>{t.available ? (dormant ? `${t.description} — inactive until this agent joins a team.` : t.description) : t.whyUnavailable}</em></span>
+          <span className="tool-row-main"><b>{t.label}</b><em>{t.available ? (dormant ? `${t.description} — inactive until this agent joins a team.` : t.description) : (toolNotes[t.id] ?? t.whyUnavailable)}</em></span>
           <span className={`chip ${dormant ? "waiting" : t.available ? "ran" : "idle"}`}><i />{dormant ? "no team" : t.available ? t.kind : "unavailable"}</span>
         </label>;
       })}
@@ -1639,7 +1649,7 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
       <div className="seg" role="group" aria-label="Permission mode">
         {(["default", "plan", "auto"] as const).map(m => <button type="button" key={m} className={caps.permissionMode === m ? "on" : ""} onClick={() => setCaps({ ...caps, permissionMode: m })}>{m}</button>)}
       </div>
-      <p className="caps-help">{caps.permissionMode === "plan" ? "Plan: advises and delegates, cannot save routines or raise approvals." : caps.permissionMode === "auto" ? "Auto: acts without asking for approval on writes." : "Default: acts, and raises approvals for anything that leaves the workspace."}</p>
+      <p className="caps-help">{caps.permissionMode === "plan" ? "Plan: advises and delegates, but cannot save routines or raise approvals." : "Acts freely and can raise an approval when it proposes a write. Auto and Default behave the same in this build; only Plan changes what the seat may do."}</p>
     </div>
     <div className="caps-group">
       <label className="caps-label">Tool loop</label>
@@ -1666,8 +1676,8 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
     </div>
     <div className="caps-group caps-row">
       <div><label className="caps-label">Effort</label><div className="seg">{(["low", "medium", "high"] as const).map(e => <button type="button" key={e} className={caps.effort === e ? "on" : ""} onClick={() => setCaps({ ...caps, effort: e })}>{e}</button>)}</div><span className="caps-note">{tokenBudgetFor(caps as unknown as ToolCaps)} tokens per reply — a reasoning model can spend them all before it answers.</span></div>
-      <div><label className="caps-label" htmlFor="mt">Max turns</label><input id="mt" type="number" min={1} max={25} value={caps.maxTurns ?? 8} onChange={e => setCaps({ ...caps, maxTurns: Math.max(1, Math.min(25, Number(e.target.value) || 1)) })} /></div>
-      <div><label className="caps-label" htmlFor="tp">Temperature {caps.modelParams.temperature ?? 0.7}</label><input id="tp" type="range" min={0} max={1.5} step={0.1} value={caps.modelParams.temperature ?? 0.7} onChange={e => setCaps({ ...caps, modelParams: { ...caps.modelParams, temperature: Number(e.target.value) } })} /></div>
+      <div><label className="caps-label" htmlFor="mturns">Max turns</label><input id="mturns" type="number" min={1} max={25} value={caps.maxTurns ?? 8} onChange={e => setCaps({ ...caps, maxTurns: Math.max(1, Math.min(25, Number(e.target.value) || 1)) })} /></div>
+      <div><label className="caps-label" htmlFor="mtokens">Max tokens</label><input id="mtokens" type="number" min={128} max={8192} step={64} value={caps.modelParams.maxTokens ?? ""} placeholder="server default" onChange={e => setCaps({ ...caps, modelParams: { ...caps.modelParams, maxTokens: e.target.value ? Number(e.target.value) : undefined } })} /></div>
     </div>
     <div className="caps-group">
       <label className="caps-label">Skills</label>
@@ -1692,7 +1702,7 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
   </div>;
 }
 
-function AgentDialog({ agent, team, tierActive, profiles, teammates, busy, act, onClose, onAskDelete }: { agent: Agent; team: Team | null; tierActive: boolean; profiles: Profile[]; teammates: { id: string; name: string; role: string }[]; busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>; onClose: () => void; onAskDelete: (id: string, name: string) => void }) {
+function AgentDialog({ agent, team, tierActive, profiles, teammates, toolNotes, busy, act, onClose, onAskDelete }: { agent: Agent; team: Team | null; tierActive: boolean; profiles: Profile[]; teammates: { id: string; name: string; role: string }[]; toolNotes: Record<string, string>; busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>; onClose: () => void; onAskDelete: (id: string, name: string) => void }) {
   const [name, setName] = useState(agent.name);
   const [role, setRole] = useState(agent.role);
   const [instructions, setInstructions] = useState(agent.instructions);
@@ -1713,7 +1723,7 @@ function AgentDialog({ agent, team, tierActive, profiles, teammates, busy, act, 
           <button type="button" className={section === "identity" ? "on" : ""} onClick={() => setSection("identity")}>Identity</button>
           <button type="button" className={section === "capabilities" ? "on" : ""} onClick={() => setSection("capabilities")}><ListChecks size={13} />Capabilities</button>
         </div>
-        {section === "capabilities" ? <CapabilitiesEditor caps={caps} setCaps={setCaps} teammates={teammates} /> : null}
+        {section === "capabilities" ? <CapabilitiesEditor caps={caps} setCaps={setCaps} teammates={teammates} toolNotes={toolNotes} /> : null}
         <div className="dialog-actions"><button className="primary" type="submit" disabled={busy}>Save</button></div>
       </form>
       {team && <div className="dialog-hire">

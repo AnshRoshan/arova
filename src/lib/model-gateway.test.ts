@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildEndpoint, completionPayload, estimateTokens, finishReason, readSseText, requestCompletion, usageFromJson, usageFromSseLine, isRetryableStatus, loadProfiles, parseStreamDelta, resolveForAgent, trimToTokenBudget } from "./model-gateway.ts";
+import { buildEndpoint, catalogEndpoint, chooseServedModel, ensureServedModel, resetModelCatalog, completionPayload, estimateTokens, finishReason, readSseText, requestCompletion, usageFromJson, usageFromSseLine, isRetryableStatus, loadProfiles, parseStreamDelta, resolveForAgent, trimToTokenBudget } from "./model-gateway.ts";
 
 
 const dahlProfile = loadProfiles({ PROVIDERS: "dahl", DAHL_BASE_URL: "https://inference.dahl.global/v1", DAHL_MODEL: "MiniMaxAI/MiniMax-M2.7", DAHL_API_KEY: "secret-key", DAHL_MAX_CONTEXT: "32000" }).find(p => p.name === "dahl")!;
@@ -204,4 +204,102 @@ test("a stopped SSE read closes the connection and keeps the text already shown"
   const result = await readSseText(new Response(body, { status: 200 }), () => { stop = true; }, () => stop);
   assert.equal(result.text, "hi", "what already arrived is kept");
   assert.equal(cancelled, true, "the provider connection is closed, not left reading into nothing");
+});
+
+test("catalogue endpoint: sits beside chat/completions for both base URL forms", () => {
+  assert.equal(catalogEndpoint("https://gw.example/v1"), "https://gw.example/v1/models");
+  assert.equal(catalogEndpoint("https://gw.example/v1/"), "https://gw.example/v1/models");
+  assert.equal(catalogEndpoint("https://gw.example/v1/chat/completions"), "https://gw.example/v1/models");
+});
+
+test("served-model choice: the pinned model wins when the gateway has it", () => {
+  assert.deepEqual(chooseServedModel(["gpt-4o-mini", "claude-opus-5"], "gpt-4o-mini"), { model: "gpt-4o-mini", reason: "served" });
+});
+
+test("served-model choice: prefers a cheap fast chat model and never an embedding or audio model", () => {
+  const ids = ["text-embedding-3-large", "whisper-1", "claude-opus-5", "gpt-6-luna-fast", "gemini-3.7-flash"];
+  const picked = chooseServedModel(ids, "gpt-4o-mini");
+  assert.equal(picked.reason, "fallback");
+  assert.ok(["gemini-3.7-flash", "gpt-6-luna-fast"].includes(picked.model), picked.model);
+  assert.equal(chooseServedModel(["embeddings-xl", "tts-1"], "x").reason, "none");
+});
+
+test("served-model choice: a heavy model loses to a light one at equal relevance", () => {
+  const picked = chooseServedModel(["claude-opus-5", "gpt-5.6-luna"], "gpt-4o-mini");
+  assert.equal(picked.model, "gpt-5.6-luna");
+});
+
+test("ensureServedModel: an unpinned model the gateway does not serve is replaced and marked automatic", async () => {
+  resetModelCatalog();
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  try {
+    const profile = loadProfiles({ OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: "https://gw.example/v1" }).find(p => p.name === "openai")!;
+    assert.equal(profile.modelPinned, false, "no OPENAI_MODEL means the model was only a default");
+    const resolved = await ensureServedModel(profile, {
+      fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "gemini-3.7-flash" }, { id: "claude-opus-5" }] }), { status: 200 })) as never,
+    });
+    assert.equal(resolved.profile.model, "gemini-3.7-flash");
+    assert.equal(resolved.auto, true);
+    assert.equal(resolved.served, true);
+    assert.equal(resolved.count, 2);
+  } finally {
+    resetModelCatalog();
+    if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+  }
+});
+
+test("ensureServedModel: a pinned model that is missing is reported, never silently replaced", async () => {
+  resetModelCatalog();
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  try {
+    const profile = loadProfiles({ OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: "https://gw.example/v1", OPENAI_MODEL: "gpt-4o-mini" }).find(p => p.name === "openai")!;
+    assert.equal(profile.modelPinned, true);
+    const resolved = await ensureServedModel(profile, {
+      fetchImpl: (async () => new Response(JSON.stringify({ data: [{ id: "gemini-3.7-flash" }] }), { status: 200 })) as never,
+    });
+    assert.equal(resolved.profile.model, "gpt-4o-mini", "the owner's choice survives");
+    assert.equal(resolved.served, false);
+    assert.equal(resolved.suggestion, "gemini-3.7-flash");
+    assert.match(resolved.error ?? "", /does not serve/);
+  } finally {
+    resetModelCatalog();
+    if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+  }
+});
+
+test("ensureServedModel: an unreachable catalogue leaves the call alone and says why", async () => {
+  resetModelCatalog();
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  try {
+    const profile = loadProfiles({ OPENAI_API_KEY: "test-key", OPENAI_BASE_URL: "https://gw.example/v1" }).find(p => p.name === "openai")!;
+    const resolved = await ensureServedModel(profile, { fetchImpl: (async () => new Response("nope", { status: 503 })) as never });
+    assert.equal(resolved.profile.model, profile.model);
+    assert.equal(resolved.auto, false);
+    assert.match(resolved.error ?? "", /503/);
+  } finally {
+    resetModelCatalog();
+    if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+  }
+});
+
+test("requestCompletion: an injected fetch is used as-is, with no catalogue probe", async () => {
+  const previous = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  const urls: string[] = [];
+  try {
+    const profile = loadProfiles({ OPENAI_API_KEY: "test-key" }).find(p => p.name === "openai")!;
+    const res = await requestCompletion({
+      profile,
+      messages: [{ role: "user", content: "hi" }],
+      stream: false,
+      fetchImpl: (async (url: unknown) => { urls.push(String(url)); return new Response("{}", { status: 200 }); }) as never,
+    });
+    assert.equal(res.ok, true);
+    assert.deepEqual(urls, ["https://api.openai.com/v1/chat/completions"]);
+  } finally {
+    if (previous === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = previous;
+  }
 });

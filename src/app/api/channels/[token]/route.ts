@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agents, channelDeliveries, channels, events, messages, teams } from "@/db/schema";
+import { agents, channelDeliveries, channels, events, messages, runs, teams } from "@/db/schema";
 import { resolveLead } from "@/lib/channel";
 import { runBrief } from "../../board/route";
 
@@ -38,6 +39,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const input = z.string().trim().min(3).max(4000).safeParse(raw);
   if (!input.success) return NextResponse.json({ error: 'Send {"text":"..."} or a form field named text.' }, { status: 400 });
 
+  // A sender retrying after a timeout gets the run already on record, even once the cooldown has
+  // passed. The key is explicit when the sender supplies one; otherwise it is the token and body.
+  const idempotencyKey = (request.headers.get("idempotency-key") ?? `channel:${createHash("sha256").update(token + "\n" + input.data).digest("hex")}`).slice(0, 200);
+  const [existing] = await db.select().from(runs).where(and(eq(runs.workspaceId, channel.workspaceId), eq(runs.idempotencyKey, idempotencyKey))).limit(1);
+  if (existing) {
+    return NextResponse.json({
+      ok: existing.status === "COMPLETED", org: null, lead: null, runId: existing.id, status: existing.status,
+      summary: existing.summary, deduplicated: true, channel: "This request already ran; the answer below is the stored outcome.",
+    }, { status: existing.status === "COMPLETED" ? 200 : 502 });
+  }
+
   // Claim the cooldown atomically: two arrivals that pass the cheap check together cannot both run.
   const cutoff = new Date(Date.now() - COOLDOWN_MS);
   const [claimed] = await db.update(channels).set({ lastInboundAt: new Date() })
@@ -55,7 +67,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   await db.insert(messages).values({ workspaceId: channel.workspaceId, teamId: team.id, role: "user", content: input.data, kind: "message", metadata: { viaChannel: channel.name, channelId: channel.id } });
   await db.insert(events).values({ workspaceId: channel.workspaceId, agentId: lead.id, type: "channel.received", detail: `${channel.name} → ${team.name}: ${input.data.slice(0, 120)}` });
 
-  const outcome = await runBrief(channel.workspaceId, team, lead, input.data, () => {}, () => false, "trigger");
+  const outcome = await runBrief(channel.workspaceId, team, lead, input.data, () => {}, () => false, "trigger", undefined, idempotencyKey);
   // Measure the cooldown from the end of the work, not the start: a brief with summons can take a minute.
   await db.update(channels).set({ lastInboundAt: new Date() }).where(eq(channels.id, channel.id));
   await db.insert(channelDeliveries).values({

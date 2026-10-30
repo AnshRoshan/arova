@@ -6,6 +6,10 @@ Arova is a fullstack AI-agent workspace built with Next.js App Router, PostgreSQ
 
 The default screen is **Overview**: a warm, editorial command center with a live workspace pulse, agent roster, upcoming routines, and activity previews. Selecting an agent opens its persisted chat thread and settings. The left navigation also opens Automations (routines, runs, evals, 24/7), Integrations (connectors, local tools, channels, MCP), and Settings (workspace, models, agent registry, deployment limits). The right activity feed prints actual stored events, runs, and approvals; sample records are explicitly labeled. The responsive sidebar and activity feed open as drawers on narrower screens.
 
+## Audit (2026-10-29)
+
+`context/current-issues.md` is the defect list. Specs 25–28 are the next contracts: boundary repairs, one run contract, versions plus an effects ledger, and a golden-task suite. Spec 25 is the one to build first.
+
 ## Current slice (2026-10-28)
 
 - **Channels** (Integrations → Channels): a generic HTTPS webhook (Slack incoming webhooks work as-is), an inbound token for an organisation channel, a 60 s inbound cooldown, and a delivery ledger. The target is a credential and only its host is sent to the browser.

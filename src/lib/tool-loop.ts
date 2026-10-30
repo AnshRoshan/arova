@@ -15,7 +15,7 @@ import { formatSearchResults, searchWeb, type SearchProfile } from "./web-search
 export const READONLY_TOOL_IDS = ["calc", "now_in_timezone", "json_transform", "checksum", "web_fetch"] as const;
 export type ToolLoopEvent = { type: "tool"; name: string; status: "running" | "completed" | "failed"; detail?: string };
 export type ToolExecution = { ok: boolean; output: string; sources?: CitationSource[] };
-export type ToolLoopResult = { content: string; used: string[]; sources: CitationSource[]; citations: CitationReport; partial: boolean; stopped: boolean };
+export type ToolLoopResult = { content: string; used: string[]; sources: CitationSource[]; citations: CitationReport; partial: boolean; stopped: boolean; /** The loop ran out of steps, which is not the output-token cap. */ stepLimit: boolean };
 export type ToolLoopDeps = { searchProfile?: SearchProfile; fetchImpl?: typeof fetch; lookup?: FetchPolicy["lookup"] };
 export type CompleteTurn = (messages: ModelMessage[], tools: ToolDefinition[]) => Promise<{ content: string; toolCalls: ToolCall[] }>;
 
@@ -106,13 +106,14 @@ export async function runToolLoop(input: {
   const maxSteps = Math.max(1, Math.min(8, input.maxSteps ?? 4));
   let lastContent = "";
   // The report runs on the answer, not on reasoning: a number mentioned while thinking is not a claim.
-  const finish = (content: string, partial: boolean, stopped = false): ToolLoopResult => ({
+  const finish = (content: string, partial: boolean, stopped = false, stepLimit = false): ToolLoopResult => ({
     content,
     used,
     sources: ledger.sources,
     citations: citationReport(splitReasoning(content).answer, ledger.sources),
     partial,
     stopped,
+    stepLimit,
   });
 
   for (let step = 0; step < maxSteps; step++) {
@@ -136,5 +137,5 @@ export async function runToolLoop(input: {
     }
   }
 
-  return finish(lastContent.trim() || `Stopped after ${maxSteps} tool steps without a final answer.`, true);
+  return finish(lastContent.trim() || `Stopped after ${maxSteps} tool steps without a final answer.`, true, false, true);
 }

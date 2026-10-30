@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agents, events, messages, teams, triggers } from "@/db/schema";
+import { agents, events, messages, runs, teams, triggers } from "@/db/schema";
 import { resolveLead } from "@/lib/channel";
 import { runBrief } from "../board/route";
 
@@ -19,8 +20,9 @@ const COOLDOWN_MS = 60_000;
  * org's channel with the trigger named as its author. The token is scoped to one org and revocable.
  */
 export async function POST(request: NextRequest) {
-  const bearer = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  const token = bearer || new URL(request.url).searchParams.get("token") || "";
+  // The token is a credential: it is read from the Authorization header only, never from a query
+  // string, because query strings land in access logs and browser history.
+  const token = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   if (!token) return NextResponse.json({ error: "Missing bearer token. Send Authorization: Bearer <trigger token>." }, { status: 401 });
 
   const [trigger] = await db.select().from(triggers).where(eq(triggers.token, token)).limit(1);
@@ -29,6 +31,14 @@ export async function POST(request: NextRequest) {
   const parsed = await request.json().catch(() => null);
   const input = z.object({ text: z.string().trim().min(3).max(4000) }).safeParse(parsed ?? {});
   if (!input.success) return NextResponse.json({ error: 'The body needs {"text": "what this organisation should work on"}.' }, { status: 400 });
+
+  // A retry with the same key is answered from the run that already exists, even after the
+  // cooldown has passed. Without this, one failed HTTP response becomes two briefs.
+  const idempotencyKey = (request.headers.get("idempotency-key") ?? `trigger:${createHash("sha256").update(token + "\n" + input.data.text).digest("hex")}`).slice(0, 200);
+  const [existing] = await db.select().from(runs).where(and(eq(runs.workspaceId, trigger.workspaceId), eq(runs.idempotencyKey, idempotencyKey))).limit(1);
+  if (existing) {
+    return NextResponse.json({ ok: existing.status === "COMPLETED", org: null, lead: null, trigger: trigger.label, runId: existing.id, status: existing.status, summary: existing.summary, deduplicated: true, channel: "This request already ran; the answer below is the stored outcome." }, { status: existing.status === "COMPLETED" ? 200 : 502 });
+  }
 
   if (trigger.lastFiredAt && Date.now() - new Date(trigger.lastFiredAt).getTime() < COOLDOWN_MS) {
     return NextResponse.json({ error: `This trigger fired ${Math.round((Date.now() - new Date(trigger.lastFiredAt).getTime()) / 1000)}s ago; the cooldown is ${COOLDOWN_MS / 1000}s.` }, { status: 429 });
@@ -54,7 +64,7 @@ export async function POST(request: NextRequest) {
   await db.insert(messages).values({ workspaceId: trigger.workspaceId, teamId: team.id, role: "user", content: input.data.text, kind: "message", metadata: { viaTrigger: trigger.label, triggerId: trigger.id } });
   await db.insert(events).values({ workspaceId: trigger.workspaceId, agentId: leadRow.id, type: "trigger.fired", detail: `${trigger.label} → ${team.name}: ${input.data.text.slice(0, 120)}` });
 
-  const outcome = await runBrief(trigger.workspaceId, team, leadRow, input.data.text, () => {}, () => false, "trigger");
+  const outcome = await runBrief(trigger.workspaceId, team, leadRow, input.data.text, () => {}, () => false, "trigger", undefined, idempotencyKey);
   // The cooldown runs from the end of the work, not its start: a brief with two summons can take a
   // minute on its own, and measuring from the call would let a hammering webhook straight through it.
   await db.update(triggers).set({ lastFiredAt: new Date() }).where(eq(triggers.id, trigger.id));
@@ -72,8 +82,7 @@ export async function POST(request: NextRequest) {
 
 /** A small status line so an operator can tell a live token from a dead one without firing it. */
 export async function GET(request: NextRequest) {
-  const bearer = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
-  const token = bearer || new URL(request.url).searchParams.get("token") || "";
+  const token = (request.headers.get("authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
   const [trigger] = token ? await db.select().from(triggers).where(eq(triggers.token, token)).limit(1) : [];
   if (!trigger) return NextResponse.json({ error: "Unknown token." }, { status: 404 });
   const [team] = await db.select({ name: teams.name }).from(teams).where(eq(teams.id, trigger.teamId)).limit(1);

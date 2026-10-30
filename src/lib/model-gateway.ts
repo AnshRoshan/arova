@@ -15,6 +15,8 @@ export type ProviderProfile = {
   maxContextTokens: number;
   configured: boolean;
   builtIn: boolean;
+  /** True when the model came from env. A pinned model is never swapped out behind the owner's back. */
+  modelPinned?: boolean;
 };
 
 export type ToolDefinition = { type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } };
@@ -45,8 +47,8 @@ export function apiKeyFor(name: string, env: Env = process.env): string | undefi
   return env[`${builtIn ? builtIn.prefix : envPrefix(name)}_API_KEY`] || undefined;
 }
 
-function describe(name: string, label: string, base: string, model: string, maxContextTokens: number, configured: boolean, builtIn: boolean): ProviderProfile {
-  return { name, label, base, model, maxContextTokens, configured, builtIn };
+function describe(name: string, label: string, base: string, model: string, maxContextTokens: number, configured: boolean, builtIn: boolean, modelPinned = false): ProviderProfile {
+  return { name, label, base, model, maxContextTokens, configured, builtIn, modelPinned };
 }
 
 function titleCase(name: string) {
@@ -60,9 +62,10 @@ function titleCase(name: string) {
  */
 export function loadProfiles(env: Env = process.env): ProviderProfile[] {
   const builtIns = BUILT_INS.map(b => {
+    const pinned = env[`${b.prefix}_MODEL`] || (b.name === "openai" ? env.FAST_MODEL : undefined);
     const base = env[`${b.prefix}_BASE_URL`] || b.defaultBase;
-    const model = env[`${b.prefix}_MODEL`] || (b.name === "openai" ? env.FAST_MODEL : undefined) || b.defaultModel;
-    return describe(b.name, b.label, base, model, Number(env[`${b.prefix}_MAX_CONTEXT`]) || 128000, Boolean(apiKeyFor(b.name, env)), true);
+    const model = pinned || b.defaultModel;
+    return describe(b.name, b.label, base, model, Number(env[`${b.prefix}_MAX_CONTEXT`]) || 128000, Boolean(apiKeyFor(b.name, env)), true, Boolean(pinned));
   });
 
   const custom = (env.PROVIDERS || "")
@@ -75,7 +78,7 @@ export function loadProfiles(env: Env = process.env): ProviderProfile[] {
       const base = env[`${prefix}_BASE_URL`] || "";
       const model = env[`${prefix}_MODEL`] || "";
       const configured = Boolean(base) && Boolean(model) && Boolean(apiKeyFor(name, env));
-      return describe(name, titleCase(name), base, model, Number(env[`${prefix}_MAX_CONTEXT`]) || 8192, configured, false);
+      return describe(name, titleCase(name), base, model, Number(env[`${prefix}_MAX_CONTEXT`]) || 8192, configured, false, Boolean(model));
     });
 
   return [...builtIns, ...custom];
@@ -126,6 +129,127 @@ export function buildEndpoint(base: string): string {
 
 export function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
+}
+
+/**
+ * The catalogue endpoint sits beside chat/completions on every OpenAI-compatible server, so the
+ * same base URL works whether it was given as an API root or as a full completions URL.
+ */
+export function catalogEndpoint(base: string): string {
+  const url = new URL(base);
+  url.pathname = url.pathname.replace(/\/chat\/completions\/?$/, "").replace(/\/+$/, "") + "/models";
+  return url.toString();
+}
+
+const NON_CHAT = /(embed|whisper|tts|dall-?e|image|audio|moderation|rerank|clip|stable-diffusion|sora|codex)/i;
+const CHEAP = [[/flash/i, 5], [/mini/i, 5], [/fast/i, 4], [/small/i, 4], [/lite/i, 4], [/haiku/i, 3], [/instant/i, 3], [/turbo/i, 2]] as const;
+const HEAVY = [[/opus/i, -6], [/reason/i, -4], [/thinking/i, -3], [/pro(?![a-z])/i, -3], [/max/i, -2], [/large/i, -2]] as const;
+
+/**
+ * Which served model to use when the configured one is not on the gateway. The owner's choice
+ * always wins; otherwise cheap, fast chat models are preferred and embeddings, audio and image
+ * models are never selected as a chat model. Pure so the choice can be tested without a network.
+ */
+export function chooseServedModel(ids: string[], preferred: string): { model: string; reason: "served" | "fallback" | "none" } {
+  const chat = ids.filter(id => id && !NON_CHAT.test(id));
+  if (chat.includes(preferred)) return { model: preferred, reason: "served" };
+  if (!chat.length) return { model: "", reason: "none" };
+  const score = (id: string) => {
+    let total = 0;
+    for (const [pattern, weight] of CHEAP) if (pattern.test(id)) total += weight;
+    for (const [pattern, weight] of HEAVY) if (pattern.test(id)) total += weight;
+    return total;
+  };
+  const [best] = [...chat].sort((a, b) => score(b) - score(a) || a.length - b.length || a.localeCompare(b));
+  return { model: best, reason: "fallback" };
+}
+
+export type ModelCatalog = { ok: true; ids: string[] } | { ok: false; error: string };
+
+/** Ask the provider what it actually serves. Bounded to a few seconds and never throws. */
+export async function fetchModelCatalog(
+  profile: ProviderProfile,
+  opts: { fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<ModelCatalog> {
+  if (profile.name === "local") return { ok: false, error: "the local provider has no catalogue" };
+  const key = apiKeyFor(profile.name);
+  if (!key) return { ok: false, error: "no API key is configured" };
+  const doFetch = opts.fetchImpl ?? fetch;
+  const deadline = AbortSignal.timeout(opts.timeoutMs ?? 5000);
+  const signal = opts.signal ? AbortSignal.any([deadline, opts.signal]) : deadline;
+  try {
+    const response = await doFetch(catalogEndpoint(profile.base), { headers: { Authorization: `Bearer ${key}`, Accept: "application/json" }, signal });
+    if (!response.ok) return { ok: false, error: `HTTP ${response.status}` };
+    const body = (await response.json()) as { data?: unknown; models?: unknown };
+    const raw = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : [];
+    const ids = raw
+      .map(entry => (typeof entry === "string" ? entry : (entry as { id?: unknown; name?: unknown })?.id ?? (entry as { name?: unknown })?.name))
+      .filter((id): id is string => typeof id === "string" && id.trim() !== "");
+    return ids.length ? { ok: true, ids } : { ok: false, error: "the gateway listed no models" };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message.slice(0, 160) : "catalogue unreachable" };
+  }
+}
+
+export type ModelSelection = { name: string; model: string; auto: boolean; served: boolean; checkedAt: number; suggestion?: string };
+
+type CatalogEntry = { at: number; ok: boolean; ids: string[]; error?: string };
+const CATALOG_TTL_MS = 10 * 60_000;
+const CATALOG_FAIL_TTL_MS = 60_000;
+const catalogCache = new Map<string, CatalogEntry>();
+const selections = new Map<string, ModelSelection>();
+
+/** For tests and for a forced re-check; normal callers rely on the cache. */
+export function resetModelCatalog() {
+  catalogCache.clear();
+  selections.clear();
+}
+
+/** What the gateway resolved to, for the board to show. Empty until a provider has been checked. */
+export function modelSelections(): ModelSelection[] {
+  return [...selections.values()];
+}
+
+const catalogKey = (profile: ProviderProfile) => `${profile.name}|${profile.base}|${profile.model}`;
+
+/**
+ * Resolve a configured provider to a model the gateway actually serves.
+ *
+ * A base URL that points somewhere other than the vendor's own API makes the vendor's default
+ * model meaningless — the gateway may host a different catalogue entirely. When the model was not
+ * pinned in env, the first successful probe picks a served chat model and records that it did;
+ * when it was pinned, a missing model is reported and never silently replaced.
+ */
+export type ModelResolution = { profile: ProviderProfile; auto: boolean; served?: boolean; suggestion?: string; count?: number; error?: string };
+
+export async function ensureServedModel(
+  profile: ProviderProfile,
+  opts: { fetchImpl?: typeof fetch; force?: boolean; signal?: AbortSignal } = {},
+): Promise<ModelResolution> {
+  if (profile.name === "local" || !profile.configured) return { profile, auto: false };
+  const key = catalogKey(profile);
+  const cached = catalogCache.get(key);
+  const ttl = cached?.ok ? CATALOG_TTL_MS : CATALOG_FAIL_TTL_MS;
+  if (cached && !opts.force && Date.now() - cached.at < ttl) return applyCatalog(profile, cached);
+  const result = await fetchModelCatalog(profile, opts);
+  const entry: CatalogEntry = result.ok ? { at: Date.now(), ok: true, ids: result.ids } : { at: Date.now(), ok: false, ids: [], error: result.error };
+  catalogCache.set(key, entry);
+  return applyCatalog(profile, entry);
+}
+
+function applyCatalog(profile: ProviderProfile, entry: CatalogEntry): ModelResolution {
+  if (!entry.ok) return { profile, auto: false, error: entry.error };
+  if (profile.modelPinned) {
+    const served = entry.ids.includes(profile.model);
+    const suggestion = served ? undefined : chooseServedModel(entry.ids, profile.model).model || undefined;
+    selections.set(profile.name, { name: profile.name, model: profile.model, auto: false, served, checkedAt: entry.at, ...(suggestion ? { suggestion } : {}) });
+    return { profile, auto: false, served, count: entry.ids.length, ...(suggestion ? { suggestion } : {}), ...(served ? {} : { error: `The gateway does not serve ${profile.model}.` }) };
+  }
+  const pick = chooseServedModel(entry.ids, profile.model);
+  if (!pick.model) return { profile, auto: false, error: "the gateway listed no chat model" };
+  const auto = pick.reason === "fallback";
+  selections.set(profile.name, { name: profile.name, model: pick.model, auto, served: true, checkedAt: entry.at });
+  return { profile: { ...profile, model: pick.model }, auto, served: true, count: entry.ids.length };
 }
 
 /** One SSE line in, assistant text out (empty for [DONE], role-only deltas or junk). */
@@ -273,9 +397,13 @@ export type CompletionRequest = {
  */
 export async function requestCompletion({ profile, messages, maxTokens = 800, stream, timeoutMs = 45000, fetchImpl, tools, signal }: CompletionRequest): Promise<Response> {
   const doFetch = fetchImpl ?? fetch;
-  const key = apiKeyFor(profile.name);
-  if (!key) throw new Error(`${profile.label} is selected, but its server API key is not configured.`);
-  const endpoint = buildEndpoint(profile.base);
+  // The configured model is only a guess when the owner pointed a vendor at a different gateway.
+  // Proving it against the gateway's own catalogue costs one cached request and prevents a 404 on
+  // the user's first message. Tests pass fetchImpl, so they never touch the network.
+  const active = fetchImpl ? profile : (await ensureServedModel(profile, { signal })).profile;
+  const key = apiKeyFor(active.name);
+  if (!key) throw new Error(`${active.label} is selected, but its server API key is not configured.`);
+  const endpoint = buildEndpoint(active.base);
   const deadline = AbortSignal.timeout(timeoutMs);
   const stopSignal = signal ? AbortSignal.any([deadline, signal]) : deadline;
   // Some compatible servers reject an unknown stream_options field. Fall back to streaming without
@@ -284,11 +412,13 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
 
   let lastError = "no attempt made";
   let forcedWait: number | null = null;
+  let catalogRetry = false;
+  let effective = active;
   for (let attempt = 0; attempt <= RETRYABLE_WAIT_MS.length; attempt++) {
     if (attempt) await wait(forcedWait ?? RETRYABLE_WAIT_MS[attempt - 1]);
     if (signal?.aborted) throw new Error("The request was stopped before it was sent.");
     forcedWait = null;
-    const body = JSON.stringify(completionPayload({ profile, messages, maxTokens, stream, requestUsage, tools }));
+    const body = JSON.stringify(completionPayload({ profile: effective, messages, maxTokens, stream, requestUsage, tools }));
     let response: Response;
     try {
       response = await doFetch(endpoint, {
@@ -304,6 +434,17 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
       continue;
     }
     if (response.ok) return response;
+    // A gateway that renamed or dropped the model answers 404 before any tokens are spent. Re-read
+    // its catalogue once and retry with a model it does serve, unless the owner pinned this model.
+    if (response.status === 404 && !catalogRetry && !fetchImpl && !effective.modelPinned) {
+      const detail = truncate(await response.text().catch(() => ""));
+      if (/model/i.test(detail) && /(not found|not available|does not exist|unknown|unavailable)/i.test(detail)) {
+        catalogRetry = true;
+        const resolved = await ensureServedModel(effective, { force: true, signal });
+        if (resolved.profile.model !== effective.model) { effective = resolved.profile; continue; }
+      }
+      throw new Error(`${effective.label} returned 404${detail ? `: ${detail}` : ""}`);
+    }
     lastError = `HTTP ${response.status}`;
     // A server that rejects the stream_options field gets one retry of the same request
     // without it — losing the usage frame, not the user's message.
@@ -313,14 +454,14 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
     }
     if (!isRetryableStatus(response.status)) {
       const detail = truncate(await response.text().catch(() => ""));
-      throw new Error(`${profile.label} returned ${response.status}${detail ? `: ${detail}` : ""}`);
+      throw new Error(`${effective.label} returned ${response.status}${detail ? `: ${detail}` : ""}`);
     }
     // Honour Retry-After once: the wait for the next attempt is its value, not that plus the fixed
     // backoff, and an HTTP-date (not a plain number of seconds) falls back to the fixed wait.
     const retryAfter = Number(response.headers.get("retry-after"));
     forcedWait = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 8000) : null;
   }
-  throw new Error(`${profile.label} did not respond (${lastError}) after ${RETRYABLE_WAIT_MS.length + 1} attempts.`);
+  throw new Error(`${effective.label} did not respond (${lastError}) after ${RETRYABLE_WAIT_MS.length + 1} attempts.`);
 }
 
 const truncate = (text: string) => text.replace(/\s+/g, " ").trim().slice(0, 160);
