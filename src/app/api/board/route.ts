@@ -32,6 +32,10 @@ const writeBuckets: Map<string, Bucket> = ((globalThis as { __arovaWriteBuckets?
 import { splitReasoning } from "@/lib/markdown";
 import { budgetStopRow, channelSubject, denialBreaker, hermeticPeers, mayFoundOrg, mayStaffOrg, noReportStopRow, requestedOrgName, resolveLead, summarisePost, summonCeiling, type ApprovalOutcome } from "@/lib/channel";
 import { memoryProvenance, renderMemoryBlock, selectMemories, type MemoryKind, type MemoryRow } from "@/lib/memory";
+import { audit } from "@/lib/audit";
+import { finishRun } from "@/lib/run-contract";
+import { drizzleRunStore } from "@/lib/run-contract-drizzle";
+import { runSandboxCommand } from "@/lib/sandbox-run";
 
 export const dynamic = "force-dynamic";
 /** An eval run is one synchronous model call; a slow reasoning model can take the whole ceiling. */
@@ -52,10 +56,6 @@ const utcDay = () => new Date().toISOString().slice(0, 10);
 const maxDelegations = () => num(process.env.MAX_DELEGATIONS, 1);
 /** A summons answers the question it was asked and does not run a chain of its own. */
 const NO_SUB_CONSULT = Number.MAX_SAFE_INTEGER;
-
-async function audit(workspaceId: string, agentId: string | null, type: string, detail = "") {
-  await db.insert(events).values({ workspaceId, agentId, type, detail });
-}
 
 /**
  * Post one event to every enabled channel that applies: workspace-wide rows always, plus the
@@ -398,9 +398,8 @@ async function executeRoutine(workspaceId: string, routine: typeof routines.$inf
   const finish = async (status: string, summary: string): Promise<{ runId: string; status: string; summary: string }> => {
     const storedSummary = missed ? `Missed the scheduled slot; caught up once. ${summary}`.slice(0, 280) : summary;
     // A cancel that already landed wins: the run row is only ours while it is still RUNNING.
-    const [updated] = await db.update(runs).set({ status, summary: storedSummary, completedAt: new Date() })
-      .where(and(eq(runs.id, run.id), eq(runs.status, "RUNNING"))).returning();
-    if (!updated) {
+    const stored = await finishRun(drizzleRunStore, run.id, status, storedSummary);
+    if (stored === "already-finished") {
       if (!manual) await db.update(routines).set({ lastStatus: "CANCELLED" }).where(eq(routines.id, routine.id));
       return { runId: run.id, status: "CANCELLED", summary: "Cancelled by a person while this run was in flight. Nothing further was sent; what already ran is in its steps." };
     }
@@ -1257,14 +1256,16 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
   const step = (title: string, detail = "") => db.insert(runSteps).values({ workspaceId, runId: run.id, title, detail });
   // What the caller is told when it is not a browser: a trigger needs an outcome to answer with.
   const outcome = { runId: run.id, status: "RUNNING" as string, summary: "" };
-  const finishRun = async (status: string, summary: string) => {
+  const finishRunForBrief = async (status: string, summary: string) => {
     outcome.status = status;
     outcome.summary = summary;
     liveRuns.delete(run.id);
     // A stop that already landed owns the row; this pass may not relabel it.
-    const [updated] = await db.update(runs).set({ status, summary, completedAt: new Date() })
-      .where(and(eq(runs.id, run.id), eq(runs.status, "RUNNING"))).returning();
-    if (!updated) return;
+    if (await finishRun(drizzleRunStore, run.id, status, summary) === "already-finished") {
+      outcome.status = "CANCELLED";
+      outcome.summary = "Cancelled by a person while the brief was in flight.";
+      return;
+    }
     void notifyChannels(workspaceId, team.id, { kind: "run", title: `Brief · ${team.name}`, status, summary, agentName: lead.name, teamName: team.name, runId: run.id });
   };
   const post = async (reply: Reply, author: { id: string; name: string }) => {
@@ -1288,7 +1289,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     await post({ content, kind: "channel_gap", metadata: { stopped: true, summons: gathered } }, leadSeat);
     await step("Stopped by the reader", `${gathered.length} post(s) gathered`);
     await audit(workspaceId, lead.id, "brief.stopped", "Stopped by the reader; work already posted stays.");
-    await finishRun("CANCELLED", "The reader stopped the brief.");
+    await finishRunForBrief("CANCELLED", "The reader stopped the brief.");
   };
 
   try {
@@ -1299,7 +1300,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
       const reply: Reply = { content: `${profile.label} is selected for ${lead.name} but is not configured on this server, so the brief was not answered and no teammate was consulted. No model call was made.`, kind: "provider_error", metadata: { provider: profile.name, unconfigured: true } };
       await post(reply, leadSeat);
       await step("Not answered", "the lead has no usable provider");
-      await finishRun("FAILED", "No provider was configured for the lead.");
+      await finishRunForBrief("FAILED", "No provider was configured for the lead.");
       return outcome;
     }
 
@@ -1321,7 +1322,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
       if (row) await post(row, leadSeat);
       else await post(quotaReply(profile), leadSeat);
       await step("Stopped at the budget", `${calls} of ${dailyCallLimit() || "no"} calls used · ${unasked.length} seat(s) not asked`);
-      await finishRun("WAITING_FOR_TOOL", `The daily model budget stopped the brief with ${unasked.length} seat(s) unasked.`);
+      await finishRunForBrief("WAITING_FOR_TOOL", `The daily model budget stopped the brief with ${unasked.length} seat(s) unasked.`);
     };
     /** The other kind of stop: the summons are done, and the report is what the budget refused. */
     const stopWithoutReport = async () => {
@@ -1331,7 +1332,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
         : quotaReply(profile);
       await post(row, leadSeat);
       await step("Stopped before the report", `${calls} of ${dailyCallLimit() || "no"} calls used · ${summons.length} post(s) landed`);
-      await finishRun("WAITING_FOR_TOOL", "The daily model budget stopped the brief before the report was written.");
+      await finishRunForBrief("WAITING_FOR_TOOL", "The daily model budget stopped the brief before the report was written.");
     };
 
     if (stopped()) { await stopBrief(); return outcome; }
@@ -1390,12 +1391,12 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
         ? { content: answer.trim(), kind: "message", metadata: { provider: profile.name, model: profile.model, incomplete: true, detail: error instanceof Error ? error.message : "stream error" } }
         : failureReply(profile, error);
       await post(reply, leadSeat);
-      await finishRun("FAILED", String(reply.metadata.detail ?? "The report did not complete.").slice(0, 240));
+      await finishRunForBrief("FAILED", String(reply.metadata.detail ?? "The report did not complete.").slice(0, 240));
       return outcome;
     }
     if (isClosed() && answer.trim()) {
       await post({ content: answer.trim(), kind: "message", metadata: { provider: profile.name, model: profile.model, incomplete: true, stopped: true } }, leadSeat);
-      await finishRun("CANCELLED", "The reader went away mid-report; what arrived is stored and marked partial.");
+      await finishRunForBrief("CANCELLED", "The reader went away mid-report; what arrived is stored and marked partial.");
       return outcome;
     }
     const cleaned = parseTurn(answer.trim());
@@ -1414,7 +1415,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     // reasoning block a model wrapped around it.
     const said = splitReasoning(finalText).rest.trim();
     await step("Report posted", `${said.length} characters from ${profile.model}`);
-    await finishRun("COMPLETED", said ? plainLine(said) : "The lead wrote reasoning and no answer followed. The channel keeps exactly what it produced.");
+    await finishRunForBrief("COMPLETED", said ? plainLine(said) : "The lead wrote reasoning and no answer followed. The channel keeps exactly what it produced.");
   } catch (error) {
     // The abort is the reader's own action, not a blank in the org's work to report as a failure.
     if (stopped()) { await stopBrief(); return outcome; }
@@ -1423,7 +1424,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     try {
       await post({ content: `The brief to ${lead.name} did not complete (${why}). Anything that had already been posted is still in this channel.`, kind: "provider_error", metadata: { detail: why } }, leadSeat);
     } catch { /* the row cannot be written either; the run says it below */ }
-    await finishRun("FAILED", why.slice(0, 280));
+    await finishRunForBrief("FAILED", why.slice(0, 280));
     send({ type: "error", error: why });
   }
   return outcome;
@@ -1904,10 +1905,7 @@ export async function POST(request: NextRequest) {
         else {
           // The scheduler claims by setting lastStatus; Run now takes the same claim so a click and a
           // tick, or two clicks in two processes, cannot both execute this routine.
-          const [claimed] = await db.update(routines).set({ lastStatus: "RUNNING" })
-            .where(and(eq(routines.id, routine.id), eq(routines.workspaceId, workspaceId), sql`${routines.lastStatus} is distinct from 'RUNNING'`))
-            .returning();
-          if (!claimed) throw new Error(`${routine.name} is already running. Wait for it to finish.`);
+          if (!(await drizzleRunStore.claimRoutine(workspaceId, routine.id))) throw new Error(`${routine.name} is already running. Wait for it to finish.`);
           inFlight.add(routine.id);
           // Real execution: the same code path the scheduler uses, held open until the model answers so the
           // run row, the thread message and the board you get back all show the true outcome.
@@ -2000,34 +1998,7 @@ export async function POST(request: NextRequest) {
     } else if (action === "runSandboxCommand") {
       const input = z.object({ agentId: uuid, command: z.string().trim().min(1).max(2000) }).parse(body);
       const agent = await ownedAgent(workspaceId, input.agentId);
-      const [sandboxRun] = await db.insert(runs).values({ workspaceId, agentId: agent.id, title: `Sandbox · ${agent.name}`, status: "RUNNING", summary: input.command.slice(0, 240), initiator: "person", startedAt: new Date() }).returning();
-      const step = (title: string, detail: string, status = "COMPLETED") => db.insert(runSteps).values({ workspaceId, runId: sandboxRun.id, title, detail: detail.slice(0, 4000), status });
-      try {
-        const created = await sandboxProvider.create({ workspaceId, agentId: agent.id });
-        await db.insert(sandboxes).values({ workspaceId, agentId: agent.id, provider: sandboxProvider.name, status: created.status })
-          .onConflictDoUpdate({ target: sandboxes.agentId, set: { provider: sandboxProvider.name, status: created.status } });
-        await step("Running the command", input.command.slice(0, 200));
-        const executed = await sandboxProvider.execute(agent.id, { type: "computer", action: "exec", input: { command: input.command } });
-        await step("Command completed", executed.output);
-        // A cancel that landed while the command ran is final: do not overwrite it with COMPLETED.
-        const [done] = await db.update(runs).set({ status: "COMPLETED", summary: executed.output.slice(0, 240), completedAt: new Date() })
-          .where(and(eq(runs.id, sandboxRun.id), eq(runs.status, "RUNNING"))).returning();
-        if (!done) {
-          result = { sandbox: { ok: false, error: "Cancelled by a person while the command was running. Its output was not recorded against a completed run.", runId: sandboxRun.id, provider: sandboxProvider.name } };
-        } else {
-          await audit(workspaceId, agent.id, "sandbox.ran", `${agent.name}: ${input.command.slice(0, 120)}`);
-          result = { sandbox: { ok: true, output: executed.output, runId: sandboxRun.id, provider: sandboxProvider.name } };
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "The sandbox command failed.";
-        await step("Refused", message, "FAILED");
-        await db.update(runs).set({ status: "FAILED", summary: message.slice(0, 240), completedAt: new Date() })
-          .where(and(eq(runs.id, sandboxRun.id), eq(runs.status, "RUNNING")));
-        await db.insert(sandboxes).values({ workspaceId, agentId: agent.id, provider: sandboxProvider.name, status: "ERROR" })
-          .onConflictDoUpdate({ target: sandboxes.agentId, set: { provider: sandboxProvider.name, status: "ERROR" } });
-        await audit(workspaceId, agent.id, "sandbox.refused", message.slice(0, 240));
-        result = { sandbox: { ok: false, error: message, runId: sandboxRun.id, provider: sandboxProvider.name } };
-      }
+      result = { sandbox: await runSandboxCommand({ workspaceId, agentId: agent.id, agentName: agent.name, command: input.command }) };
     } else if (action === "resetSandbox") {
       const agent = await ownedAgent(workspaceId, body.agentId);
       await sandboxProvider.destroy(agent.id);

@@ -254,6 +254,17 @@ await step("runTool calc", async () => {
   must(r.board.runs.some(x => x.id === toolRunId), "tool run missing from board");
 });
 
+await step("runSandboxCommand (when a provider is active)", async () => {
+  const b = (await http("GET", "/api/board")).json;
+  if (b.sandbox.provider === "unconfigured") return "skipped: no provider";
+  const r = await act("runSandboxCommand", { agentId, command: "printf arvo-ok" });
+  must(r.ok, r.error ?? `HTTP ${r.status}`);
+  must(r.json.sandbox?.ok === true, `sandbox refused: ${r.json.sandbox?.error}`);
+  must(String(r.json.sandbox.output).includes("arvo-ok"), `wrong output: ${r.json.sandbox.output}`);
+  must(r.board.runs.some(x => x.id === r.json.sandbox.runId), "sandbox run missing from board");
+  return `${r.json.sandbox.provider} · ${r.json.sandbox.runId.slice(0, 8)}`;
+});
+
 await step("loadEarlier pages history", async () => {
   const time = new Date(Date.now() + 60_000).toISOString();
   const r = await act("loadEarlier", { before: time });

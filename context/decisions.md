@@ -432,3 +432,14 @@ Why not B: the cooldown is deliberately short and a retry after it is exactly th
 Design: `runBrief` accepts a key and inserts with `ON CONFLICT DO NOTHING`; the channel/trigger routes return the stored run when the key exists; `finish`, `finishRun`, `cancelRun` and the sandbox completion all guard on `RUNNING`; the cancel summary names the steps that actually ran, and a person-only console is described as such.
 
 Cost: one extra SELECT per inbound request; a run that finishes while a cancel is in flight is reported as "finished before the stop landed". Reversibility: remove the key parameter and the guards. Evidence: API sweep returns `deduplicated: true` and the same run id; a query-string token is 401; `run-contract-proof.mjs` passes; 264/264 tests.
+
+## D-40: one run contract, and the sandbox console is its own module — 2026-10-30
+Trigger: spec 26. Four paths finished a run differently; a cancel could be overwritten and a sandbox command's success could relabel a stopped run.
+
+Options considered: (A) **a pure `finishRun(store, …)` + one Drizzle store, a `claimRoutine` used by the scheduler and Run now, and `sandbox-run.ts` owning its run**; (B) keep the per-path updates and add comments; (C) finish the whole route split including chat and the tick in one change; (D) a multi-process lease. Chosen: A for this unit; C is the next unit.
+
+Why not B: the next `else if` copies whichever contract it reads first. Why not C: moving 1,900 lines of chat, brief and scheduler code in the same change as a security fix makes the proof unreadable. Why not D: the SQL predicate is already the cross-process lock; a lease is a different feature.
+
+Design: `run-contract.ts` is pure and tested with a fake store; `run-contract-drizzle.ts` holds the two guarded writes; `sandbox-run.ts` creates the run, writes the intent step before `provider.create`, and returns `cancelled` when the finish is refused. `audit` is a module. `connections` no longer defaults to CONNECTED.
+
+Cost: one more module pair; the route still owns chat and the tick. Reversibility: inline the store back into the route and delete the module. Evidence: 267/267 tests; API sweep 35/35 including a WSL command; `cancel-proof.mjs` keeps a cancelled row cancelled and names the step that had started.
