@@ -465,3 +465,12 @@ Why not B: the ceiling has to be enforced by the process that spends the calls. 
 Design: `suite.ts` is pure and tested; `runSuite` loads the tasks in stored order, pre-checks the provider, and reuses `executeEvalTask`. A budget stop mid-suite is stored as `STOPPED_AT_CEILING` because it is a ceiling by another name; the remaining tasks are not counted. The UI shows the percentage only over scored attempts.
 
 Cost: one suite row and one eval run per task. Reversibility: drop `eval_suites` and the two actions. Evidence: 280/280 tests; `.impeccable/suite-proof.mjs` and the Chrome check pass.
+
+## D-43: the routine clock is a module, and the route is a dispatcher — 2026-10-30
+Trigger: spec 26. `instrumentation.ts` imported the scheduler from a route module, and the tick, the reaper and `executeRoutine` could only be tested by starting the HTTP server.
+
+Options considered: (A) **move the tick/reap/execute block and the helpers it shares with chat into `routine-runner.ts` and `board-core.ts`, leaving chat and the dispatcher for a second slice**; (B) move chat and the scheduler in one change; (C) leave it and document. Chosen: A.
+
+Why not B: the chat block owns `streamReply`/`runBrief` and most of the action handlers; moving it in the same change as the scheduler would make the live proof ambiguous. Why not C: the boot path no longer needs a route, which is a real coupling and a real test seam.
+
+Design: `board-core.ts` holds request-free helpers; `routine-runner.ts` holds the two process-local sets (documented as such) and the SQL-guarded clock; both are imported by the route and by instrumentation/cron. Cost: two modules and re-exported types. Reversibility: inline the blocks back. Evidence: route 2,031→1,781 lines; 280/280 tests; worker booted from the module; run-contract and 35/35 sweep pass live.

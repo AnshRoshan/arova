@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
-import { tickAllWorkspaces } from "../board/route";
+import { tickAllWorkspaces } from "@/lib/routine-runner";
 
 export const dynamic = "force-dynamic";
 /** Serverless hosts freeze the process after the response, so this call waits for the routines it starts. */

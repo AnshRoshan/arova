@@ -13,7 +13,7 @@ export async function register() {
   if (!process.env.DATABASE_URL) { console.warn("[arova] scheduler worker not started: DATABASE_URL is not set"); return; }
   g.__arovaWorkerStarted = true;
   const { createLoop } = await import("./lib/worker");
-  const { tickAllWorkspaces, markWorkerStarted } = await import("./app/api/board/route");
+  const { tickAllWorkspaces, markWorkerStarted } = await import("./lib/routine-runner");
   await markWorkerStarted().catch(error => console.warn("[arova] could not record worker start:", error instanceof Error ? error.message : "unknown error"));
   createLoop(() => tickAllWorkspaces("worker"), () => schedulerIntervalSeconds() * 1000);
   console.log(`[arova] scheduler worker started — checking for due routines every ${schedulerIntervalSeconds()}s`);
