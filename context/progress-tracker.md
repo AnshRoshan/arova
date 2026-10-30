@@ -396,3 +396,17 @@ effect, a WSL command writes one succeeded effect, export redacts the command);
 `.impeccable/suite-proof.mjs` (local seat → SKIPPED/0 calls/no rate; ceiling 1 over two tasks → one
 call, second never started); `.impeccable/cdp-spec25-check.mjs` now asserts the Suites section and a
 stored suite render in Chrome. D-41, D-42.
+
+## Session 2026-10-30 (spec 26, second slice) — the scheduler leaves the route
+
+`tickSchedules`, `reapStuckRuns`, `tickAllWorkspaces`, `markWorkerStarted`, `executeRoutine` and the
+two process-local sets now live in `src/lib/routine-runner.ts`; the helpers they share with chat
+(`ownedAgent`, `systemPrompt`, `chatMessages`, `peersOf`, `recentTurns`, `notifyChannels`,
+`recordDelivery`) live in `src/lib/board-core.ts`. `instrumentation.ts` and `/api/cron` import the
+runner directly, so booting the worker no longer imports a route module. `board/route.ts` fell from
+2,031 to 1,781 lines. The chat/brief functions and the action dispatcher remain there; that is the one
+open structural item, and no correctness fix is waiting on it.
+
+**Proofs after the move:** `npm test` **280/280**, `tsc --noEmit` ✓, `npm run build` ✓. On :3100 the
+worker booted from the module, `run-contract-proof.mjs` still marks a three-day-overdue routine as a
+single catch-up and refuses Run now while it is RUNNING, and the API sweep is **35/35**.
