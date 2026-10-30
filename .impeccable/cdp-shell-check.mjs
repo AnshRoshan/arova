@@ -8,14 +8,15 @@ import { config } from "dotenv";
 import pg from "pg";
 
 config({ path: ".env.local", quiet: true });
+const BASE = process.argv[2] ?? "http://localhost:3000";
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const PORT = 9352;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const init = await fetch("http://localhost:3000/api/board");
+const init = await fetch(`${BASE}/api/board`);
 const cookie = (init.headers.get("set-cookie") ?? "").split(";")[0];
 const workspace = cookie.split("=")[1];
 const headers = { cookie, "content-type": "application/json" };
-const act = async (action, payload) => (await (await fetch("http://localhost:3000/api/board", { method: "POST", headers, body: JSON.stringify({ action, ...payload }) })).json());
+const act = async (action, payload) => (await (await fetch(`${BASE}/api/board`, { method: "POST", headers, body: JSON.stringify({ action, ...payload }) })).json());
 const team = await act("createEmptyTeam", { name: "Cartography", brief: "Maps." });
 const teamId = team.team?.id ?? team.teamId;
 const atlas = await act("createAgent", { name: "Atlas", role: "researcher", teamId });
@@ -39,8 +40,11 @@ const read = async expr => (await send("Runtime.evaluate", { expression: expr, r
 await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable"); await send("Network.setCacheDisabled", { cacheDisabled: true });
 await send("Network.setCookie", { name: "arova_workspace", value: workspace, domain: "localhost", path: "/", httpOnly: true });
 await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
-await send("Page.navigate", { url: "http://localhost:3000/" });
+await send("Page.navigate", { url: `${BASE}/` });
 await sleep(4000);
+// A workspace with a conversation opens its thread by default (spec 25); Overview is the rail's.
+await read(`(() => { const b = document.querySelector('.rail-btn[aria-label="Overview"]'); if (b) b.click(); return Boolean(b); })()`);
+await sleep(800);
 
 const overview = await read(`(() => ({
   aside: Boolean(document.querySelector('.overview-aside')),
@@ -100,6 +104,8 @@ await read(`(() => { const b = [...document.querySelectorAll('button')].find(el 
 await sleep(900);
 const settings = await read(`(() => { const stack = document.querySelector('.pane .stack'); return { width: stack ? Math.round(stack.getBoundingClientRect().width) : 0 }; })()`);
 assert.ok(settings.width > 0 && settings.width <= 800, `form measure stays readable (${settings.width}px)`);
+const back = await read(`(() => { const b = document.querySelector('.icon-btn[aria-label="Back to overview"]'); return b ? getComputedStyle(b).display : 'missing'; })()`);
+assert.equal(back, "none", "the pane back arrow is a phone control, not a desktop second navigation");
 
 await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
 await sleep(700);

@@ -362,3 +362,11 @@ Running the command." — the command's later success did not overwrite it.
 **Not done in this slice:** `tickSchedules`/`executeRoutine`/`streamReply`/`runBrief` still live in
 `board/route.ts`. The lock and finish they share is now a module, but the extraction itself is the
 next unit, not a claim. D-40.
+
+## Session 2026-10-30 (UI follow-up) — the header stops repeating itself
+Spec 25 changed the opening screen, so the old shell proof had to open Overview through the rail
+first. With that fixed, two leftover controls went: the pane back arrow now renders only under the
+narrow breakpoint (the rail is the desktop navigation), and the channel header keeps its post count
+on phones while the summons/model chips wait for width; its Organisation button keeps the icon and
+drops its label there. The shell proof asserts the desktop arrow is `display: none` and still shows
+no horizontal overflow at 390 with zero rail labels. 267/267 tests, `tsc` clean.

@@ -660,6 +660,9 @@ button.row:hover { background: #232842; }
   .sheet-bar { min-height: 0; padding: 10px 14px; gap: 7px 8px; }
   .sheet-bar .facts { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; }
   .sheet-bar .facts::-webkit-scrollbar { display: none; }
+  /* A channel header has three chips and an org button; on a phone the post count is the one that
+     still answers "is this channel alive", so the rest wait for the wider layout. */
+  .channel-facts .fact:not(:first-child) { display: none; }
   .sheet-bar .ghost { padding: 6px 10px; font-size: 12px; }
   .sheet-bar .ident-tile { width: 32px; height: 32px; }
   .ident-main h1 { font-size: 20px; }
