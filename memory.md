@@ -1,212 +1,51 @@
 # Session handoff
 
-Current state (2026-10-28): **market brief rev 2 plus the no-credential product slice are built and
-verified.** Channels (generic HTTPS webhook + inbound org token + delivery ledger), the eval harness
-(substring score, honest `SKIPPED`/`ERROR`) and the agent registry (exact SQL aggregates) are live in
-the app. The market research is now thirteen products/agents with pricing, reliability, demand,
-substitutes, positioning and kill criteria. **Committed on `main` as `c7ecb3d` (design), `58c07dc`
-(product), `59a18dc` (docs); not pushed.**
+Current state (2026-11-03): **spec 26 is closed.** `board/route.ts` is 87 lines — authenticate,
+parse, dispatch. The chat reply path lives in `src/lib/chat-runner.ts`, the org brief in
+`src/lib/brief-runner.ts` (now imported by `/api/trigger` and `/api/channels/[token]` directly, so
+no route imports another route), the action chain in `src/lib/board-actions.ts`, the payload in
+`src/lib/board-payload.ts`, and the shared helpers (postToChannel, memory recall, quota/timeout
+config, `cookieName`) in `src/lib/board-core.ts`. No structural item is open; the remaining
+blockers are all credential/owner ones.
 
-## What changed
+## What this session did
 
-- `context/feature-parity.md` is now **Market brief — rev 2** (filename kept for historical links):
-  source tiers A/B/C, dated rows, pricing band, OSWorld 1.0/2.0 and WebVoyager evidence, McKinsey /
-  LangChain demand, substitutes, self-host-first positioning (D-19), a 12-column matrix, gap ranking
-  and a refresh checklist.
-- **Channels** (spec 16, D-20): `channels` + `channel_deliveries`; `src/lib/channels.ts` (SSRF-checked
-  delivery, target redaction, Slack/generic payloads, 8 s timeout); create/update/delete/test actions;
-  `notifyChannels` on routine finish, brief finish and approval request; `POST/GET
-  /api/channels/[token]` with a per-row token and 60 s atomic cooldown, reusing `runBrief`.
-- **Evals** (spec 17, D-21): `eval_tasks` + `eval_results`; `src/lib/evals.ts`; create/delete/run
-  actions; each attempt is a real run + step; pass rate excludes `SKIPPED`/`ERROR`, empty suite = null.
-- **Registry** (spec 18, D-22): `src/lib/registry.ts`; board `registry` field; exact SQL counts for
-  last run/status, run count, pending approvals and enabled routines; Settings → Agent registry.
-- **Docs corrected:** README lists the eleven live tools (not "four") and the new surfaces; PRODUCT.md
-  no longer says the worker is deliberately not working; D-19–D-22 appended.
+Spec 26's third slice, code moved verbatim (no behaviour change intended or observed):
+route 1,876 → 87 lines; four new modules + board-core extensions. Repointed three cross-route
+imports (`runBrief` ×2, `cookieName`).
 
 ## Verification
 
-- `npm test` **208/208** (17 new), `npx next typegen` ✓, `tsc --noEmit` ✓, `npm run build` ✓,
-  `GET /api/health` ✓. Dev server on :3000.
-- Live: webhook test to `https://httpbin.org/post` → **DELIVERED**; to `https://example.com/hook` →
-  **FAILED: example.com answered 405** (both ledger rows); inbound org channel → local-provider lead
-  failed honestly, second immediate call **429**; eval with no model key → **SKIPPED** with a real
-  `Eval · Says READY` run; registry counts matched the stored runs.
-- UI: Integrations → Channels, Automations → Evals and Settings → Agent registry verified with real
-  rows via the chrome-devtools DOM snapshot. No screenshots saved (the MCP surface does not save them).
-- **Improvement batch 2 (2026-10-28):** `GET /api/export` (spec 20, D-24) returns a sanitized audit JSON
-  (200 with attachment header; no message bodies/targets/tokens; no cookie → 401). Sandbox output is
-  capped at 20k, Reset deletes only the per-agent workspace (runs/audit stay), and the Sandbox tab shows
-  workspace state + recent runs. Channels retry network/5xx twice and never retry a 4xx. **219/219 tests**;
-  live reset left the `Sandbox · Scout` FAILED run intact.
+`npm test` **284/284**, `tsc --noEmit` ✓, `npm run build` ✓ (11 routes). Live on :3100:
+API sweep **35/35**; `cancel-proof.mjs` end-to-end on the real `wsl` provider (mid-flight cancel,
+late result refused, CANCELLED row survives). `run-contract-proof.mjs` passes the catch-up checks;
+its "Calling the model" step check cannot pass on a host with no configured provider —
+`executeRoutine` refuses before that step (pre-existing code, untouched).
 
-## The DB fact
+## Traps (all still hold)
 
-`arova_demo` **did not exist** on the shared PostgreSQL server and the app was configured for it. It
-was created and `drizzle-kit push` applied the new tables. `app_db` belongs to another project and was
-not touched. The schema change is additive.
-
-## Local OS sandbox (implemented 2026-10-28)
-
-`@anthropic-ai/sandbox-runtime@0.0.81` is a **runtime dependency** (Apache-2.0, Node ≥22.12).
-`src/lib/sandbox.ts` has `UnconfiguredSandboxProvider` (default, refuses) and `LocalOsSandboxProvider`
-(`AROVA_SANDBOX_PROVIDER=local-os`), with `{graphical:false, pty:true, snapshots:false,
-takeover:false, persistentHome:true, multiScreen:false}`. It writes a per-agent `srt-settings.json`,
-runs the packaged CLI through `process.execPath`, denies `.env`/credentials, and starts with an empty
-network allowlist. `runSandboxCommand` is a real run + step + audit; the UI is Integrations → Sandbox.
-Spec 19, D-23.
-
-On this Windows host the provider **fails closed** until the owner runs `npx srt windows-install`
-(one UAC; creates `srt-sandbox` + WFP). Live: Check produced a `Sandbox · Scout` FAILED run, an ERROR
-`sandboxes` row, and the exact REFUSED sentence. A successful command is **not** verified yet. The
-direct WSL2 `bubblewrap` primitive passed (workspace write, network blocked, root read-only, `/etc`
-blocked). Srt-specific checks (empty-allowlist regression, metadata/loopback, concurrency, Chromium)
-remain. The spike script is `.impeccable/srt-spike.mjs`; root D-27 option (e), TASKS 1.9, A-10. The
-package adds a high `zod` advisory; the project's critical advisory is pre-existing Next 16.2.6, not
-the sandbox package.
-
-## Read-only tool loop (2026-10-28)
-
-The model can now call the seat's granted read-only tools when `Capabilities.toolLoop` is on:
-`calc`, `now_in_timezone`, `json_transform`, `checksum`, `web_fetch`, and `web_search` when a search
-provider is configured and `web_fetch` is granted. `src/lib/tool-loop.ts` is pure and bounded at 4
-steps; `src/lib/web-search.ts` supports SearXNG/Brave/custom with a local-endpoint guard. The final
-answer is non-streamed and carries `toolsUsed`/`sources`; every tool call is a `tool.called` event.
-The UI has the per-agent toggle, a live tool card and a Sources line. **Spec 21, D-25.**
-
-Live proof without a vendor key: `.impeccable/tool-loop-fixture.mjs` (local OpenAI-compatible model +
-search). The SSE produced tool running/completed, a delta with `[1]`, stored sources, audit, and two
-counted calls; the UI showed the answer and Sources link. The default environment still has no model
-key; a real vendor/search endpoint is unverified. **232/232 tests.**
-
-## Traps
-
-- **No model key is configured.** `.env.local` has a `dahl` profile but no key, so chat/eval/notification
-  model paths honestly say `SKIPPED`/`not configured`. A live eval `PASS`/`FAIL` has not been exercised.
-- **Outbound HTTPS works through Node fetch, not curl.** example.com answers 405 to POST; httpbin.org
-  works. curl on this host dies on schannel CRL revocation; use `node` fetch or the app.
-- **A channel target is a credential.** It is stored server-side and only the hostname is sent to the
-  browser. There is no at-rest encryption in this build; say so.
-- **Inbound is a brief, not a generic write.** It reaches one org's lead through `runBrief`, with the
-  same budget and refusal sentences; workspace-wide channels are outbound only.
-- **The root OpenDots Phase 1 still precedes any sandbox work.** Do not implement E2B/desktop before
-  the resume/login measurements. Search needs a tool-calling loop, not just a search key.
-- **The name is crowded.** Arova collides with Arova Nexus (enterprise IT-ops AI), Arova Technologies
-  and an AROVA DeFi agent; legal/search check before a public launch.
-- **Operational notes that still hold:** start dev with `env -u OPENAI_API_KEY npm run dev` (an
-  ambient key would outrank `.env.local`); **`npm run dev` is now `node scripts/dev.mjs`** (D-36):
-  it reaps dead-parent compile workers before starting and kills the whole tree on stop. Never stop
-  a dev server with `taskkill /PID x /F` — that was the 2026-10-29 incident (1,179 orphans, 50.9 GB
-  commit, PostgreSQL stopped). Ctrl+C is enough; if a kill is unavoidable use `/T`. A running Next
-  dev server can serve stale bundles — read `.next/dev/lock` for the pid, then `/T`, restart;
-  `.impeccable/cdp-harness.cjs` and `cdp-channel.cjs` are the raw-CDP drivers; the dahl endpoint
-  returns byte-identical replies for a repeated prompt; `npm run lint` still has pre-existing
-  advisory errors outside the gate. Check `Fix-CommitPressure` in PowerShell if the machine feels
-  starved. Port 3000 can be held by the sel-nexus vite server — use `npm run dev -- -p 3100`.
+- No model key is configured; chat/eval/brief paths say so honestly. Root OpenDots Phase 1
+  (E2B measurements) still precedes any desktop work.
+- Start dev with `env -u OPENAI_API_KEY node scripts/dev.mjs -p 3100`; the script forwards args
+  **without** `--` (`-- -p 3100` becomes a directory argument and Next refuses to boot).
+- Stopping a dev server from a task runner kills the wrapper only: read the pid from
+  `.next/dev/lock` (or `netstat -ano | grep :3100`) and `taskkill /PID <pid> /T /F`, then
+  `git checkout next-env.d.ts` (dev rewrites it to `.next/dev/types`).
+- `cancel-proof.mjs` needs `AROVA_SANDBOX_PROVIDER=wsl` on the server process; the plain sweep
+  does not.
+- curl on this host dies on schannel CRL; use node fetch. `npm run lint` stays out of the gate.
+- Arova's name is crowded (feature-parity §6.6); root D-26 still blocks any public push.
 
 ## NEXT STEP (the one thing to do)
 
-**Provision srt on this host:** run `npx srt windows-install` (one UAC prompt; on a shared machine
-use `--skip-profile-grant`), restart the dev server, then Integrations → Sandbox → Check. A passing
-check should show `arova-sandbox-ok`. Then run `node .impeccable/srt-spike.mjs` for the eight policy
-checks (empty allowlist, metadata/loopback, filesystem, concurrency, Chromium). If Windows is not the
-target, install Node ≥22.12 + `socat` in WSL2 and run the spike there. The other pending evidence is
-a live eval with a configured model key.
+Nothing structural is open in Arova. The next work is either (a) the owner's unblocks — a model
+key, the OAuth client, the D-26/D-30 name decisions, root Phase 1 E2B measurements — or (b) a
+finish review of this refactor in a fresh context, then push decision. S-1 (append-only run
+journal) still waits on the owner accepting a second transcript.
 
 ## Open with the user
 
-1. **Push?** The three commits are local on `main`; nothing has been pushed to `origin`.
-2. **Model key** for the live eval and real channel notification.
-3. **D-19 vs root D-30** — self-host first is the working answer; the owner may still choose hosted.
-4. **Name** — Arova is crowded; legal/search check before publishing.
-5. **Channel target storage** — encrypt at rest / secret manager before a public deployment.
-
-## Session 2026-10-28 (later) — Feature 22, the citation ledger
-Reading the tool loop for the session's next improvement found a defect, not a wish: every `web_search` numbered its own results from `[1]` while the UI re-numbered the deduped source list from `[1]` again, so a second search made every citation name a page the model had not read. `web_fetch` returned no source at all, and an invented number rendered exactly like a real one.
-
-**Built, test-first.** `src/lib/citations.ts` (7 tests, RED first): `createLedger` / `addSource` (one stable number per unique URL, fragment-stripped, cap 12 — past the cap a source is never numbered) and `citationReport` → `{cited, unresolved, uncited}`, ignoring `[0]` and numbers inside code spans/fences. `executeToolCall` now takes the ledger, so search text and the source list share numbering; `web_fetch` returns its final URL and title, and its output is prefixed with its number. `ToolLoopResult` carries `sources[{index,title,url}]` and `citations`; the report runs on `splitReasoning(content).answer`. Both reply paths store it through one `toolLoopMetadata()` helper. The UI prints each source's own index and a waiting-coloured line for invented citations. The system prompt now says numbers are fixed for the whole reply.
-
-**Verified.** 241/241 tests, `next typegen`, `tsc`, `npm run build` green. Live against `.impeccable/tool-loop-fixture.mjs` (rewritten to do two searches — the second repeats a URL — and answer citing [1], [3] and inventing [9]): stored `sources` indices `[1,2,3]` in discovery order, `citations {cited:[1,3],unresolved:[9],uncited:[2]}`, two `tool.called` audits, report survives reload (`.impeccable/citation-proof.mjs`). Real Chrome at 1440×900 and 390×844: `Sources: [1] Arova docs · [2] Arova notes · [3] Arova pricing`, the [9] warning in `rgb(232,178,92)`, `CONSOLE: []`, no overflow (`.impeccable/cdp-citations.mjs`).
-
-**Not verified.** A real search provider and vendor model (no key), unchanged. No schema change; rows stored before this fall back to list position.
-
-**Uncommitted.** Everything above is in the working tree; HEAD is still `3698c21`.
-
-NEXT STEP (the one thing to do): a finish review in a fresh context, then commit (the last explicit request was "commit these changes" for the previous batch; this batch is new).
-
-## Session 2026-10-28 (evening) — Feature 23, Stop actually stops
-The Stop button aborted only the browser's read; the tool loop checked nothing between turns, kept buying model turns and tool calls, and then stored a complete answer the reader had cancelled. Nothing recorded that a stop happened.
-
-**Built.** `streamReply` owns one `AbortController`; both `cancel()` and `request.signal` call `leave()` (marks closed, aborts). The router and each tool-loop turn get the signal; `requestCompletion` combines it with the timeout and **never retries an abort** (one attempt, then the caller's error). `runToolLoop` polls `shouldStop` before each turn/call — a tool already running finishes, nothing new starts — and returns `stopped`. A stopped loop writes **no assistant row and no provider-error row**, only `chat.stopped` ("Stopped by the reader before the tool loop finished; no answer was stored"). Token-streamed replies are unchanged and still keep their partial.
-
-**Verified.** New tests: one model turn after a stop (+ running tool kept), one fetch attempt after an abort. Live fixture (loop turn delayed 1.2 s, `/stats` counts): reader aborts on the first `tool` event → `{calls:3, delayed:1, aborted:1}`, no delta, only the greeting stored, one stop audit (`.impeccable/stop-proof.mjs`). 243 tests, typegen/tsc/build green. Spec 23, D-27.
-
-**Resolved later the same session:** briefs and consult calls now abort too (D-28); a stopped token stream keeps its partial and closes the connection.
-
-Committed as `d072736`.
-
-### Same session, continued — briefs stop too (D-28)
-D-27 covered chat; an org brief still only polled `isClosed` between steps, so a reader who left kept paying for the router and every seat call and the report was written afterwards. `streamBrief` now owns the same controller (cancel + `request.signal`), `runBrief` polls `stopped()` before the first summons, each routing pass, each seat call and the report, and the signal reaches `routeDecision` and `consultPeer` recursively. A stopped brief writes one `channel_gap` row with `metadata.stopped`, audits `brief.stopped`, finishes `CANCELLED`, and writes no "did not answer" gap and no `provider_error`; posts already landed stay. `streamText` moved to the gateway as `readSseText`, which calls `reader.cancel()` on stop — partial text kept, provider connection closed.
-
-Verified 244/244 tests; live brief proof `{calls:2, delayed:1, aborted:1}` + stop row + CANCELLED run + one audit (`.impeccable/brief-stop-proof.mjs`); both earlier live proofs re-run. The local fix queue is now empty; remaining blockers are credential/infrastructure ones (OAuth client, sandbox provisioning, vendor/search keys, pgvector).
-
-**Also fixed:** the client's Stop toast promised a stored partial for a tool loop, which stores nothing. It now picks the message from what happened (stored partial / streamed-but-landing / nothing streamed) and was verified through the real composer in Chrome (`.impeccable/cdp-stop-toast.mjs`). Committed as `6d98ba8`.
-
-**Sweep fixes (D-29):** history paging now uses `(created_at, id)` — 250 tied rows reproduced the old 0-row page, the pair cursor returned 50 with no overlap (`paging-proof.mjs`, needs the app's DATABASE_URL from `.env.local`, never printed). The search adapter refuses non-local http so a key cannot ride plain http.
-
-
-## Session 2026-10-28 — final state of the fix queue
-Five commits on `main`, none pushed: `9c6fb91` (one citation ledger), `d072736` (Stop aborts the tool loop), `06dbc07` (briefs stop; stopped streams close their connection), `6d98ba8` (the Stop toast says what was stored), `45a409c` (history pages on `(created_at, id)`; search refuses non-local http). 245/245 tests, typegen/tsc/build green, tree clean.
-
-**The local fix queue is empty.** Remaining work is blocked on people or infrastructure, not on code:
-- Google OAuth client + `AUTH_PROVIDERS` / `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` for Feature 15's live flow.
-- `npx srt windows-install` (one-time UAC) before the local-os sandbox can run a command on this host.
-- A vendor model and a real search endpoint to prove the tool loop against them (the fixture proves the wiring only).
-- `pgvector` is not available on this Postgres; memory is keyword and the UI says so.
-- Next 16.2.6 carries a critical advisory; upgrading to 16.4.3 is the owner's call.
-- The 20 pre-existing lint errors stay out of the gate unless the owner asks for them.
-Owner decisions still open: the 28-seat Nexus Labs org (L-12), reasoning-in-content display (L-04), and whether to push `main`.
-
-## Session 2026-10-28 (night) — the sandbox is provisioned but the host still refuses to launch it
-Owner ran `npx srt windows-install`. Two defects of ours fixed: (1) `denyRead` home entries (`~/.ssh`, …) made
-srt-win rewrite the profile root's DACL and walk the tree — removing them made the ACL grant finish in <1s;
-`buildSrtSettings` is now platform-aware (home denies only on non-Windows; `.env` denies stay). (2) An
-`incomplete` profile read grant refuses every session; `profile forget` took >1h and repaired it. The Sandbox
-tab states the right install (`--skip-profile-grant`, Secondary Logon).
-
-**Still blocked on the host:** `srt-win exec` fails `CreateProcessWithLogonW(srt-sandbox): Access denied
-(0x80070005)` with seclogon running, the account enabled, the credential present, no leftover process. Next:
-`npx srt uninstall` then `npx srt windows-install --skip-profile-grant` (UAC), restart dev from the user's own
-terminal, Check. If it still refuses, this host cannot start the sandbox account; the provider stays
-fail-closed and nothing else is affected. D-30, spec 19.
-
-**After the reinstall (D-31/D-32).** Windows workspaces moved to `%PUBLIC%\arova\sandboxes` because the
-sandbox account cannot read the user profile with `--skip-profile-grant` (srt-win called that
-`mapped_drive_cwd`). The command budget is 120 s because initialize's WFP probe has its own 30 s budget.
-The remaining refusal is the host's: the installer adds `SeDenyRemoteInteractiveLogonRight` for
-`srt-sandbox` (string in the vendored exe) and this is an RDP session, so `CreateProcessWithLogonW` is
-denied. Console session should work; secpol removal is the owner's call. Sandbox command still unverified.
-
-## Session 2026-10-28 (late night) — a working sandbox via WSL
-The Windows ASRT runtime is blocked by `SeDenyRemoteInteractiveLogonRight` in an RDP session. Added a
-`wsl` provider (`src/lib/sandbox-wsl.ts`, `AROVA_SANDBOX_PROVIDER=wsl`): bubblewrap inside WSL2 with
-`--unshare-all`, read-only root, workspace-only writes, private `/tmp`, cleared env, and both homes
-masked; commands are staged as a script so no argv carries user text. Live proof through the API and the
-real Check button: echo output, profile hidden, network unreachable, `/etc` read-only, empty Linux home,
-runs/audits recorded. Limits stated in the UI: no proxy/allowlist, no seccomp monitor, no snapshot.
-Spec 19 (WSL section), D-33. The Windows path remains for a console session; Node+socat in WSL would
-allow the ASRT runtime there later.
-
-## Session 2026-10-28 (redesign unit 1)
-The owner asked for a redesign: use the left chrome or drop it, decompress Integrations, sharpen radii. Unit 1 shipped: Integrations panel is a five-item sub-nav (no duplicate list), main pane owns connector cards in a 300px grid with one page-level note, activity column starts closed with a rail toggle, Overview gained a 300px Up next/Recent aside, radii went 8/12/16 → 4/7/10 (rail 9). Tabs wrap. Verified with `.impeccable/cdp-shell-check.mjs` at 1440 (and shots at 390). Next units: Agents/Organisation/Automations/Settings surfaces against the same rules.
-
-**Redesign unit 2:** one control per surface (Automations panel no longer repeats the tabs), org stats are one inline strip, settings forms cap at 780px, thread/composer centre on 960/880, and all leftovers joined the radius ladder (7/8/9/10/12). Extended `cdp-shell-check.mjs` asserts all of it. Next: the channel surface and the phone header density.
-
-**Redesign unit 3:** phone header compacted to two rows + a scrollable facts line, rail icon-only; shell check now asserts 390px overflow and hidden labels. Redesign is committed in three units (8bfe5f7, 5107fe9, this one).
-
-## Session 2026-10-29 — audit, no behaviour change
-
-Read the app against its specs and against the root OpenDots record. Defects are
-`context/current-issues.md` (C-1…C-20, S-1…S-5). New contracts: specs 25–28. Docs that still
-described "no worker / no tools / no sandbox" were corrected. The first fix is spec 25, and the
-first line of it is the IPv6 hole in `validateFetchTarget`. No test gate was run; nothing was committed.
+1. **Push?** All commits are local on `main`; nothing has been pushed to `origin`.
+2. **Model key** for live evals, briefs and the tool loop against a real provider.
+3. **Root decisions** D-26 (OpenDots name) and D-30 (self-host vs hosted).
+4. **Channel target encryption** before any public deployment.

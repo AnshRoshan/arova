@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agents, events, messages, runs, teams, triggers } from "@/db/schema";
 import { resolveLead } from "@/lib/channel";
-import { runBrief } from "../board/route";
+import { runBrief } from "@/lib/brief-runner";
 
 export const dynamic = "force-dynamic";
 

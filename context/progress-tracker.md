@@ -426,3 +426,31 @@ rows are in the audit export and their events in the activity record.
 refused the duplicate, saved a pasted source, pinned it, saved a two-source finding, refused a
 cross-project citation, archived the project and proved the cascade delete. Chrome opened the
 Research rail and saw the project, the pasted source and the findings section. D-44.
+
+## Session 2026-11-03 (spec 26, third slice) — the route only authenticates, parses and dispatches
+
+`board/route.ts` fell from 1,876 to 87 lines. The chat reply path moved to `src/lib/chat-runner.ts`
+(planReply, routeDecision, consultPeer, approvalReply, the tool loop, buildReply, streamReply); the
+org brief to `src/lib/brief-runner.ts` (runBrief, streamBrief, plainLine); the whole action chain to
+`src/lib/board-actions.ts` (`dispatchAction` returning `{result}` or a streaming `response`); the
+payload to `src/lib/board-payload.ts`; and the shared helpers (postToChannel, channelTurns,
+callsToday, recallMemories, ownMemory, quotaReply, failureReply, QuotaExceeded, requireBudget, the
+timeout/ceiling config, cookieName) into `board-core.ts`. The route keeps only sameOrigin, the
+write bucket, workspace resolution and the final `board:` assembly. `runBrief` no longer lives in a
+route module: `/api/trigger` and `/api/channels/[token]` import it from `brief-runner`, and
+`/api/auth/callback` takes `cookieName` from `board-core` — a route importing another route is gone.
+Code moved verbatim; no behaviour change was intended or observed.
+
+**Proofs.** `npm test` **284/284**, `tsc --noEmit` ✓, `npm run build` ✓ (all 11 routes). On :3100
+the API sweep is **35/35**, and `cancel-proof.mjs` passes end to end against the real `wsl`
+provider: a `sleep` command's RUNNING run was cancelled mid-flight, the late result reported
+"Cancelled by a person", the stored row stayed CANCELLED with "Cancelled by user after: Running the
+command." `run-contract-proof.mjs` passes its catch-up checks (single claim, missed-slot summary,
+recorded step, Run-now refusal while RUNNING); its "Calling the model" step check cannot pass on
+this host because no model provider is configured, so `executeRoutine` honestly refuses before that
+step — the same pre-existing code, untouched by this refactor. (The sweep and cancel proof run the
+dispatcher through ~40 actions live, which is the behavioural coverage the old route had.)
+
+**Structural item closed.** Spec 26's extraction is complete: tick/claim (routine-runner), the run
+contract (run-contract), the sandbox console (sandbox-run), chat (chat-runner), briefs
+(brief-runner), the payload (board-payload) and the dispatcher (board-actions).

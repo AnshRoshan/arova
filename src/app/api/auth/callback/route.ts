@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { completeSignIn, findProvider, flowCookie, sessionCookie } from "@/lib/auth-sessions";
-import { cookieName } from "../../board/route";
+import { cookieName } from "@/lib/board-core";
 
 export const dynamic = "force-dynamic";
 
