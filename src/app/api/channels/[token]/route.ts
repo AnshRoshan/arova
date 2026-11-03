@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agents, channelDeliveries, channels, events, messages, runs, teams } from "@/db/schema";
 import { resolveLead } from "@/lib/channel";
-import { runBrief } from "../../board/route";
+import { runBrief } from "@/lib/brief-runner";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
