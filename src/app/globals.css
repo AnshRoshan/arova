@@ -14,14 +14,14 @@
   --raised: #1e2232;    /* hover, selected, tabs track */
   --sunken: #0a0c13;    /* inputs, code, recessed wells */
 
-  /* text */
-  --ink: #eef0f8;
-  --ink-2: #a8aec6;
-  --ink-3: #8b92ad;     /* tuned to clear 4.5:1 on --raised, the lightest surface it lands on */
+  /* text — lifted for legibility on the graphite ramp */
+  --ink: #f4f6fc;
+  --ink-2: #bfc7d8;
+  --ink-3: #9ba4bb;     /* clears 4.5:1 on --raised, the lightest surface it lands on */
 
-  /* hairlines */
-  --rule: #222638;
-  --rule-2: #343a55;
+  /* hairlines — visible structure, not invisible seams */
+  --rule: #2a3040;
+  --rule-2: #3d4560;
 
   /* interaction — one accent, with its own dark-ground family */
   --azure: #8b9bff;
@@ -42,9 +42,9 @@
   /* the code well: the only recessed surface, deliberately darker than everything */
   --code-bg: #080a10; --code-line: #1f2335; --code-text: #dfe6ee; --code-lang: #7f8b99;
 
-  --r-sm: 4px; --r: 7px; --r-lg: 10px;
-  --rail-w: 64px; --panelw: 244px; --boardw: 300px;
-  --measure: 80ch; --gutter: 40px;
+  --r-sm: 6px; --r: 8px; --r-lg: 12px;
+  --rail-w: 76px; --panelw: 252px; --boardw: 312px;
+  --measure: 78ch; --gutter: 32px;
   --shadow-lift: 0 30px 80px rgba(2, 3, 12, .7), 0 0 0 1px rgb(var(--azure-rgb) / .08);
   --ease: cubic-bezier(.22, .68, .31, 1);
 }
@@ -88,11 +88,11 @@ textarea, input { caret-color: var(--azure); }
 .rail-logo:hover { transform: scale(1.05); background: var(--azure-bright); }
 .rail-items { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; width: 100%; align-items: center; overflow-y: auto; scrollbar-width: none; }
 .rail-items::-webkit-scrollbar { display: none; }
-.rail-btn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 54px; padding: 10px 0 8px; border-radius: var(--r); color: var(--ink-3); transition: background .15s var(--ease), color .15s var(--ease); }
-.rail-btn:hover { background: #171b2a; color: var(--ink); }
-.rail-btn.on { background: var(--azure-wash); color: var(--azure-bright); }
-.rail-btn.on::before { content: ""; position: absolute; left: -7px; top: 13px; bottom: 13px; width: 3px; border-radius: 0 3px 3px 0; background: var(--azure); }
-.rail-label { font-size: 9.5px; font-weight: 700; line-height: 1; }
+.rail-btn { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; width: 64px; padding: 10px 0 9px; border-radius: var(--r); color: var(--ink-3); transition: background .15s var(--ease), color .15s var(--ease); }
+.rail-btn:hover { background: var(--raised); color: var(--ink); }
+.rail-btn.on { background: var(--azure-wash); color: var(--ink); }
+.rail-btn.on::before { content: ""; position: absolute; left: -6px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--sec, var(--azure)); }
+.rail-label { font-size: 10.5px; font-weight: 600; line-height: 1; letter-spacing: .01em; color: inherit; }
 .rail-badge { position: absolute; top: 4px; right: 6px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 99px; background: var(--waiting); color: #17140d; font-style: normal; font-size: 9px; font-weight: 800; display: grid; place-items: center; }
 .rail-foot { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; }
 .rail-foot .rail-btn { padding: 11px 0; }
@@ -109,8 +109,8 @@ textarea, input { caret-color: var(--azure); }
 .sp-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 auto; border-radius: var(--r-sm); color: var(--ink-2); border: 1px solid var(--rule); }
 .sp-icon:hover { background: var(--raised); color: var(--ink); border-color: var(--rule-2); }
 .sp-collapse { border-color: transparent; color: var(--ink-3); }
-.sp-tabs { display: flex; flex-wrap: wrap; gap: 3px; margin: 0 12px 10px; padding: 3px; border-radius: var(--r); background: var(--sunken); flex: 0 0 auto; }
-.sp-tabs button { flex: 1 1 auto; min-width: 72px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 8px; border-radius: var(--r-sm); font-size: 11.5px; font-weight: 600; color: var(--ink-3); white-space: nowrap; }
+.sp-tabs { display: flex; flex-wrap: nowrap; gap: 3px; margin: 0 12px 10px; padding: 3px; border-radius: var(--r); background: var(--sunken); flex: 0 0 auto; }
+.sp-tabs button { flex: 1 1 0; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 6px; border-radius: var(--r-sm); font-size: 11.5px; font-weight: 600; color: var(--ink-3); white-space: nowrap; overflow: hidden; }
 .sp-tabs button:hover { color: var(--ink); }
 .sp-tabs button.on { background: var(--raised); color: var(--ink); }
 .sp-tabs span { font-family: var(--font-mono), monospace; font-size: 9.5px; padding: 0 5px; border-radius: 99px; background: var(--sheet); color: var(--ink-2); }
@@ -204,9 +204,13 @@ button.node:hover { background: #1a1e2d; }
 .fact.live .fact-dot { background: var(--ran); }
 
 .sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; position: relative; background: var(--sheet); }
+/* A sparse thread rises from the composer instead of leaving a dead void under two messages.
+   Scoped with :has so pane/overview bodies keep normal block flow. */
+.sheet-body:has(> .thread) { display: flex; flex-direction: column; }
+.sheet-body > .thread { margin-top: auto; flex-shrink: 0; }
 
 /* thread */
-.thread { max-width: 960px; margin: 0 auto; padding: 22px var(--gutter) 8px calc(var(--gutter) + 6px); }
+.thread { max-width: 1040px; margin: 0 auto; padding: 22px var(--gutter) 8px calc(var(--gutter) + 6px); }
 .thread > div { display: contents; }
 .rule-day { display: flex; align-items: center; gap: 12px; margin: 24px 0 6px; }
 .rule-day span { font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
@@ -219,6 +223,7 @@ button.node:hover { background: #1a1e2d; }
 .entry + .entry { border-top: 1px solid var(--rule); }
 .entry-main { min-width: 0; }
 .entry-face { display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--r-sm); border: 1px solid var(--rule-2); background: var(--card); color: var(--ink-2); flex: 0 0 auto; }
+.face-mono { font-family: var(--font-display), sans-serif; font-weight: 800; line-height: 1; letter-spacing: -.02em; }
 .entry-assistant .entry-face { background: var(--h-wash); border-color: var(--h-line); color: var(--h-ink); }
 .entry-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-bottom: 2px; }
 .entry-head strong { font-size: 13px; font-weight: 700; }
@@ -421,8 +426,8 @@ button.bd-row:hover { background: #1a1e2d; }
 .board-usage { font-size: 10.5px; color: var(--ink-3); }
 
 /* ── panes ─────────────────────────────────────────────────────────────── */
-.pane { max-width: 1080px; margin: 0 auto; padding: 30px 34px 48px; }
-.pane .stack { max-width: 780px; }
+.pane { max-width: 1240px; margin: 0 auto; padding: 30px 34px 48px; }
+.pane .stack { max-width: 860px; }
 .org-strip { display: flex; flex-wrap: wrap; gap: 6px 22px; margin: 4px 0 18px; padding: 11px 2px 12px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); color: var(--ink-2); font-size: 12.5px; }
 .org-strip b { color: var(--ink); font-weight: 700; margin-right: 4px; }
 .pane-head { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 22px; }
@@ -433,14 +438,17 @@ button.bd-row:hover { background: #1a1e2d; }
 .rows { border: 1px solid var(--rule); border-radius: var(--r); background: var(--card); overflow: hidden; }
 .pane-lede { max-width: 74ch; margin: 0 0 22px; font-size: 13px; line-height: 1.6; color: var(--ink-2); }
 .tool-surface { max-width: 880px; }
-.connector-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
-.connector-card { display: flex; flex-direction: column; gap: 10px; padding: 16px 18px 14px; border: 1px solid var(--rule); border-radius: var(--r); background: var(--card); }
-.connector-card header { display: flex; align-items: center; gap: 10px; }
-.connector-card h3 { margin: 0; font-size: 15px; }
-.connector-card header em { display: block; font-style: normal; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
-.connector-card p { margin: 0; font-size: 13px; line-height: 1.55; color: var(--ink-2); }
-.connector-card footer { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 12px; color: var(--ink-3); }
-.connector-card .chip { margin-left: auto; }
+.connector-grid { display: flex; flex-direction: column; border: 1px solid var(--rule); border-radius: var(--r); background: var(--card); overflow: hidden; }
+.connector-card { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 3px 14px; padding: 13px 16px; }
+.connector-card + .connector-card { border-top: 1px solid var(--rule); }
+.connector-card header { display: contents; }
+.connector-card .row-face { grid-column: 1; grid-row: 1 / span 2; align-self: center; width: 34px; height: 34px; }
+.connector-card header > div { grid-column: 2; grid-row: 1; display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.connector-card h3 { margin: 0; font-size: 14px; }
+.connector-card header em { font-style: normal; font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.connector-card p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-2); grid-column: 2; grid-row: 2; }
+.connector-card footer { display: none; }
+.connector-card .chip { grid-column: 3; grid-row: 1; margin-left: 0; }
 .row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 14px; }
 .row + .row { border-top: 1px solid var(--rule); }
 button.row:hover { background: #232842; }
@@ -712,13 +720,12 @@ body { background: var(--void); -webkit-font-smoothing: antialiased; text-render
 /* The stage breathes the open room's hue: --sec is set on .workbench, so each section's
    aurora is its own colour. Room paint marks where you are; buttons stay azure. */
 .workbench { background:
-  radial-gradient(1000px 560px at 78% -8%, color-mix(in srgb, var(--sec) 18%, rgb(var(--indigo-rgb) / .14)), transparent 62%),
-  radial-gradient(760px 520px at 4% 110%, color-mix(in srgb, var(--sec) 10%, rgb(var(--violet-rgb) / .11)), transparent 62%),
-  radial-gradient(560px 380px at 50% 46%, color-mix(in srgb, var(--sec) 6%, rgb(94, 200, 230 / .045)), transparent 70%),
+  radial-gradient(1000px 560px at 78% -8%, color-mix(in srgb, var(--sec) 9%, rgb(var(--indigo-rgb) / .07)), transparent 62%),
+  radial-gradient(760px 520px at 4% 110%, color-mix(in srgb, var(--sec) 5%, rgb(var(--violet-rgb) / .05)), transparent 62%),
   var(--sheet); }
 .sheet, .sheet-body { background: transparent; }
 .sheet-bar { background: rgba(12, 14, 21, .66); backdrop-filter: blur(18px) saturate(1.3); -webkit-backdrop-filter: blur(18px) saturate(1.3); border-bottom-color: rgb(var(--azure-rgb) / .12); box-shadow: inset 0 1px 0 rgb(var(--azure-rgb) / .06); position: relative; z-index: 2; }
-.sheet-bar h1, .ident-main h1 { background: linear-gradient(180deg, #fff 30%, #c6cdf5); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.sheet-bar h1, .ident-main h1 { color: var(--ink); }
 .page-heading h1 { font-size: 22px; }
 
 /* rail */
@@ -850,7 +857,6 @@ button.row:hover, .row:hover { background: rgb(var(--azure-rgb) / .045); }
 .ao-hero.waiting { --tone: var(--waiting); --tone-wash: rgb(var(--waiting-rgb) / .14); border-color: var(--waiting-line); }
 .ao-hero.fault { --tone: var(--fault); --tone-wash: rgb(var(--fault-rgb) / .15); border-color: var(--fault-line); }
 .ao-hero-main { position: relative; flex: 1; min-width: 0; }
-.ao-kicker { display: block; font-size: 10px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--tone, var(--ink-3)); margin-bottom: 4px; }
 .ao-hero h2 { font-size: 30px; font-weight: 800; letter-spacing: -.03em; margin-bottom: 6px; }
 .ao-hero p { margin: 0; max-width: 56ch; color: var(--ink-2); font-size: 14px; }
 .ao-hero-meta { display: flex; gap: 8px 18px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--ink-3); }
@@ -897,8 +903,7 @@ button.row:hover, .row:hover { background: rgb(var(--azure-rgb) / .045); }
 
 /* ── first-run welcome + overview scheduler chip ──────────────────────── */
 .welcome { position: relative; overflow: hidden; margin-bottom: 28px; padding: 34px 34px 30px; border-radius: 12px; border: 1px solid rgb(var(--azure-rgb) / .22); background: radial-gradient(620px 260px at 0% 0%, rgb(var(--indigo-rgb) / .22), transparent 70%), radial-gradient(520px 260px at 100% 100%, rgb(var(--violet-rgb) / .16), transparent 70%), linear-gradient(180deg, rgba(25, 29, 45, .95), rgba(13, 15, 24, .96)); box-shadow: var(--edge), var(--shadow-lift); }
-.welcome .ao-kicker { color: var(--azure-bright); }
-.welcome h2 { font-size: 34px; font-weight: 800; letter-spacing: -.035em; margin-bottom: 8px; background: linear-gradient(180deg, #fff 30%, #bfc8ff); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.welcome h2 { font-size: 32px; font-weight: 800; letter-spacing: -.03em; margin-bottom: 8px; color: var(--ink); }
 .welcome > p { max-width: 54ch; margin: 0 0 22px; font-size: 15px; color: var(--ink-2); }
 .welcome-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 0 0 22px; padding: 0; list-style: none; }
 .welcome-steps button { display: flex; gap: 13px; align-items: flex-start; width: 100%; height: 100%; text-align: left; padding: 15px; border-radius: 8px; border: 1px solid rgb(var(--azure-rgb) / .14); background: rgba(8, 10, 16, .55); transition: transform .26s var(--ease), border-color .26s, background .26s, box-shadow .26s; }
@@ -918,10 +923,12 @@ button.row:hover, .row:hover { background: rgb(var(--azure-rgb) / .045); }
    room's colour). Identity tints stay three (state semantics keep theirs);
    colour here marks *where you are*, never *what happened*.
    ═══════════════════════════════════════════════════════════════════════════ */
-.rail-btn { color: color-mix(in srgb, var(--sec) 52%, var(--ink-3)); }
-.rail-btn:hover { background: color-mix(in srgb, var(--sec) 10%, transparent); color: color-mix(in srgb, var(--sec) 85%, white); }
-.rail-btn.on { background: color-mix(in srgb, var(--sec) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec) 32%, transparent), 0 6px 20px -8px color-mix(in srgb, var(--sec) 60%, transparent); color: color-mix(in srgb, var(--sec) 92%, white); }
-.rail-btn.on::before { background: var(--sec); box-shadow: 0 0 12px var(--sec); }
+/* Room hue marks only the active destination and the stage light; resting rail labels stay
+   neutral so the nav reads as one instrument, not a colour bar. */
+.rail-btn { color: var(--ink-3); }
+.rail-btn:hover { background: var(--raised); color: var(--ink); }
+.rail-btn.on { background: color-mix(in srgb, var(--sec) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec) 30%, transparent); color: var(--ink); }
+.rail-btn.on::before { background: var(--sec); box-shadow: 0 0 10px color-mix(in srgb, var(--sec) 60%, transparent); }
 .rail-btn.on .rail-label { color: inherit; }
 .iconrail { border-right-color: color-mix(in srgb, var(--azure) 6%, transparent); }
 .sidepanel { border-right-color: color-mix(in srgb, var(--sec) 14%, transparent); }
