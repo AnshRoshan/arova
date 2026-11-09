@@ -485,3 +485,38 @@ Why not B: the same source is reused across questions and must remain numbered a
 Design: `research_sources` uses the partial unique `(project_id, url) WHERE url <> ''` so pasted notes are unlimited but a URL is saved once. Fetches go through `webFetch` unchanged, so https-only, public-address and body-cap rules apply. `researchBrief` numbers pinned sources first and resolves finding ids to those numbers; the client copies it. Findings validate source ids against their own project in SQL before insert.
 
 Cost: three tables, eight actions, one pane. Reversibility: drop the tables and the rail entry. Evidence: 284/284 tests; `.impeccable/research-proof.mjs` passes live; Chrome sees the project and source.
+
+---
+
+## D-45 — Whole-bench structural redesign (2026-11-09)
+
+**Context.** The owner judged the whole UI "very, very bad" and asked for a redesign of every room,
+section and component — not a token polish. Captured before-shots (`.impeccable/shots/redesign-before-*.png`)
+named the concrete defects: a dead black void under a sparse thread, section tabs wrapping to two
+rows, one identical Sparkles glyph on every seat, 9.5px rainbow rail labels, a triple-duplicated
+Integrations heading, and six connector cards with ~60% dead space.
+
+**Decision.** A structural pass over `globals.css` plus the JSX that owns the duplicated marks:
+contrast lifted (`--ink/--ink-2/--ink-3`, `--rule/--rule-2`); radii settled at 6/8/12 and columns at
+76·252·fluid·312 with `--gutter` 32 and `--measure` 78ch; the rail goes neutral with one room-hue mark
+per room; tabs forced to a single row; connector cards become one hairline list (a row per surface,
+status right-aligned); gradient text-clip retired from `h1` and the welcome hero; the aurora reduced
+to two quiet radials; the retired `.ao-kicker` device deleted from the welcome and the control room;
+the Integrations panel retitled "Surfaces" so panel, sheet-bar and pane-head no longer repeat one
+word; `FaceIcon` falls back to a name monogram instead of a shared Sparkles; a seventh room hue
+(mint) added for Research so no two rooms share a rail colour; and a sparse thread now rises from the
+composer (`.sheet-body:has(> .thread)` flex + `margin-top:auto`) so the void sits above the day
+divider as headroom, not under the messages.
+
+**Why not a re-skin.** The defects were layout and duplicated marks, not hue; repainting tokens would
+have left the void, the wrapped tabs and the triple heading exactly where they were.
+
+**Constraints honoured.** `identity.test.ts` still parses the live `globals.css` and passes (284/284):
+three identity tints, dark glyphs, ink contrast and hue separation all unchanged. Room hues may reuse
+identity/state hues because a rail mark is never a status dot. No stored-row semantics touched.
+
+**Evidence.** `npx next typegen`, `tsc --noEmit`, `npm test` (284/284), `npm run build` and
+`GET /api/health` (200) all green on the working tree; after-shots
+(`.impeccable/shots/redesign-after-*.png`) show the hairline connector list, single-row tabs, neutral
+rail, distinct seat tiles and the composer-anchored thread. DESIGN.md frontmatter and layout prose
+re-synced to the built values in the same pass.

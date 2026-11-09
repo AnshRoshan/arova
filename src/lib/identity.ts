@@ -46,6 +46,7 @@ export const SECTION_COLORS: Record<string, string> = {
   overview: "#8b9bff", /* azure — the default, so Overview keeps the interaction colour */
   agents: "#a8d98a",   /* sage — the bench is where identities live */
   org: "#70d2db",      /* aqua — the chart */
+  research: "#7fd6a4", /* mint — the reading room; a rail mark, never a status dot */
   scheduler: "#e6b455",/* amber — time; a rail mark, never a status dot */
   tools: "#b78ff2",    /* violet — integrations */
   settings: "#f08cb8", /* rose — the last room; rose on a rail is not a fault dot */

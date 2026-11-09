@@ -75,7 +75,6 @@ export function AlwaysOn({ info, origin, routineCount, enabledCount, onPreset, o
     <section className={`ao-hero ${head.tone}`} aria-live="polite">
       <div className="ao-beacon" aria-hidden><i /><i /><i /><HeartPulse size={26} /></div>
       <div className="ao-hero-main">
-        <span className="ao-kicker">Scheduler status</span>
         <h2>{head.title}</h2>
         <p>{head.body}</p>
         <div className="ao-hero-meta">

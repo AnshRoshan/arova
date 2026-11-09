@@ -8,11 +8,11 @@ colors:
   sheet: "#0f111a"
   card: "#151824"
   raised: "#1e2232"
-  ink: "#eef0f8"
-  ink-2: "#a8aec6"
-  ink-3: "#8b92ad"
-  rule: "#222638"
-  rule-2: "#343a55"
+  ink: "#f4f6fc"
+  ink-2: "#bfc7d8"
+  ink-3: "#9ba4bb"
+  rule: "#2a3040"
+  rule-2: "#3d4560"
   azure: "#8b9bff"
   azure-bright: "#b4beff"
   azure-wash: "#1b2147"
@@ -59,6 +59,7 @@ colors:
   sec-overview: "#8b9bff"
   sec-agents: "#a8d98a"
   sec-org: "#70d2db"
+  sec-research: "#7fd6a4"
   sec-scheduler: "#e6b455"
   sec-tools: "#b78ff2"
   sec-settings: "#f08cb8"
@@ -89,7 +90,7 @@ typography:
     lineHeight: 1.62
     letterSpacing: "-.01em"
   # The enumerated ramp the built world actually uses. `chrome` is the half-stepped
-  # ladder a 276px panel and a 320px board are set in; the named roles above are prose.
+  # ladder a 252px panel and a 312px board are set in; the named roles above are prose.
   scale:
     chrome-9: "9px"
     chrome-95: "9.5px"
@@ -112,9 +113,9 @@ typography:
     pane-head: "24px"
     h1: "26px"
 rounded:
-  sm: "8px"
-  md: "12px"
-  lg: "16px"
+  sm: "6px"
+  md: "8px"
+  lg: "12px"
   pill: "99px"
   # The one-off ladder the built world uses beyond the tokens, enumerated the way
   # typography.scale is: a radius on this ladder is not drift.
@@ -130,7 +131,7 @@ rounded:
     dialog: "20px"
     hero: "24px"
 spacing:
-  gutter: "40px"
+  gutter: "32px"
 components:
   button-primary:
     background: "{colors.grad}"
@@ -219,7 +220,7 @@ Density is the aesthetic. This is a working tool read every day by one operator 
 - Green/amber/red exist only where a stored row produced them; a sample row wears idle grey, never the green of a real run.
 - Exactly three identity tints (sage/aqua/mauve), each proven 30° clear of the accent and of every state colour — and proven *against the live stylesheet*, because `identity.test.ts` parses `globals.css` for the values it measures.
 - DM Sans body, Manrope headings, JetBrains Mono reserved strictly for measurement.
-- Four fixed columns at wide (68 · 276 · fluid · 320), collapsing through two breakpoints; no section repeats the title of another.
+- Four fixed columns at wide (76 · 252 · fluid · 312), collapsing through two breakpoints; no section repeats the title of another.
 - Every row belongs to exactly one subject — a seat's thread or an organisation's channel — and a channel post always names the seat that wrote it, in that seat's tile and tint.
 
 ## Colors
@@ -309,7 +310,7 @@ These exist for one specific job. **Rule: a second use promotes the value into `
 - **Reading** (DM Sans, 15px/1.7, max-width `80ch` via `--measure`): thread message text, channel posts and composer input.
 - **Label** (DM Sans 700, ~11px, `.08em`, uppercase): group labels, section headings inside panes, chips — the only uppercase device, and it is never a kicker placed *above* a heading.
 - **Mono** (JetBrains Mono, tabular-nums, `-.01em`): numbers, token counts, timestamps, model ids, code, schedule lines.
-- **The chrome ladder** (13.5 → 9px, half-stepped: 13.5, 13, 12.5, 12, 11.5, 11, 10.5, 10, 9.5, 9): the working text of a 276px panel and a 320px board. It is half-stepped deliberately — one full pixel is the difference between a row that holds its two-line label and one that wraps. A new size outside this ladder and the prose steps above is drift; a new size *on* it is not.
+- **The chrome ladder** (13.5 → 9px, half-stepped: 13.5, 13, 12.5, 12, 11.5, 11, 10.5, 10, 9.5, 9): the working text of a 252px panel and a 312px board. It is half-stepped deliberately — one full pixel is the difference between a row that holds its two-line label and one that wraps. A new size outside this ladder and the prose steps above is drift; a new size *on* it is not.
 
 ### Named Rules
 **The Monospace-Means-Measurement Rule.** JetBrains Mono marks only measured data — a count, a time, a token figure, a language tag. It never sets prose. `.num`, `time`, `.mono` exist for this and nothing else.
@@ -322,7 +323,7 @@ The bench is a grid defined once as `.workbench`: `64px` icon rail · `244px` se
 - **Breakpoint 860px:** the section panel becomes a full-width step (rail narrows to `60px`, `--gutter` tightens to 18px); the panel slides in as an overlay (`mpanel`); `.sheet-bar` compresses and `.facts` wrap to a third row. `.only-mobile` appears, `.only-wide` hides.
 - **600px:** agent grid and org stats drop to two columns; the create button collapses to a bare icon.
 
-Visibility helpers are exactly three: `.only-narrow`, `.only-wide`, `.only-mobile`. Rhythm uses `--gutter` (40px, tightening to 18px on mobile) as the sheet's horizontal step and `--measure` (80ch) as the reading column. Thread maxes at 1120px; panes at 1020px.
+Visibility helpers are exactly three: `.only-narrow`, `.only-wide`, `.only-mobile`. Rhythm uses `--gutter` (32px, tightening to 18px on mobile) as the sheet's horizontal step and `--measure` (78ch) as the reading column. Thread maxes at 1040px and rises from the composer when sparse; panes at 1240px.
 
 **The Naming Rule.** The section panel is titled by **what it holds** (Shortcuts, The bench, Routines) while the work surface carries the **section title** (Overview, Organisation, Automations, Integrations, Settings, or the agent's name). Neither repeats the other; a heading is never duplicated in two columns.
 

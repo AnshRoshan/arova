@@ -120,7 +120,7 @@ const ReasoningFold = ({ text, model, streaming = false, truncated = false }: { 
     <div className="reasoning-body">{r.reasoning}</div>
   </details>;
 };
-const FaceIcon = ({ agent, size = 15 }: { agent: Pick<Agent, "avatar">; size?: number }) => { const F = faces[agent.avatar] ?? Sparkles; return <F size={size} strokeWidth={1.9} />; };
+const FaceIcon = ({ agent, size = 15 }: { agent: Pick<Agent, "avatar" | "name">; size?: number }) => { const F = faces[agent.avatar]; return F ? <F size={size} strokeWidth={1.9} /> : <span className="face-mono" style={{ fontSize: size * 0.62 }}>{agent.name.trim().charAt(0).toUpperCase() || "?"}</span>; };
 
 /** A proposed chart inside a card: rows, not openable seats — the seats do not exist yet. */
 function OrgBranch({ node, depth, onPick, current }: { node: OrgNode; depth: number; onPick?: (name: string) => void; current?: string }) {
@@ -667,7 +667,7 @@ export default function Workbench() {
   const realPending = pendingApprovals.filter(a => !a.detail.includes("Sample approval"));
   // The channel is reached from the bench, so the bench stays on screen while the channel is open.
   const section: Pane | "agents" = !pane || pane === "channel" ? "agents" : pane;
-  const panelTitle = { overview: "Shortcuts", agents: "The bench", org: "Reporting lines", scheduler: "Routines", tools: "Connectors", settings: "Workspace", research: "Projects" }[section];
+  const panelTitle = { overview: "Shortcuts", agents: "The bench", org: "Reporting lines", scheduler: "Routines", tools: "Surfaces", settings: "Workspace", research: "Projects" }[section];
   const agentMatch = (a: Agent) => (!filter || `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase())) && (agentTab === "all" || (agentTab === "active") === (a.status === "ACTIVE"));
   const activeTeam = data.teams.find(t => t.id === orgSel) ?? data.teams[0];
   const railItems: { id: Pane | "agents"; label: string; icon: LucideIcon; badge?: number }[] = [
@@ -865,7 +865,6 @@ export default function Workbench() {
         </div>}
 
       {section === "tools" && <div className="sp-scroll">
-        <div className="sp-group">Surfaces</div>
         {([
           { id: "connectors", label: "Connectors", note: "OAuth apps", icon: Compass, count: toolCatalog.length },
           { id: "local", label: "Local tools", note: "no key needed", icon: Zap, count: localToolSpecs.length },
@@ -954,7 +953,6 @@ export default function Workbench() {
         {pane === "overview" && <div className="overview-page">
           <div className="overview-content">
             {!data.agents.length && <section className="welcome" aria-labelledby="welcome-h">
-              <span className="ao-kicker">Welcome to Arova</span>
               <h2 id="welcome-h">Hire your first AI teammate</h2>
               <p>Give an agent a name and a job, talk to it, then put it on a schedule so the work happens while you are away.</p>
               <ol className="welcome-steps">
@@ -1236,7 +1234,7 @@ export default function Workbench() {
         </div>}
 
         {pane === "scheduler" && <div className="pane">
-          <div className="pane-head"><div><h1>Automations</h1><p>{data.scheduler.headline === "always-on" ? "Your scheduler is live: due routines fire on time, even with nobody in the app." : "Routines fire only while something is watching the clock. Open the 24/7 tab to make it permanent."}</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
+          <div className="pane-head"><div><p>{data.scheduler.headline === "always-on" ? "Your scheduler is live: due routines fire on time, even with nobody in the app." : "Routines fire only while something is watching the clock. Open the 24/7 tab to make it permanent."}</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
           <div className="pane-tabs"><Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "evals", label: "Evals", count: data.evals.tasks.length }, { id: "always-on", label: "24/7 control room" }]} /></div>
           {autoTab === "always-on" && <AlwaysOn info={data.scheduler} origin={origin} routineCount={data.routines.length} enabledCount={data.routines.filter(r => r.enabled).length} onRefresh={() => { void load(); }}
             onPreset={schedule => { setRoutineForm({ name: "", description: "", schedule, agentId: agent?.id ?? data.agents[0]?.id ?? "" }); setDialog("routine"); }} />}
@@ -1436,7 +1434,7 @@ export default function Workbench() {
       />}
 
       {pane === "settings" && <div className="pane">
-          <div className="pane-head"><div><h1>Settings</h1><p>What this workspace is, and exactly what it cannot do.</p></div></div>
+          <div className="pane-head"><div><p>What this workspace is, and exactly what it cannot do.</p></div></div>
           <div className="stack">
             <div className={`block ${settingsTab !== "workspace" ? "is-hidden" : ""}`}>
               <h2>Workspace</h2><p>Your personal space. Identified by a browser cookie, not an account.</p>
@@ -1715,7 +1713,7 @@ function ResearchPane({ projects, sources, findings, agents, teams, projectId, o
   }, [project?.id]);
 
   if (!project) return <div className="pane">
-    <div className="pane-head"><div><h1>Research</h1><p>A project is a question, the sources behind it, and the findings that cite them.</p></div><div className="push" /><button className="primary" onClick={onNew}><Plus size={15} />New project</button></div>
+    <div className="pane-head"><div><p>A project is a question, the sources behind it, and the findings that cite them.</p></div><div className="push" /><button className="primary" onClick={onNew}><Plus size={15} />New project</button></div>
     <div className="blank"><h3>No research yet</h3><p>Start with a question. Sources can be fetched or pasted, and the brief stays copyable without a model.</p><button className="primary" onClick={onNew}><Plus size={14} />Create a project</button></div>
   </div>;
 
