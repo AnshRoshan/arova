@@ -30,7 +30,7 @@ type ModelSelection = { name: string; model: string; auto: boolean; served: bool
 type Usage = { provider: string; calls: number; inputTokens: number; outputTokens: number; estimated: boolean; costUsd?: number | null };
 type Capabilities = {
   tools: string[]; deniedTools: string[]; permissionMode: "default" | "plan" | "auto";
-  toolLoop: boolean;
+  toolLoop: boolean; captureMemory: boolean;
   canConsult: string[]; canHandoffTo: string[]; effort: "low" | "medium" | "high";
   maxTurns: number | null; modelParams: { temperature?: number; maxTokens?: number };
   mcpServers: { name: string; transport: string; url?: string; credential?: string }[]; mcpInheritance: unknown; skills: string[];
@@ -580,6 +580,11 @@ export default function Workbench() {
 
   const agent = data?.agents.find(a => a.id === agentId) ?? data?.agents[0];
   const thread = useMemo(() => (data && agent ? data.messages.filter(m => m.agentId === agent.id) : []), [data, agent]);
+  /** Spec 48 — memory proposals wait in the thread; a person saves or dismisses each. */
+  const saveProposal = async (proposalId: string, teamId: string, p: { kind: string; text: string }) => {
+    if (await act("saveMemory", { teamId, text: p.text, kind: p.kind }, "Saved to this organisation's memory")) await act("deleteProposalMessage", { messageId: proposalId });
+  };
+  const discardProposal = async (proposalId: string) => { if (await act("deleteProposalMessage", { messageId: proposalId })) setToast("Proposal dismissed — nothing was written."); };
   const byId = (id: string) => data?.agents.find(a => a.id === id);
   /** Which model a seat would really be answered by, in the seat's own words and the server's. */
   const profileOf = (providerName: string | undefined) => (!data || !providerName || providerName === "local"
@@ -1169,7 +1174,25 @@ export default function Workbench() {
             <p>{agent.name} is {answering ? `on ${answering.label} · ${answering.model}` : "running without a model key"}. Ask something below and the reply is written to this workspace.</p>
           </div>}
           {data.olderMessages && <button className="ghost load-earlier" type="button" disabled={earlierBusy} onClick={() => void loadEarlier()}><ArrowDown size={13} />{earlierBusy ? "Loading…" : "Load earlier history"}</button>}
-          {thread.map((m, i) => {
+          {thread.filter(m => m.kind === "memory_proposal").map(m => {
+            const candidates = (m.metadata?.proposals ?? []) as { kind: string; text: string }[];
+            if (!candidates.length || !agent?.teamId) return null;
+            return <div className="entry entry-assistant" style={hue} key={m.id}>
+              <span className="entry-face"><Brain size={15} /></span>
+              <div className="entry-main">
+                <div className="entry-head"><strong>Memory proposals</strong><time>{stamp(m.createdAt)} · spec 48 · nothing saved yet</time></div>
+                <div className="entry-text">{candidates.map((p, j) => <div className="row" key={j} style={{ marginBottom: 6 }}>
+                  <span className="memory-kind" data-kind={p.kind}>{p.kind}</span>
+                  <span className="row-main"><b>{p.text}</b></span>
+                  <span className="row-actions">
+                    <button className="ghost" type="button" disabled={busy} onClick={() => saveProposal(m.id, agent.teamId!, p)}><Check size={13} />Save</button>
+                    <button className="icon-btn" type="button" title="Dismiss this proposal" disabled={busy} onClick={() => discardProposal(m.id)}><X size={14} /></button>
+                  </span>
+                </div>)}</div>
+              </div>
+            </div>;
+          })}
+          {thread.filter(m => m.kind !== "memory_proposal").map((m, i) => {
             const fault = m.kind === "provider_error";
             const mine = m.role === "user";
             const isLast = m.id === lastReply?.id;
@@ -2083,6 +2106,11 @@ function CapabilitiesEditor({ caps, setCaps, teammates, toolNotes }: { caps: Cap
         <input type="checkbox" checked={caps.toolLoop} onChange={e => setCaps({ ...caps, toolLoop: e.target.checked })} />
         <span className="tool-row-main"><b>Let the model call read-only tools</b><em>Calculator, clock, JSON, checksum, web_fetch and web_search when configured. The answer arrives after the loop finishes, not token-by-token. No shell, no writes.</em></span>
         <span className={`chip ${caps.toolLoop ? "ran" : "idle"}`}><i />{caps.toolLoop ? "on" : "off"}</span>
+      </label>
+      <label className="tool-row">
+        <input type="checkbox" checked={caps.captureMemory} onChange={e => setCaps({ ...caps, captureMemory: e.target.checked })} />
+        <span className="tool-row-main"><b>Propose org memories</b><em>Spec 48 — after each reply, one bounded pass may propose what this conversation decided. Candidates wait in the thread for a person; nothing is written until saved.</em></span>
+        <span className={`chip ${caps.captureMemory ? "ran" : "idle"}`}><i />{caps.captureMemory ? "on" : "off"}</span>
       </label>
     </div>
     <div className="caps-group">

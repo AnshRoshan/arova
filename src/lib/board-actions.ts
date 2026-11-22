@@ -655,6 +655,13 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     if (!verdict.ok) throw new Error(verdict.reason === "expired" ? "This approval expired — stale requests do not decide. Ask the seat to raise it again." : "This approval was already decided.");
     await db.update(approvals).set({ status: decision, consumedAt: new Date() }).where(and(eq(approvals.id, approval.id), eq(approvals.status, "PENDING")));
     await audit(workspaceId, approval.agentId, `approval.${decision.toLowerCase()}`, approval.title);
+  } else if (action === "deleteProposalMessage") {
+    // Spec 48 — dismissing a proposal removes only that proposal row; org memory is untouched.
+    const messageId = uuid.parse(body.messageId);
+    const [row] = await db.select().from(messages).where(and(eq(messages.id, messageId), eq(messages.workspaceId, workspaceId))).limit(1);
+    if (!row) throw new Error("Proposal not found");
+    if (row.kind !== "memory_proposal") throw new Error("Only a memory proposal can be dismissed this way; stored messages are the record.");
+    await db.delete(messages).where(eq(messages.id, row.id));
   } else if (action === "updateRetention") {
     // Spec 47 — retention in the product, not in env drift: the worker reads these columns first.
     const input = z.object({ eventsDays: z.number().int().min(0).max(3650).nullable(), usageDays: z.number().int().min(0).max(3650).nullable() }).parse(body);

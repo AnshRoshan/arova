@@ -16,7 +16,7 @@ import { mcpCallTool, mcpDiscoverTools, mcpEndpointFromConfig, redactArguments, 
 import { argumentsHash, decideToolCall, parseAllowlist, approvalExpiry } from "@/lib/policy";
 import { workerEnabled, schedulerIntervalSeconds } from "@/lib/worker-config";
 import { board } from "@/lib/board-payload";
-import { chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, vaultAuthorization, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
+import { chatMessages, failureReply, maxDelegations, MEMORY_SYSTEM, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, vaultAuthorization, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
 
 const ROUTINE_INTENT = /every day|every morning|every week|weekday|daily|weekly|each morning|every monday|every friday|schedule|remind me/;
 
@@ -386,6 +386,43 @@ function toolLoopMetadata(result: Awaited<ReturnType<typeof runAgentToolLoop>>, 
   };
 }
 
+/**
+ * Spec 48 — the memory capture loop. After a stored reply, one bounded distiller pass over the
+ * turn pair proposes org memories for review: candidates land as a proposal row in the seat's own
+ * thread, and nothing is written to the org's memory until a person saves it. Gated by the seat's
+ * captureMemory capability and the org existing; budget-checked like any other call; a failure is
+ * logged, never surfaced as a broken chat.
+ */
+async function maybeProposeMemories(workspaceId: string, agent: ChatAgent, asked: string, replyContent: string): Promise<void> {
+  try {
+    const caps = normaliseCapabilities(agent.capabilities);
+    if (!caps.captureMemory || !agent.teamId) return;
+    if (!asked.trim() || replyContent.trim().length < 40) return;
+    const profile = resolveForAgent(agent.provider, loadProfiles());
+    if (!profile.configured || profile.name === "local") return;
+    await requireBudget(workspaceId, profile);
+    const response = await requestCompletion({ profile, messages: [
+      { role: "system", content: MEMORY_SYSTEM },
+      { role: "user", content: `The person asked: ${asked.slice(0, 2000)}\n\nThe seat answered: ${replyContent.slice(0, 2000)}` },
+    ], maxTokens: 300, stream: false, timeoutMs: requestTimeoutMs() });
+    const body = await response.json();
+    const counted = usageFromJson(body);
+    await recordUsage(workspaceId, profile.name, counted?.input ?? 200, counted?.output ?? estimateTokens(completionText(body)), Boolean(counted));
+    const raw = completionText(body);
+    const parsed = extractJsonObject(raw) as { memories?: unknown } | null;
+    const candidates = Array.isArray(parsed?.memories) ? parsed.memories
+      .map((m) => m as { kind?: unknown; text?: unknown })
+      .filter(m => typeof m?.text === "string" && m.text.trim().length >= 3)
+      .slice(0, 3)
+      .map(m => ({ kind: (["note", "decision", "glossary"].includes(String(m.kind)) ? String(m.kind) : "note") as "note" | "decision" | "glossary", text: String(m.text).slice(0, 240) })) : [];
+    if (!candidates.length) return;
+    await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "assistant", kind: "memory_proposal", content: candidates[0].text, metadata: { memoryProposal: true, proposals: candidates, asked: asked.slice(0, 200) } });
+    await audit(workspaceId, agent.id, "memory.proposed", `${candidates.length} candidate(s) from a conversation`);
+  } catch (error) {
+    console.error("memory proposal failed", error instanceof Error ? error.message : "unknown");
+  }
+}
+
 /** Unary reply: used when a client asks for a plain JSON response (stream === false). */
 export async function buildReply(workspaceId: string, agent: ChatAgent, history: Turn[]): Promise<Reply> {
   const plan = await planReply(workspaceId, agent, history);
@@ -461,6 +498,7 @@ export function streamReply(workspaceId: string, agent: ChatAgent, agentId: stri
           if (plan.kind === "reply") {
             await db.insert(messages).values({ workspaceId, agentId, role: "assistant", ...plan.reply });
             send({ type: "reply", reply: plan.reply });
+            await maybeProposeMemories(workspaceId, agent, history[history.length - 1]?.content ?? "", plan.reply.content);
             return;
           }
 
@@ -472,6 +510,7 @@ export function streamReply(workspaceId: string, agent: ChatAgent, agentId: stri
             const [row] = await db.insert(messages).values({ workspaceId, agentId, role: "assistant", ...reply }).returning();
             if (record) await recordUsage(workspaceId, chargedTo, counted?.input ?? plan.inputTokens, counted?.output ?? estimateTokens(reply.content), Boolean(counted));
             send({ type: "reply", reply });
+            if (reply.kind === "message" || !reply.kind) await maybeProposeMemories(workspaceId, agent, asked, reply.content);
             return row;
           };
           // A tool-loop reply exists only when the loop finishes, so a reader who leaves gets no

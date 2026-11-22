@@ -76,6 +76,8 @@ export type Capabilities = {
   permissionMode: PermissionMode;
   /** Opt-in read-only tool loop. Off keeps the existing token-streamed reply path. */
   toolLoop: boolean;
+  /** Spec 48 — after a reply, one bounded distiller pass may propose org memories for review. Off writes nothing. */
+  captureMemory: boolean;
   canConsult: string[];
   canHandoffTo: string[];
   effort: Effort;
@@ -93,6 +95,7 @@ export const DEFAULT_CAPABILITIES: Capabilities = {
   deniedTools: [],
   permissionMode: "default",
   toolLoop: false,
+  captureMemory: false,
   canConsult: ["*"],
   canHandoffTo: [],
   effort: "medium",
@@ -149,6 +152,7 @@ export function normaliseCapabilities(raw: unknown): Capabilities {
     deniedTools: Array.from(new Set(denied)),
     permissionMode,
     toolLoop: o.toolLoop === true,
+    captureMemory: o.captureMemory === true,
     canConsult: Array.isArray(o.canConsult) ? list(o.canConsult) : [...DEFAULT_CAPABILITIES.canConsult],
     canHandoffTo: Array.isArray(o.canHandoffTo) ? list(o.canHandoffTo) : [],
     effort,
