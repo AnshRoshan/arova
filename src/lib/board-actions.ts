@@ -32,6 +32,7 @@ import { mayFoundOrg, mayStaffOrg, resolveLead } from "@/lib/channel";
 import { ownedAgent, postToChannel, ownMemory, quotaReply, recentTurns, streamTimeoutMs, systemPromptFor, vaultAuthorization, recordDelivery, MEMORY_SYSTEM } from "@/lib/board-core";
 import { buildReply, streamReply } from "@/lib/chat-runner";
 import { streamBrief } from "@/lib/brief-runner";
+import { streamReply as streamSeatReply } from "@/lib/chat-runner";
 import { approvalExpiry, assertFetchableUrl, argumentsHash, decideToolCall, hashToken, parseAllowlist, tokenPreview, tokenVerdict } from "@/lib/policy";
 import { decryptSecret, encryptSecret, hasCredentialKey } from "@/lib/credentials";
 import { mcpCallTool, mcpDiscoverTools, mcpEndpointFromConfig, redactArguments } from "@/lib/mcp";
@@ -1023,6 +1024,25 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
       await audit(workspaceId, run.agentId, "skill.drafted", `${skill.name} (draft, under review)`);
       result = { skillId: skill.id, version: 1, draft: true };
     }
+  } else if (action === "resendFromMessage") {
+    // Spec 50 — edit-and-resend opens a branch: the original turn stays exactly as it was
+    // (append-only is an invariant), the edited turn is a new row marked as its branch, and the
+    // reply runs the same path sendMessage uses.
+    const input = z.object({ messageId: uuid, content: text }).parse(body);
+    const [original] = await db.select().from(messages).where(and(eq(messages.id, input.messageId), eq(messages.workspaceId, workspaceId))).limit(1);
+    if (!original) throw new Error("Message not found");
+    if (original.role !== "user") throw new Error("Only your own question can be re-asked; assistant rows are the record of what was answered.");
+    const agent = await ownedAgent(workspaceId, body.agentId);
+    if (agent.status === "PAUSED") throw new Error("Resume this agent before chatting.");
+    const [branched] = await db.insert(messages).values({
+      workspaceId, agentId: agent.id, role: "user", content: input.content,
+      metadata: { branchFrom: original.id, branchedFromContent: original.content.slice(0, 4000) },
+    }).returning();
+    await audit(workspaceId, agent.id, "chat.branch", `a turn was re-asked from ${original.id.slice(0, 8)}`);
+    if (body.stream !== false) return { response: streamSeatReply(workspaceId, agent, agent.id, request.signal) };
+    const reply = await buildReply(workspaceId, agent, await recentTurns(workspaceId, agent.id));
+    await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "assistant", ...reply });
+    result = { reply, branchedId: branched.id };
   } else if (action === "promoteRunToEval") {
     // Spec 45 — promote an incident into the suite: the failed run's own prompt becomes an eval
     // task; the person supplies the expected fragment (what a correct answer must contain), so the

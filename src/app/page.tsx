@@ -247,6 +247,7 @@ export default function Workbench() {
   const [digestForm, setDigestForm] = useState({ cadence: "Every weekday at 8:00 AM", channelId: "" });
   const [promoteExpected, setPromoteExpected] = useState("");
   const [retentionForm, setRetentionForm] = useState<{ events: string; usage: string }>({ events: "", usage: "" });
+  const [branching, setBranching] = useState<{ id: string; content: string } | null>(null);
   useEffect(() => { if (data) setRetentionForm({ events: data.workspace.retentionEventsDays ? String(data.workspace.retentionEventsDays) : "", usage: data.workspace.retentionUsageDays ? String(data.workspace.retentionUsageDays) : "" }); }, [data?.workspace.id]);
   const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
   const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
@@ -422,7 +423,9 @@ export default function Workbench() {
     let streamed = "";
     setBusy(true); setPending(content); setStream(""); setToolState(null);
     try {
-      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sendMessage", agentId: agent.id, content, stream: true, ...(pendingFiles.length ? { attachments: pendingFiles } : {}) }), signal: controller.signal });
+      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(branching
+        ? { action: "resendFromMessage", messageId: branching.id, agentId: agent.id, content, stream: true }
+        : { action: "sendMessage", agentId: agent.id, content, stream: true, ...(pendingFiles.length ? { attachments: pendingFiles } : {}) }), signal: controller.signal });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Something went wrong");
       if (!(r.headers.get("content-type") || "").includes("text/event-stream")) { setData((await r.json()).board); return true; }
       const reader = r.body!.getReader();
@@ -732,6 +735,7 @@ export default function Workbench() {
     e.preventDefault();
     const content = draft.trim();
     if (!content || busy || agent?.status !== "ACTIVE") return;
+    setBranching(null);
     setPendingFiles([]);
     setDraft("");
     if (!(await send(content))) setDraft(content);
@@ -1210,9 +1214,9 @@ export default function Workbench() {
             return <div key={m.id}>
               {(i === 0 || dayLabel(thread[i - 1].createdAt) !== dayLabel(m.createdAt)) && <div className="rule-day"><span>{dayLabel(m.createdAt)}</span><i /></div>}
               <div style={mine ? undefined : hue} className={`entry ${mine ? "entry-user" : "entry-assistant"} ${fault ? "entry-fault" : ""}`}>
-                <span className="entry-face">{mine ? <User size={15} /> : <FaceIcon agent={agent} />}</span>
+                <span className="entry-face">{mine ? <User size={15} /> : <FaceIcon agent={agent} />}</span>{mine && (m.metadata?.branchFrom || m === thread.filter(x => x.role === "user" && !x.metadata?.branchFrom).at(-1)) ? null : null}
                 <div className="entry-main">
-                  <div className="entry-head"><strong>{mine ? "You" : String(m.metadata?.authoredByName ?? agent.name)}</strong>{m.metadata?.handoffFrom ? <span className="who">via {String(m.metadata.handoffFrom)}</span> : null}<time>{clock(m.createdAt)}</time>{m.metadata?.scheduled ? <span className="tag" style={{ color: "var(--ink-2)" }}>scheduled</span> : null}{fault ? <span className="tag" style={{ color: "var(--fault)" }}>not answered</span> : m.metadata?.stepLimit ? <span className="tag" style={{ color: "var(--waiting)" }}>tool-step cap</span> : m.metadata?.truncated ? <span className="tag" style={{ color: "var(--waiting)" }}>budget reached</span> : m.metadata?.incomplete ? <span className="tag" style={{ color: m.metadata.stopped ? "var(--ink-2)" : "var(--waiting)" }}>{m.metadata.stopped ? "stopped" : "partial"}</span> : null}<span className="entry-tools">{!mine && !fault && <CopyBtn text={m.content} label="Copy" />}</span></div>
+                  <div className="entry-head"><strong>{mine ? "You" : String(m.metadata?.authoredByName ?? agent.name)}</strong>{m.metadata?.branchFrom ? <span className="who">branched re-ask · the original stays</span> : null}{m.metadata?.handoffFrom ? <span className="who">via {String(m.metadata.handoffFrom)}</span> : null}<time>{clock(m.createdAt)}</time>{mine && <span className="entry-tools"><button className="icon-btn" type="button" title="Edit and re-ask — opens a branch; the original is never rewritten" disabled={busy} onClick={() => { setBranching({ id: m.id, content: m.content }); setDraft(m.content); document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(); }}><Pencil size={13} /></button></span>}{m.metadata?.scheduled ? <span className="tag" style={{ color: "var(--ink-2)" }}>scheduled</span> : null}{fault ? <span className="tag" style={{ color: "var(--fault)" }}>not answered</span> : m.metadata?.stepLimit ? <span className="tag" style={{ color: "var(--waiting)" }}>tool-step cap</span> : m.metadata?.truncated ? <span className="tag" style={{ color: "var(--waiting)" }}>budget reached</span> : m.metadata?.incomplete ? <span className="tag" style={{ color: m.metadata.stopped ? "var(--ink-2)" : "var(--waiting)" }}>{m.metadata.stopped ? "stopped" : "partial"}</span> : null}<span className="entry-tools">{!mine && !fault && <CopyBtn text={m.content} label="Copy" />}</span></div>
                   {(() => { const r = splitReasoning(m.content); return <> <ReasoningFold text={m.content} model={m.metadata?.model ? String(m.metadata.model) : undefined} truncated={Boolean(m.metadata?.truncated)} />{r.answer || fault ? <div className="entry-text">{fault ? r.answer : <RichText text={r.answer} />}</div> : <div className="entry-text muted">{m.metadata?.truncated ? "The output budget this server gives the agent ran out while it was still reasoning. Raise it in Agent › Capabilities (effort or max tokens), or ask something shorter." : "The model wrote reasoning and stopped before answering. Nothing was invented to fill the gap — the block above is all it produced."}</div>}</>; })()}
                   {fault && <div className="fault-detail mono">provider: {String(m.metadata.provider)}{m.metadata.detail ? ` · ${String(m.metadata.detail).slice(0, 110)}` : ""}{m.metadata.quota ? " · daily budget reached" : ""}</div>}
                   {Array.isArray(m.metadata?.consulted) && (m.metadata.consulted as { name: string; question: string }[]).map(c => {
