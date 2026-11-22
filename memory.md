@@ -49,3 +49,23 @@ journal) still waits on the owner accepting a second transcript.
 2. **Model key** for live evals, briefs and the tool loop against a real provider.
 3. **Root decisions** D-26 (OpenDots name) and D-30 (self-host vs hosted).
 4. **Channel target encryption** before any public deployment.
+
+## Reconciliation (2026-11-22, grok-main machine)
+
+This machine had carried a **parallel, uncommitted feature line** on top of c7db7f5 (its own
+specs 16–27: durable work engine, tool execution plane, auth/membership, org memory v2, channel
+gateway, goals, skills, agent computer, local dev bootstrap, trust controls). It was snapshotted
+— not lost — to branch **`backup/local-wip-2026-11-22`** (commit `a397d5c`, 97 files, +6514/−451),
+then `main` was fast-forwarded to `origin/main` `09a365e`. Verified on the new baseline:
+`npm test` **284/284**, `tsc --noEmit` ✓ (after clearing a stale `.next` that referenced the old
+`api/channels/slack` route).
+
+**Only on the backup branch, not in main** (port candidates, ranked by uniqueness):
+durable job queue + `npm run worker` (`src/lib/jobs.ts`, `src/worker/` — enqueue, `FOR UPDATE SKIP
+LOCKED` claim, lease, retry/backoff, dead-letter, heartbeats); goals/watches/attention_items +
+`src/lib/goals.ts`; credentials vault (`src/lib/credentials.ts`, encrypted targets); MCP client
+(`src/lib/mcp.ts`); memory v2 (pg_trgm hybrid recall + `validFrom`/`validTo` temporal validity in
+`src/lib/memory.ts` — main still has the base version); sha-256-hashed trigger tokens (main
+stores plaintext); policy gateway (`src/lib/policy.ts`, `TOOL_ALLOWED_HOSTS`); saved skills;
+`db:check`/`db:start` scripts (spec 25 bootstrap). Specs 16–27 on that branch use the same
+numbers as main's specs 16–29 for different work — never merge the spec files by number.
