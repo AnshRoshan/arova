@@ -65,7 +65,7 @@ type ResearchSource = { id: string; projectId: string; url: string; host: string
 type ResearchFinding = { id: string; projectId: string; text: string; sourceIds: string[]; createdAt: string };
 type EvalSuite = { id: string; agentId: string; name: string; taskIds: string[]; callCeiling: number; status: string; passed: number; failed: number; skipped: number; errored: number; modelCalls: number; passRate: number | null; startedAt: string | null; finishedAt: string | null; createdAt: string };
 type Board = {
-  workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
+  workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null; retentionEventsDays: number | null; retentionUsageDays: number | null };
   overview: { activeAgents: number; enabledRoutines: number; completedRuns: number; pendingApprovals: number; messagesToday: number };
   agents: Agent[]; messages: Message[]; routines: Routine[]; runs: Run[]; steps: Step[]; approvals: Approval[];
   olderMessages: boolean;
@@ -74,7 +74,7 @@ type Board = {
   sandbox: { provider: string; capabilities: { graphical: boolean; pty: boolean; snapshots: boolean; takeover: boolean; persistentHome: boolean; multiScreen: boolean } };
   sandboxes: { id: string; agentId: string; provider: string; status: string; minutesUsed: number; createdAt: string }[];
   auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
-  identity: { signedIn: { name: string; email: string; role: "owner" | "member" } | null; people: { id: string; name: string; email: string; role: string; addedAt: string; lastSeenAt: string | null; sessions: number }[] };
+  identity: { signedIn: { name: string; email: string; role: string } | null; people: { id: string; name: string; email: string; role: string; addedAt: string; lastSeenAt: string | null; sessions: number }[] };
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
   channels: Channel[]; channelDeliveries: ChannelDelivery[];
   evals: { tasks: EvalTask[]; results: EvalResultRow[]; suites: EvalSuite[]; summary: EvalSummary };
@@ -246,6 +246,8 @@ export default function Workbench() {
   const [watchForGoal, setWatchForGoal] = useState<string | null>(null);
   const [digestForm, setDigestForm] = useState({ cadence: "Every weekday at 8:00 AM", channelId: "" });
   const [promoteExpected, setPromoteExpected] = useState("");
+  const [retentionForm, setRetentionForm] = useState<{ events: string; usage: string }>({ events: "", usage: "" });
+  useEffect(() => { if (data) setRetentionForm({ events: data.workspace.retentionEventsDays ? String(data.workspace.retentionEventsDays) : "", usage: data.workspace.retentionUsageDays ? String(data.workspace.retentionUsageDays) : "" }); }, [data?.workspace.id]);
   const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
   const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
   const [mcpCheck, setMcpCheck] = useState<Record<string, { name: string; reachable: boolean; tools: { name: string; description: string; risk: string }[]; error: string | null }[]>>({});
@@ -1655,6 +1657,11 @@ export default function Workbench() {
               <h2>Workspace</h2><p>Your personal space. Identified by a browser cookie, not an account.</p>
               <div className="field"><label htmlFor="ws">Name</label><input id="ws" key={data.workspace.name} defaultValue={data.workspace.name} maxLength={60} onBlur={e => { const name = e.target.value.trim(); if (name && name !== data.workspace.name) void act("renameWorkspace", { name }, "Workspace renamed"); }} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }} /><span className="hint">Edit and press Enter or click away to save.</span></div>
               <div className="field"><label htmlFor="tz">Time zone</label><select id="tz" value={data.workspace.timezone} onChange={e => act("updateWorkspace", { timezone: e.target.value }, "Time zone saved")}>{[...new Set([data.workspace.timezone, ...zones])].map(z => <option key={z}>{z}</option>)}</select><span className="hint">Applied when a routine is saved.</span></div>
+              <div className="field"><label>Retention (spec 47)<span className="mono">days, empty = keep forever</span></label>
+                <input aria-label="Events retention days" type="number" min={0} max={3650} placeholder="events" value={retentionForm.events} onChange={e => setRetentionForm({ events: e.target.value, usage: retentionForm.usage })} />
+                <input aria-label="Usage retention days" type="number" min={0} max={3650} placeholder="usage" value={retentionForm.usage} onChange={e => setRetentionForm({ events: retentionForm.events, usage: e.target.value })} />
+                <span className="hint">The worker's sweep reads these first; env is only the fallback. Deletion is irreversible — events and usage only, never messages, runs or memories.</span></div>
+              <button className="ghost" type="button" disabled={busy} onClick={() => act("updateRetention", { eventsDays: retentionForm.events ? Number(retentionForm.events) : null, usageDays: retentionForm.usage ? Number(retentionForm.usage) : null }, "Retention saved")}>Save retention</button>
               <div className="field"><label htmlFor="creator">Creator seat</label><select id="creator" value={data.workspace.creatorAgentId ?? ""} disabled={busy} onChange={e => act("assignCreator", { agentId: e.target.value || null }, e.target.value ? `${byId(e.target.value)?.name} may now found organisations` : "Creator designation cleared")}>
                 <option value="">None designated · any seat may propose an organisation</option>
                 {data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}
@@ -1673,7 +1680,7 @@ export default function Workbench() {
                     <span>{p.name}{p.email ? ` · ${p.email}` : ""}</span>
                     <span className="mono">{p.sessions} live session{p.sessions === 1 ? "" : "s"}</span>
                     <span className="push">
-                      <button className="ghost" type="button" disabled={busy} onClick={() => void act("setPersonRole", { userId: p.id, role: p.role === "owner" ? "member" : "owner" }, p.role === "owner" ? "Demoted to member" : "Promoted to owner")}>{p.role === "owner" ? "demote" : "make owner"}</button>
+                      <select className="mono" value={p.role === "member" ? "operator" : p.role} disabled={busy || p.role === "owner"} onChange={e => void act("setPersonRole", { userId: p.id, role: e.target.value }, "Role updated")}>{["owner", "operator", "viewer"].map(r => <option key={r} value={r}>{r}</option>)}</select>
                       {p.role !== "owner" && <button className="ghost" type="button" disabled={busy} onClick={() => void act("removePerson", { userId: p.id }, "Removed; their sessions ended")}>remove</button>}
                     </span>
                   </div>)}
@@ -1688,7 +1695,8 @@ export default function Workbench() {
                 <div className="kv"><span>Calls today</span><span className="push mono">{callsToday} of {data.limits.dailyModelCalls || "no limit"}</span></div>
                 {data.limits.dailyModelCalls > 0 && <div className="meter" role="img" aria-label={`${callsToday} of ${data.limits.dailyModelCalls} model calls used today`}><i style={{ width: `${Math.min(100, (callsToday / data.limits.dailyModelCalls) * 100)}%` }} /></div>}
               </div>
-              {data.limits.usage.length ? data.limits.usage.map(u => <div className="kv" key={u.provider}><span>{data.profiles.find(p => p.name === u.provider)?.label ?? u.provider}</span><span className="push mono">{u.inputTokens} in · {u.outputTokens} out {u.estimated ? <span style={{ color: "var(--ink-3)" }}>est.</span> : <span style={{ color: "var(--ink-3)" }}>reported</span>}</span></div>) : <div className="kv"><span>No model calls recorded today</span></div>}
+              {data.limits.usage.length ? data.limits.usage.map(u => <div className="kv" key={u.provider}><span>{data.profiles.find(p => p.name === u.provider)?.label ?? u.provider}</span><span className="push mono">{u.inputTokens} in · {u.outputTokens} out {u.estimated ? <span style={{ color: "var(--ink-3)" }}>est.</span> : <span style={{ color: "var(--ink-3)" }}>reported</span>}{u.costUsd !== null && u.costUsd !== undefined ? ` · ${u.costUsd < 1 ? Math.round(u.costUsd * 1000) / 10 + "¢" : "$" + Math.round(u.costUsd * 100) / 100}` : <span style={{ color: "var(--ink-3)" }}>unpriced</span>}</span></div>) : <div className="kv"><span>No model calls recorded today</span></div>}
+              {data.limits.usage.length > 0 && <div className="kv"><span>Today, all providers</span><span className="push mono">{data.limits.pricingConfigured ? (data.limits.todayCostUsd < 1 ? Math.round(data.limits.todayCostUsd * 1000) / 10 + "¢" : "$" + Math.round(data.limits.todayCostUsd * 100) / 100) : "unpriced — set <NAME>_PRICE_IN/_PRICE_OUT"}</span></div>}
             </div>
             <div className={`block ${settingsTab !== "registry" ? "is-hidden" : ""}`}>
               <h2>Agent registry</h2><p>Every seat the server has, with exact counts from SQL — not the board’s 60-row window. A pending approval is a human decision, not a failure.</p>

@@ -63,6 +63,13 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
   const knownProvider = (name: string) => ["auto", "local", "xai", "openai", ...loadProfiles().map(p => p.name)].includes(name);
   let result: Record<string, unknown> = {};
 
+  // Spec 47 — secrets and people are owner verbs. The gate runs before any handler so a new
+  // owner-only action only has to join this list.
+  const actorRole = actor?.role ?? "member";
+  if (actor && ["removePerson", "setPersonRole", "saveCredential", "deleteCredential", "createChannelConnection", "revokeChannelConnection"].includes(action) && actor.role !== "owner") {
+    throw new Error(`${action} is an owner action; ${actor.role === "member" ? "operator" : actor.role} cannot touch secrets or people.`);
+  }
+
   /**
    * The bench's own rules (D-15.4), checked server-side whenever a request is made on behalf of a
    * seat. `onBehalfOf` is deliberately not `agentId`: in these payloads `agentId` is the seat being
@@ -639,6 +646,7 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
   } else if (action === "decideApproval") {
     const approvalId = uuid.parse(body.approvalId);
     const decision = z.enum(["APPROVED", "REJECTED"]).parse(body.decision);
+    void decision;
     const [approval] = await db.select().from(approvals).where(and(eq(approvals.id, approvalId), eq(approvals.workspaceId, workspaceId))).limit(1);
     if (!approval || approval.status !== "PENDING") throw new Error("Approval is no longer pending");
     // Spec 40 — the verdict decides, not the row's age in someone's memory: consumed is final,
@@ -647,6 +655,11 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     if (!verdict.ok) throw new Error(verdict.reason === "expired" ? "This approval expired — stale requests do not decide. Ask the seat to raise it again." : "This approval was already decided.");
     await db.update(approvals).set({ status: decision, consumedAt: new Date() }).where(and(eq(approvals.id, approval.id), eq(approvals.status, "PENDING")));
     await audit(workspaceId, approval.agentId, `approval.${decision.toLowerCase()}`, approval.title);
+  } else if (action === "updateRetention") {
+    // Spec 47 — retention in the product, not in env drift: the worker reads these columns first.
+    const input = z.object({ eventsDays: z.number().int().min(0).max(3650).nullable(), usageDays: z.number().int().min(0).max(3650).nullable() }).parse(body);
+    await db.update(workspaces).set({ retentionEventsDays: input.eventsDays || null, retentionUsageDays: input.usageDays || null }).where(eq(workspaces.id, workspaceId));
+    await audit(workspaceId, null, "workspace.retention", `events ${input.eventsDays ?? 0}d · usage ${input.usageDays ?? 0}d`);
   } else if (action === "renameWorkspace") {
     const name = z.string().trim().min(2).max(60).parse(body.name);
     await db.update(workspaces).set({ name }).where(eq(workspaces.id, workspaceId));

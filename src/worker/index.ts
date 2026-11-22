@@ -365,11 +365,15 @@ async function execute(job: JobRow) {
  * archive-first design), because deletion here is irreversible.
  */
 async function retentionSweep() {
+  // Spec 47 — a workspace's own retention columns are the policy; env is only the fallback.
+  const workspaces = await db.select().from(workspacesTable);
   const sweepCutoffs: [string, Date, () => Promise<unknown>][] = [];
-  const eventCutoff = retentionCutoff(new Date(), envNum("RETENTION_EVENTS_DAYS", 0));
-  if (eventCutoff) sweepCutoffs.push(["events", eventCutoff, () => db.delete(events).where(lt(events.createdAt, eventCutoff))]);
-  const usageCutoff = retentionCutoff(new Date(), envNum("RETENTION_USAGE_DAYS", 0));
-  if (usageCutoff) sweepCutoffs.push(["usage", usageCutoff, () => db.delete(modelUsage).where(lt(modelUsage.day, usageCutoff.toISOString().slice(0, 10)))]);
+  for (const ws of workspaces) {
+    const eventCutoff = retentionCutoff(new Date(), ws.retentionEventsDays ?? envNum("RETENTION_EVENTS_DAYS", 0));
+    if (eventCutoff) sweepCutoffs.push([`events · ${ws.name}`, eventCutoff, () => db.delete(events).where(and(eq(events.workspaceId, ws.id), lt(events.createdAt, eventCutoff)))]);
+    const usageCutoff = retentionCutoff(new Date(), ws.retentionUsageDays ?? envNum("RETENTION_USAGE_DAYS", 0));
+    if (usageCutoff) sweepCutoffs.push([`usage · ${ws.name}`, usageCutoff, () => db.delete(modelUsage).where(and(eq(modelUsage.workspaceId, ws.id), lt(modelUsage.day, usageCutoff.toISOString().slice(0, 10))))]);
+  }
   for (const [what, cutoff, run] of sweepCutoffs) {
     try {
       const gone = await run();

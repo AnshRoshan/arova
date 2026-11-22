@@ -21,7 +21,15 @@ export const flowCookie = "arova_oauth";
 export const SESSION_DAYS = 30;
 const SLIDING_TOUCH_MS = 60 * 60_000;
 
-export type Actor = { userId: string; workspaceId: string; role: "owner" | "member"; name: string; email: string; picture: string };
+export type MemberRole = "owner" | "operator" | "viewer" | "member";
+export type Actor = { userId: string; workspaceId: string; role: MemberRole; name: string; email: string; picture: string };
+/** Spec 47 — what a role may do. "member" is the pre-47 name and acts as an operator. */
+export function canAct(role: string): boolean {
+  return role !== "viewer";
+}
+export function canGovern(role: string): boolean {
+  return role === "owner";
+}
 
 const hashToken = (token: string) => createHash("sha256").update(token, "ascii").digest("hex");
 const newToken = () => randomBytes(32).toString("base64url");
@@ -93,7 +101,7 @@ export async function completeSignIn(opts: {
   const [existingMembership] = await db.select().from(memberships).where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, user.id))).limit(1);
   const [{ count: ownerCount }] = await db.select({ count: sql<number>`count(*)::int` }).from(memberships).where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.role, "owner"), isNull(memberships.removedAt)));
   const becomesOwner = ownerCount === 0;
-  let role: "owner" | "member";
+  let role: "owner" | "operator" | "viewer" | "member";
   if (existingMembership) {
     role = existingMembership.role === "owner" ? "owner" : "member";
     await db.update(memberships).set({ removedAt: null }).where(eq(memberships.id, existingMembership.id));
@@ -170,7 +178,7 @@ export async function removePerson(workspaceId: string, userId: string): Promise
   return { ok: true };
 }
 
-export async function setPersonRole(workspaceId: string, actor: Actor, userId: string, role: "owner" | "member"): Promise<{ ok: boolean; error?: string }> {
+export async function setPersonRole(workspaceId: string, actor: Actor, userId: string, role: "owner" | "operator" | "viewer" | "member"): Promise<{ ok: boolean; error?: string }> {
   if (actor.role !== "owner") return { ok: false, error: "Only the owner can change roles." };
   const [target] = await db.select().from(memberships).where(and(eq(memberships.workspaceId, workspaceId), eq(memberships.userId, userId), isNull(memberships.removedAt))).limit(1);
   if (!target) return { ok: false, error: "That person is not a member of this workspace." };

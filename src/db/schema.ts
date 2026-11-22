@@ -10,7 +10,9 @@ export const workspaces = pgTable("workspaces", { id: id(), name: text("name").n
   creatorAgentId: uuid("creator_agent_id"),
   /** Spec 30 (durable work engine): set by pauseWork; the job claim joins on it being null, so a
    * paused workspace's queued jobs wait without anyone having to poll for a flag in the request path. */
-  pausedAt: timestamp("paused_at", { withTimezone: true }), createdAt: created() });
+  pausedAt: timestamp("paused_at", { withTimezone: true }),
+  /** Spec 47 — retention per workspace (spec 33b's sweep reads these first, env is the fallback). Null/0 keeps rows forever. */
+  retentionEventsDays: integer("retention_events_days"), retentionUsageDays: integer("retention_usage_days"), createdAt: created() });
 export const teams = pgTable("teams", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), name: text("name").notNull(), brief: text("brief").notNull().default(""),
   // Plain uuids, not FKs: agents already references teams, and a reference back would be a cycle the
   // push cannot create. Both are cleared in the same transaction that deletes the seat.

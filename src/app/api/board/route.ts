@@ -51,6 +51,9 @@ async function initialize() {
 
 export async function GET() {
   try {
+    // Spec 47 — sign-in enforcement: REQUIRE_SIGNIN=1 demotes the cookie to diagnostics.
+    const actorProbe = await readActor();
+    if (!actorProbe && process.env.REQUIRE_SIGNIN === "1") return NextResponse.json({ error: "Sign-in is required on this server (REQUIRE_SIGNIN=1), and no session is present." }, { status: 401 });
     const { workspace, isNew } = await initialize();
     // after() runs once the response is flushed: the page load is not held hostage by a model call,
     // and the work is not dropped the way a floating promise is when the request ends.
@@ -72,10 +75,13 @@ export async function POST(request: NextRequest) {
     const actor = await readActor();
     const workspaceId = actor?.workspaceId ?? (await cookies()).get(cookieName)?.value;
     if (!workspaceId || !uuid.safeParse(workspaceId).success) return NextResponse.json({ error: "Workspace session missing. Refresh the page." }, { status: 401 });
+    if (process.env.REQUIRE_SIGNIN === "1" && !actor) return NextResponse.json({ error: "Sign-in is required on this server (REQUIRE_SIGNIN=1), and no session is present." }, { status: 401 });
     const budget = allowWrite(writeBuckets, workspaceId, { burst: 40, perMinute: 600 });
     if (!budget.ok) return NextResponse.json({ error: `That is a lot of actions at once — try again in ${budget.retrySeconds}s.` }, { status: 429 });
     const [workspace] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (!workspace) return NextResponse.json({ error: "Workspace not found" }, { status: 401 });
+    // Spec 47 — a viewer reads the board and does nothing else; the refusal names the role.
+    if (actor && actor.role === "viewer") return NextResponse.json({ error: "You are signed in as a viewer. Viewing is what this role can do — ask the owner for operator to act." }, { status: 403 });
     const body = (await request.json()) as Record<string, unknown>;
     const { response, result = {} } = await dispatchAction({ workspace, actor, body, request });
     if (response) return response;
