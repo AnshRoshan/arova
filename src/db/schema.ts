@@ -309,3 +309,11 @@ export const channelConnections = pgTable("channel_connections", { id: id(), wor
 
 /** Spec 35b — idempotency: one row per external event id; a duplicate insert is a no-op, not a second brief. */
 export const channelEvents = pgTable("channel_events", { id: id(), connectionId: uuid("connection_id").notNull().references(() => channelConnections.id, { onDelete: "cascade" }), externalId: text("external_id").notNull(), payloadHash: text("payload_hash").notNull(), status: text("status").notNull().default("RECEIVED"), createdAt: created() }, t => [uniqueIndex("channel_events_unique").on(t.connectionId, t.externalId)]);
+
+/**
+ * Spec 44 — the proactive digest. One row per workspace: a cadence and the channel that hears it.
+ * The content is built model-free from stored facts (attention, paused watches, dead-lettered jobs,
+ * queue health), so the morning brief ships even with no model key. Delivered through the same
+ * channel contract as run reports; fatigue is the queue's own retry policy, not a special case.
+ */
+export const digests = pgTable("digests", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), cadence: text("cadence").notNull().default("Every weekday at 8:00 AM"), channelId: uuid("channel_id").references(() => channels.id, { onDelete: "set null" }), enabled: boolean("enabled").notNull().default(true), lastSentAt: timestamp("last_sent_at", { withTimezone: true }), nextSendAt: timestamp("next_send_at", { withTimezone: true }), createdAt: created() }, t => [index("digests_due_index").on(t.enabled, t.nextSendAt)]);

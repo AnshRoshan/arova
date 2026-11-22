@@ -12,7 +12,7 @@ import { validateFetchTarget, type FetchPolicy } from "./web-fetch.ts";
 export type ChannelKind = "webhook" | "slack";
 export const CHANNEL_KINDS: ChannelKind[] = ["webhook", "slack"];
 
-export type ChannelEventKind = "run" | "approval" | "test";
+export type ChannelEventKind = "run" | "approval" | "test" | "digest";
 export type ChannelEvent = {
   kind: ChannelEventKind;
   title: string;
@@ -48,6 +48,7 @@ export function channelEventText(event: ChannelEvent): string {
   const org = event.teamName ? ` (${event.teamName})` : "";
   if (event.kind === "approval") return `Arova${org} · ${event.title}${who}\nNeeds your decision: ${event.summary}`;
   if (event.kind === "test") return `Arova${org} · test delivery${who}\n${event.summary}`;
+  if (event.kind === "digest") return event.summary;
   return `Arova${org} · ${event.title}${who}\n${event.status}: ${event.summary}`;
 }
 

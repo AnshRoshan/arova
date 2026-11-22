@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NextRequest } from "next/server";
 import { db } from "@/db";
-import { agents, approvals, attentionItems, channelConnections, channels, credentials, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, skillVersions, skills, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
+import { agents, approvals, attentionItems, channelConnections, channels, credentials, digests, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, skillVersions, skills, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validateChannelTarget, type ChannelEvent } from "@/lib/channels";
 import { completionText, ensureServedModel, estimateTokens, loadProfiles, requestCompletion, resolveForAgent, usageFromJson } from "@/lib/model-gateway";
@@ -989,6 +989,41 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     const next = action === "activateSkill" ? "active" : "draft";
     await db.update(skills).set({ status: next, updatedAt: new Date() }).where(eq(skills.id, skill.id));
     await audit(workspaceId, null, action === "activateSkill" ? "skill.activated" : "skill.paused", skill.name);
+  } else if (["createDigest", "updateDigest", "deleteDigest"].includes(action)) {
+    // Spec 44 — one digest per workspace: a cadence and the channel that hears it. The content is
+    // model-free; the queue owns retries, so a failed delivery is the worker's problem, not yours.
+    if (action === "createDigest") {
+      const input = z.object({ cadence: z.string().trim().min(3).max(120).default("Every weekday at 8:00 AM"), channelId: uuid.nullable().default(null) }).parse(body);
+      if (input.channelId) {
+        const [channel] = await db.select({ id: channels.id }).from(channels).where(and(eq(channels.id, input.channelId), eq(channels.workspaceId, workspaceId))).limit(1);
+        if (!channel) throw new Error("That channel does not exist in this workspace.");
+      }
+      const [existing] = await db.select({ id: digests.id }).from(digests).where(eq(digests.workspaceId, workspaceId)).limit(1);
+      if (existing) throw new Error("This workspace already has a digest. Edit or delete it instead.");
+      const [row] = await db.insert(digests).values({ workspaceId, cadence: input.cadence, channelId: input.channelId, nextSendAt: nextRunAt(input.cadence, workspace.timezone, new Date()) }).returning();
+      await audit(workspaceId, null, "digest.created", `digest ${input.cadence}`);
+      result = { digestId: row.id };
+    } else {
+      const digestId = uuid.parse(body.digestId);
+      const [digest] = await db.select().from(digests).where(and(eq(digests.id, digestId), eq(digests.workspaceId, workspaceId))).limit(1);
+      if (!digest) throw new Error("Digest not found");
+      if (action === "updateDigest") {
+        const input = z.object({ cadence: z.string().trim().min(3).max(120).optional(), channelId: uuid.nullable().optional(), enabled: z.boolean().optional() }).parse(body);
+        const resume = input.enabled === true && !digest.enabled;
+        await db.update(digests).set({
+          ...(input.cadence ? { cadence: input.cadence } : {}),
+          ...(input.channelId !== undefined ? { channelId: input.channelId } : {}),
+          ...(input.enabled !== undefined ? { enabled: input.enabled } : {}),
+          ...(resume || input.cadence ? { nextSendAt: nextRunAt(input.cadence ?? digest.cadence, workspace.timezone, new Date()) } : {}),
+          ...(input.enabled === false ? { nextSendAt: null } : {}),
+        }).where(eq(digests.id, digest.id));
+        await audit(workspaceId, null, "digest.updated", `${digest.cadence}`);
+      }
+      if (action === "deleteDigest") {
+        await db.delete(digests).where(eq(digests.id, digest.id));
+        await audit(workspaceId, null, "digest.deleted", digest.cadence);
+      }
+    }
   } else {
     throw new Error("Unknown action");
   }

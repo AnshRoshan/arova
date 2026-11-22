@@ -39,6 +39,7 @@ export const AROVA_TABLES = [
   "worker_heartbeats",
   "tool_calls",
   "credentials",
+  "digests",
   "goals",
   "watches",
   "attention_items",

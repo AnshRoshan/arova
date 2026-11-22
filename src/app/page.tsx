@@ -49,6 +49,7 @@ type VaultCredential = { id: string; label: string; kind: string; createdBy: str
 type Skill = { id: string; scope: string; teamId: string | null; agentId: string | null; name: string; slug: string; description: string; status: string; instructions: string; toolGrants: string[]; currentVersion: number; versions: number; uses: number; lastUsedAt: string | null; sourceRunId: string | null; createdBy: string; createdAt: string; updatedAt: string };
 type SlackConnection = { id: string; kind: string; name: string; externalId: string; allowedSenders: string[]; teamId: string | null; enabled: boolean; lastEventAt: string | null; createdAt: string };
 type JobRow = { id: string; kind: string; subjectId: string | null; status: string; attempts: number; maxAttempts: number; runAt: string; lastError: string | null; createdAt: string };
+type DigestRow = { id: string; cadence: string; channelId: string | null; enabled: boolean; lastSentAt: string | null; nextSendAt: string | null };
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
 type BoardEvent = { id: string; agentId: string | null; type: string; detail: string; createdAt: string };
@@ -80,7 +81,7 @@ type Board = {
   registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
-  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[]; slackConnections: SlackConnection[];
+  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[]; slackConnections: SlackConnection[]; digest: DigestRow[];
   jobs: JobRow[];
   queue: { workerLive: boolean; lastSeenAt: string | null; pid: number | null; staleWindowMs: number; paused: boolean; pending: number };
   toolPolicy: { allowedHosts: number; credentialKeyConfigured: boolean };
@@ -242,6 +243,7 @@ export default function Workbench() {
   const [goalForm, setGoalForm] = useState({ title: "", description: "", successCriteria: "", cadence: "Every day at 8:00 AM" });
   const [watchForm, setWatchForm] = useState({ title: "", url: "", condition: "changed", comparator: "", cadence: "Every hour", goalId: "" });
   const [watchForGoal, setWatchForGoal] = useState<string | null>(null);
+  const [digestForm, setDigestForm] = useState({ cadence: "Every weekday at 8:00 AM", channelId: "" });
   const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
   const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
   const [mcpCheck, setMcpCheck] = useState<Record<string, { name: string; reachable: boolean; tools: { name: string; description: string; risk: string }[]; error: string | null }[]>>({});
@@ -279,7 +281,7 @@ export default function Workbench() {
   }, []);
   const [atBottom, setAtBottom] = useState(true);
   const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | "research" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox" | "research" | "goal" | "watch" | "skill" | "credential"; id: string; name: string } | null>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox" | "research" | "goal" | "watch" | "skill" | "credential" | "digest"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -1283,6 +1285,22 @@ export default function Workbench() {
               </>}</span>
             </div>)}</div> : <div className="blank"><h3>Nothing needs you</h3><p>Watches that observe and goals that care will leave one item here each, with the evidence — never one per poll.</p></div>}
 
+            <h2 className="pane-h2">Proactive digest<span className="mono">spec 44 · model-free</span></h2>
+            <p className="hint">One message per cadence, delivered to a channel: what needs you now, what the failure ladder paused, what dead-lettered, and whether the queue is really moving. Built from stored rows — it ships even with no model key.</p>
+            {data.digest.length ? data.digest.map(d => <div className="row" key={d.id}>
+              <span className="row-face"><CalendarDays size={15} /></span>
+              <span className="row-main"><strong>{d.cadence}</strong><span>{d.channelId ? `to ${data.channels.find(c => c.id === d.channelId)?.name ?? "removed channel"}` : "no channel chosen yet — it will skip and say so"}</span><span className="row-when">{d.enabled ? <>next {d.nextSendAt ? `${dayLabel(d.nextSendAt)} ${clock(d.nextSendAt)}` : "not scheduled"}</> : "paused"}{d.lastSentAt ? ` · last sent ${ago(d.lastSentAt)} ago` : " · never sent"}</span></span>
+              <span className="row-side"><span className={`chip ${d.enabled ? "ran" : "idle"}`}><i />{d.enabled ? "on" : "off"}</span></span>
+              <span className="row-actions">
+                <button className="ghost" disabled={busy} onClick={() => act("updateDigest", { digestId: d.id, enabled: !d.enabled }, d.enabled ? "Digest paused" : "Digest resumed")}>{d.enabled ? <><Pause size={14} />Pause</> : <><Play size={14} />Resume</>}</button>
+                <button className="icon-btn" title="Delete digest" disabled={busy} onClick={() => setAskDelete({ kind: "digest", id: d.id, name: `Digest ${d.cadence}` })}><Trash2 size={15} /></button>
+              </span>
+            </div>) : <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="dg-cad">Cadence</label><input id="dg-cad" maxLength={120} value={digestForm.cadence} onChange={e => setDigestForm({ ...digestForm, cadence: e.target.value })} /><span className="hint">Same schedule vocabulary as routines — “Every weekday at 8:00 AM”.</span></div>
+              <div className="field"><label htmlFor="dg-ch">Deliver to</label><select id="dg-ch" value={digestForm.channelId} onChange={e => setDigestForm({ ...digestForm, channelId: e.target.value })}><option value="">Choose a channel…</option>{data.channels.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select><span className="hint">Create one in Integrations › Channels first — webhook and Slack both work.</span></div>
+              <button className="primary" disabled={busy || !digestForm.cadence.trim() || !digestForm.channelId} onClick={async () => { if (await act("createDigest", digestForm, "Digest scheduled")) setDigestForm({ cadence: "Every weekday at 8:00 AM", channelId: "" }); }}>Schedule digest</button>
+            </div></div>}
+
             <h2 className="pane-h2">Goals<span className="mono">{data.goals.length}</span></h2>
             <div className="stack"><div className="block">
               <div className="field"><label htmlFor="goal-title">Goal</label><input id="goal-title" maxLength={120} placeholder="Keep the release page accurate" value={goalForm.title} onChange={e => setGoalForm({ ...goalForm, title: e.target.value })} /></div>
@@ -1843,7 +1861,7 @@ export default function Workbench() {
         <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'suite' ? 'The suite and its stored counts are removed. The eval results it already measured stay.' : askDelete.kind === 'research' ? 'The project, every source and every finding in it are removed. Nothing outside this workspace is touched.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'research') await act('deleteResearchProject', { projectId: target.id }, 'Project deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else if (target.kind === 'goal') await act('deleteGoal', { goalId: target.id }, 'Goal deleted'); else if (target.kind === 'watch') await act('deleteWatch', { watchId: target.id }, 'Watch deleted'); else if (target.kind === 'skill') await act('deleteSkill', { skillId: target.id }, 'Skill deleted'); else if (target.kind === 'credential') await act('deleteCredential', { label: target.id }, 'Credential deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'research') await act('deleteResearchProject', { projectId: target.id }, 'Project deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else if (target.kind === 'goal') await act('deleteGoal', { goalId: target.id }, 'Goal deleted'); else if (target.kind === 'watch') await act('deleteWatch', { watchId: target.id }, 'Watch deleted'); else if (target.kind === 'skill') await act('deleteSkill', { skillId: target.id }, 'Skill deleted'); else if (target.kind === 'credential') await act('deleteCredential', { label: target.id }, 'Credential deleted'); else if (target.kind === 'digest') await act('deleteDigest', { digestId: target.id }, 'Digest deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}

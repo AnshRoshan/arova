@@ -1,6 +1,6 @@
 import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { messages, routines, runs, runSteps, schedulerHeartbeats, watches, workspaces } from "@/db/schema";
+import { digests, messages, routines, runs, runSteps, schedulerHeartbeats, watches, workspaces } from "@/db/schema";
 import { audit } from "@/lib/audit";
 import { enqueueJob, queueWorkerIsLive } from "@/lib/work-queue";
 import { occurrenceKey } from "@/lib/jobs";
@@ -88,6 +88,21 @@ export async function tickSchedules(workspaceId: string): Promise<Promise<unknow
       .returning();
     if (!claimedWatch) continue;
     const enqueued = await enqueueJob({ workspaceId, kind: "watch_check", subjectId: watch.id, payload: { watchId: watch.id }, idempotencyKey: occurrenceKey("watch_check", watch.id, dueAt ?? now), createdBy: "tick" });
+    if (!enqueued.deduplicated) started.push(Promise.resolve(enqueued.id));
+  }
+  // Spec 44 — due digests enqueue the same way (queue-only: a board read must not wait on one).
+  const dueDigests = await db.select().from(digests)
+    .where(and(eq(digests.workspaceId, workspaceId), eq(digests.enabled, true), lte(digests.nextSendAt, now), sql`${digests.nextSendAt} IS NOT NULL`))
+    .orderBy(digests.nextSendAt).limit(5);
+  for (const digest of dueDigests) {
+    const dueAt = digest.nextSendAt;
+    const nextSend = nextRunAt(digest.cadence, ws?.timezone || "UTC", now);
+    const [claimedDigest] = await db.update(digests)
+      .set({ nextSendAt: nextSend })
+      .where(and(eq(digests.id, digest.id), lte(digests.nextSendAt, now)))
+      .returning();
+    if (!claimedDigest) continue;
+    const enqueued = await enqueueJob({ workspaceId, kind: "digest", subjectId: digest.id, payload: { digestId: digest.id }, idempotencyKey: occurrenceKey("digest", digest.id, dueAt ?? now), createdBy: "tick" });
     if (!enqueued.deduplicated) started.push(Promise.resolve(enqueued.id));
   }
   return started;

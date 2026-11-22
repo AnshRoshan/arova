@@ -14,10 +14,10 @@ import { config as loadEnv } from "dotenv";
 loadEnv({ path: ".env.local", quiet: true });
 loadEnv({ path: ".env", quiet: true });
 
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, attentionItems, channelConnections, events, jobs, modelUsage, routines, teams, triggers, watches, workerHeartbeats } from "@/db/schema";
-import { afterFailure, backoffMs, leaseUntil, retentionCutoff, type JobStatus } from "@/lib/jobs";
+import { agents, attentionItems, channelConnections, channels, digests, events, goals, jobs, modelUsage, routines, teams, triggers, watches, workerHeartbeats, workspaces as workspacesTable } from "@/db/schema";
+import { afterFailure, backoffMs, leaseUntil, retentionCutoff, workerIsStale, type JobStatus } from "@/lib/jobs";
 import { decryptSecret } from "@/lib/credentials";
 import { slackApiBase } from "@/lib/channels/slack";
 import { assertFetchableUrl, parseAllowlist, truncateOutput } from "@/lib/policy";
@@ -26,6 +26,9 @@ import { webFetch } from "@/lib/web-fetch";
 import { nextRunAt } from "@/lib/scheduler";
 import { resolveLead } from "@/lib/channel";
 import { executeRoutine } from "@/lib/routine-runner";
+import { renderDigest } from "@/lib/digest";
+import { deliverToChannel } from "@/lib/channels";
+import { recordDelivery } from "@/lib/board-core";
 import { runBrief } from "@/lib/brief-runner";
 
 const envNum = (name: string, fallback: number) => (process.env[name] === undefined || process.env[name] === "" || Number.isNaN(Number(process.env[name])) ? fallback : Number(process.env[name]));
@@ -213,6 +216,60 @@ async function execute(job: JobRow) {
           console.error(`slack delivery failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
+    } else if (job.kind === "digest") {
+      // Spec 44 — the proactive digest: model-free by construction, so it ships with or without a
+      // model key. Facts come from stored rows; delivery goes through the same channel contract as
+      // run reports; a workspace with no channel yet records an honest skip.
+      const payload = job.payload as { digestId?: string };
+      const digestRef = payload.digestId ?? job.subjectId;
+      if (!digestRef) throw new Error("The job names no digest.");
+      const [digest] = await db.select().from(digests).where(eq(digests.id, digestRef)).limit(1);
+      if (!digest || !digest.enabled) {
+        await finalize(job, { status: "COMPLETED" });
+        return;
+      }
+      const [ws] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, job.workspaceId)).limit(1);
+      const openAttention = await db.select().from(attentionItems)
+        .where(and(eq(attentionItems.workspaceId, job.workspaceId), eq(attentionItems.status, "open")))
+        .orderBy(desc(attentionItems.severity), desc(attentionItems.createdAt)).limit(8);
+      const pausedWatches = await db.select().from(watches)
+        .where(and(eq(watches.workspaceId, job.workspaceId), eq(watches.enabled, false), sql`${watches.failStreak} >= 3`)).limit(5);
+      const pausedGoals = await db.select().from(goals)
+        .where(and(eq(goals.workspaceId, job.workspaceId), eq(goals.status, "paused"))).limit(5);
+      const deadLettered = await db.select().from(jobs)
+        .where(and(eq(jobs.workspaceId, job.workspaceId), eq(jobs.status, "FAILED"), digest.lastSentAt ? gt(jobs.updatedAt, digest.lastSentAt) : sql`true`))
+        .orderBy(desc(jobs.updatedAt)).limit(5);
+      const [{ pendingCount }] = await db.select({ pendingCount: sql<number>`count(*)::int` }).from(jobs)
+        .where(and(eq(jobs.workspaceId, job.workspaceId), inArray(jobs.status, ["QUEUED", "RETRYING"])));
+      const [beat] = await db.select({ lastSeenAt: workerHeartbeats.lastSeenAt }).from(workerHeartbeats).orderBy(desc(workerHeartbeats.lastSeenAt)).limit(1);
+      const facts = {
+        attention: openAttention.map(a => ({ title: a.title, severity: a.severity, body: a.body })),
+        paused: [
+          ...pausedWatches.map(w => ({ kind: "watch" as const, title: w.title, why: w.lastError ? `paused after ${w.failStreak} failures: ${w.lastError.slice(0, 80)}` : `paused after ${w.failStreak} failures` })),
+          ...pausedGoals.map(g => ({ kind: "goal" as const, title: g.title, why: "paused by a person" })),
+        ],
+        deadLettered: deadLettered.map(j => ({ kind: j.kind, lastError: j.lastError })),
+        queue: { workerLive: !workerIsStale(beat?.lastSeenAt ?? null, new Date()), pending: Number(pendingCount) },
+        sinceLabel: digest.lastSentAt ? digest.lastSentAt.toISOString().slice(0, 10) : null,
+      };
+      const text = renderDigest(ws?.name ?? "workspace", facts, new Date());
+      if (!digest.channelId) {
+        await db.insert(events).values({ workspaceId: job.workspaceId, agentId: null, type: "digest.skipped", detail: "No channel chosen for the digest — set one in Automations › Goals." });
+        await finalize(job, { status: "COMPLETED" });
+        return;
+      }
+      const [channel] = await db.select().from(channels).where(and(eq(channels.id, digest.channelId), eq(channels.workspaceId, job.workspaceId))).limit(1);
+      if (!channel || !channel.enabled) {
+        await db.insert(events).values({ workspaceId: job.workspaceId, agentId: null, type: "digest.skipped", detail: "The digest's channel is gone or disabled." });
+        await finalize(job, { status: "COMPLETED" });
+        return;
+      }
+      const event = { kind: "digest" as const, title: "Morning digest", status: "SENT", summary: text };
+      const out = await deliverToChannel(channel, event);
+      await recordDelivery(job.workspaceId, channel, event, out);
+      await db.update(digests).set({ lastSentAt: new Date() }).where(eq(digests.id, digest.id));
+      await db.insert(events).values({ workspaceId: job.workspaceId, agentId: null, type: "digest.sent", detail: out.ok ? `delivered to ${channel.name}` : `delivery to ${channel.name} failed: ${out.detail.slice(0, 100)}` });
+      await finalize(job, out.ok ? { status: "COMPLETED" } : null, out.ok ? undefined : new Error(`digest delivery failed: ${out.detail.slice(0, 120)}`));
     } else if (job.kind === "watch_check") {
       // Spec 36b: one observation through the fetch policy. The watch row carries the outcome —
       // hash, evidence, failure ladder — so the attention item, when one fires, always has evidence.

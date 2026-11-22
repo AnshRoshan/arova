@@ -4,7 +4,7 @@
  * contract, and jobs.test.ts is where that contract is pinned.
  */
 
-export type JobKind = "routine" | "manual_run" | "trigger_brief" | "watch_check";
+export type JobKind = "routine" | "manual_run" | "trigger_brief" | "watch_check" | "digest";
 export type JobStatus = "QUEUED" | "RUNNING" | "RETRYING" | "SUCCEEDED" | "FAILED" | "CANCELLED" | "TIMED_OUT";
 
 /** Terminal states are immutable: a retry is a new attempt of the job, never a rewrite of history. */
