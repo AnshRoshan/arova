@@ -91,13 +91,6 @@ type Tone = "ran" | "waiting" | "fault" | "idle";
 const faces: Record<string, LucideIcon> = { sparkles: Sparkles, globe: Globe2, palette: WandSparkles, sun: Sun, bot: Bot, zap: Zap };
 /** Tools that genuinely execute in the server process — the registry is the only source of this claim. */
 const localToolSpecs = TOOL_REGISTRY.filter(t => t.available && (t.kind === "local" || t.id === "web_fetch"));
-const toolCatalog = [  { name: "Gmail", slug: "gmail", category: "Communication", description: "Read, draft, and organise your inbox." },
-  { name: "Slack", slug: "slack", category: "Communication", description: "Keep channels in sync." },
-  { name: "GitHub", slug: "github", category: "Developer", description: "Track repositories, issues and pull requests." },
-  { name: "Google Calendar", slug: "calendar", category: "Productivity", description: "Hold meetings and deadlines in order." },
-  { name: "Notion", slug: "notion", category: "Productivity", description: "Turn pages into working context." },
-  { name: "Browser", slug: "browser", category: "Browser", description: "Work a site inside an isolated session." },
-];
 const zones = ["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Africa/Lagos", "Asia/Dubai", "Asia/Kolkata", "Asia/Dhaka", "Asia/Singapore", "Asia/Shanghai", "Asia/Tokyo", "Australia/Sydney", "Pacific/Auckland", "UTC"];
 
 const clock = (s: string) => new Date(s).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
@@ -892,7 +885,7 @@ export default function Workbench() {
 
       {section === "tools" && <div className="sp-scroll">
         {([
-          { id: "connectors", label: "Connectors", note: "OAuth apps", icon: Compass, count: toolCatalog.length },
+          { id: "connectors", label: "Connectors", note: "live integrations", icon: Compass, count: mcpCount + data.channels.length + data.slackConnections.length + data.triggers.length },
           { id: "local", label: "Local tools", note: "no key needed", icon: Zap, count: localToolSpecs.length },
           { id: "channels", label: "Channels", note: "delivery + inbound", icon: Webhook, count: data.channels.length },
           { id: "sandbox", label: "Sandbox", note: data.sandbox.provider === "wsl" ? "WSL · no network" : data.sandbox.provider === "local-os" ? "host runtime" : "not configured", icon: Cpu, count: data.sandboxes.length },
@@ -1409,13 +1402,28 @@ export default function Workbench() {
         {pane === "tools" && <div className="pane">
           <div className="pane-head"><div>
             <h1>{toolsTab === "connectors" ? "Connectors" : toolsTab === "local" ? "Local tools" : toolsTab === "channels" ? "Channels" : toolsTab === "sandbox" ? (data.sandbox.provider === "wsl" ? "WSL sandbox" : "Local OS sandbox") : toolsTab === "vault" ? "Credential vault" : toolsTab === "skills" ? "Skills" : "MCP servers"}</h1>
-            <p>{toolsTab === "connectors" ? "OAuth apps an agent could use. Nothing is authorised on this server, so every card says so." : toolsTab === "local" ? "Tools that run in this process right now — no credential and no sandbox." : toolsTab === "channels" ? "Where a finished run or a pending approval is posted, and how outside work comes in." : toolsTab === "sandbox" ? "An opt-in shell with a filesystem allowlist and no network by default." : toolsTab === "vault" ? "Secrets sealed with AES-256-GCM before they touch PostgreSQL. A row is a label; the value inside never comes back out." : toolsTab === "skills" ? "Saved, versioned workflows. A skill's tool grants are intersected with the seat's own at use — a skill can never widen access." : "MCP servers are configured per seat. Discovery classifies every tool the server exposes; an unannotated tool counts as a write."}</p>
+            <p>{toolsTab === "connectors" ? "Every integration this workspace really has: MCP bindings, delivery channels, Slack apps and inbound triggers. OAuth apps stay out until a real client exists." : toolsTab === "local" ? "Tools that run in this process right now — no credential and no sandbox." : toolsTab === "channels" ? "Where a finished run or a pending approval is posted, and how outside work comes in." : toolsTab === "sandbox" ? "An opt-in shell with a filesystem allowlist and no network by default." : toolsTab === "vault" ? "Secrets sealed with AES-256-GCM before they touch PostgreSQL. A row is a label; the value inside never comes back out." : toolsTab === "skills" ? "Saved, versioned workflows. A skill's tool grants are intersected with the seat's own at use — a skill can never widen access." : "MCP servers are configured per seat. Discovery classifies every tool the server exposes; an unannotated tool counts as a write."}</p>
           </div></div>
-          {toolsTab === "connectors" && <p className="pane-note">None of these can connect: this server has no OAuth client. Each card states the operation it would perform.</p>}
-          <div className={`connector-grid ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <article className="connector-card" key={t.slug}>
-            <header><span className="row-face"><Compass size={15} /></span><div><h3>{t.name}</h3><em>{t.category}</em></div><span className="chip idle"><i />not connected</span></header>
-            <p>{t.description}</p>
-          </article>)}</div>
+          {toolsTab === "connectors" && <p className="pane-note">Spec 43 — every card here is a live row: an MCP binding on a seat, a delivery channel, a Slack app, or an inbound trigger. OAuth apps stay out until a real client exists; when it does, this line is the only thing that changes.</p>}
+          <div className={`connector-grid ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>
+            {data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <article className="connector-card" key={`mcp-${a.id}-${i}`}>
+              <header><span className="row-face"><Link2 size={15} /></span><div><h3>{srv.name || "unnamed MCP server"}</h3><em>MCP · {a.name}</em></div><span className={`chip ${srv.transport === "http" ? "ran" : "idle"}`}><i />{srv.transport === "http" ? "http · callable" : "no transport"}</span></header>
+              <p>{srv.url ?? "no endpoint configured"}</p>
+            </article>))}
+            {data.channels.map(c => <article className="connector-card" key={c.id}>
+              <header><span className="row-face"><Webhook size={15} /></span><div><h3>{c.name}</h3><em>Channel · {c.kind}</em></div><span className={`chip ${c.enabled ? "ran" : "idle"}`}><i />{c.enabled ? `delivered ${c.delivered}` : "off"}</span></header>
+              <p>to {c.targetHost || "unconfigured target"} · last {c.lastDeliveryAt ? ago(c.lastDeliveryAt) + " ago" : "never"}{c.failed > 0 ? ` · ${c.failed} failed` : ""}</p>
+            </article>)}
+            {data.slackConnections.map(c => <article className="connector-card" key={c.id}>
+              <header><span className="row-face"><MessageSquare size={15} /></span><div><h3>{c.name}</h3><em>Slack app · {c.externalId || "unmapped"}</em></div><span className={`chip ${c.enabled ? "ran" : "idle"}`}><i />{c.enabled ? "listening" : "off"}</span></header>
+              <p>@-mentions brief {data.teams.find(t => t.id === c.teamId)?.name ?? "no organisation"} · last event {c.lastEventAt ? ago(c.lastEventAt) + " ago" : "never"}</p>
+            </article>)}
+            {data.triggers.map(t => <article className="connector-card" key={t.id}>
+              <header><span className="row-face"><Zap size={15} /></span><div><h3>{t.label}</h3><em>Trigger · {data.teams.find(x => x.id === t.teamId)?.name ?? "org"}</em></div><span className={`chip ${t.enabled ? "ran" : "idle"}`}><i />{t.enabled ? `fired ${t.hits}` : "revoked"}</span></header>
+              <p>POST /api/trigger with its bearer token · token {t.tokenPreview ?? "sealed"} · last {t.lastFiredAt ? ago(t.lastFiredAt) + " ago" : "never"}</p>
+            </article>)}
+            {!mcpCount && !data.channels.length && !data.slackConnections.length && !data.triggers.length && <div className="blank"><h3>No connectors yet</h3><p>Real integrations live here once created: an MCP server on a seat (Capabilities), a delivery channel, a Slack app, or an inbound trigger. Nothing decorative is shown.</p></div>}
+          </div>
           {toolsTab === "local" && <div className="local-console">
             <p className="pane-lede">Four run inside the server process and one fetches a public page through a policy that refuses private addresses. Each run is stored as a real run with a step — nothing here is a mock.</p>
             <div className="lc-runner">
