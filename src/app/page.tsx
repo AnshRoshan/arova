@@ -46,7 +46,8 @@ type Watch = { id: string; goalId: string | null; title: string; url: string; co
 type AttentionItem = { id: string; kind: string; severity: string; title: string; body: string; evidence: Record<string, unknown>; dedupeKey: string; status: string; lastSeenAt: string; createdAt: string; resolvedAt: string | null };
 /** The vault's row as the browser may see it: a label and metadata, never an envelope. */
 type VaultCredential = { id: string; label: string; kind: string; createdBy: string; lastUsedAt: string | null; createdAt: string };
-type Skill = { id: string; scope: string; teamId: string | null; agentId: string | null; name: string; slug: string; description: string; status: string; instructions: string; toolGrants: string[]; currentVersion: number; versions: number; createdBy: string; createdAt: string; updatedAt: string };
+type Skill = { id: string; scope: string; teamId: string | null; agentId: string | null; name: string; slug: string; description: string; status: string; instructions: string; toolGrants: string[]; currentVersion: number; versions: number; uses: number; lastUsedAt: string | null; sourceRunId: string | null; createdBy: string; createdAt: string; updatedAt: string };
+type SlackConnection = { id: string; kind: string; name: string; externalId: string; allowedSenders: string[]; teamId: string | null; enabled: boolean; lastEventAt: string | null; createdAt: string };
 type JobRow = { id: string; kind: string; subjectId: string | null; status: string; attempts: number; maxAttempts: number; runAt: string; lastError: string | null; createdAt: string };
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
@@ -79,7 +80,7 @@ type Board = {
   registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
-  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[];
+  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[]; slackConnections: SlackConnection[];
   jobs: JobRow[];
   queue: { workerLive: boolean; lastSeenAt: string | null; pid: number | null; staleWindowMs: number; paused: boolean; pending: number };
   toolPolicy: { allowedHosts: number; credentialKeyConfigured: boolean };
@@ -251,6 +252,7 @@ export default function Workbench() {
   const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
   const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
   const [mcpCheck, setMcpCheck] = useState<Record<string, { name: string; reachable: boolean; tools: { name: string; description: string; risk: string }[]; error: string | null }[]>>({});
+  const [slackForm, setSlackForm] = useState({ name: "", botToken: "", signingSecret: "", externalId: "", teamId: "", allowedSenders: "" });
   const [mcpAgent, setMcpAgent] = useState("");
   const [mcpResult, setMcpResult] = useState<{ toolCall?: string; decision?: string; rule?: string; output?: string } | null>(null);
   const [registryQuery, setRegistryQuery] = useState("");
@@ -1497,6 +1499,24 @@ export default function Workbench() {
               <span className="row-main"><strong>{data.channels.find(c => c.id === d.channelId)?.name ?? "deleted channel"}<span className="mono">{d.direction}</span></strong><span>{d.event} · {d.detail}</span></span>
               <span className="row-side"><span className={`chip ${d.status === "DELIVERED" ? "ran" : d.status === "FAILED" ? "fault" : "waiting"}`}><i />{d.status.toLowerCase()}</span><time className="mono">{stamp(d.createdAt)}</time></span>
             </div>)}</div> : <div className="blank"><h3>No deliveries recorded</h3><p>Test a channel or finish a run; each attempt becomes a row here.</p></div>}
+
+            <h2 className="pane-h2">Native Slack app<span className="mono">spec 35</span></h2>
+            <p className="hint">A Slack app mapped to one organisation: @-mentions brief it through the same durable queue as triggers, and the report is posted back into the mention's thread. The bot token and signing secret are sealed together; the events URL for the app is <code>{origin || "this-server"}/api/channels/slack</code>.</p>
+            <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="sl-name">Connection name</label><input id="sl-name" maxLength={60} placeholder="Hex Labs slack" value={slackForm.name} onChange={e => setSlackForm({ ...slackForm, name: e.target.value })} /></div>
+              <div className="field"><label htmlFor="sl-org">Organisation</label><select id="sl-org" value={slackForm.teamId || data.teams[0]?.id || ""} onChange={e => setSlackForm({ ...slackForm, teamId: e.target.value })}>{data.teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+              <div className="field"><label htmlFor="sl-ext">Slack team id</label><input id="sl-ext" maxLength={60} placeholder="T0XXXXXXX" value={slackForm.externalId} onChange={e => setSlackForm({ ...slackForm, externalId: e.target.value })} /></div>
+              <div className="field"><label htmlFor="sl-bot">Bot token</label><input id="sl-bot" type="password" maxLength={200} value={slackForm.botToken} onChange={e => setSlackForm({ ...slackForm, botToken: e.target.value })} /><span className="hint">Sealed with AES-256-GCM; never returned.</span></div>
+              <div className="field"><label htmlFor="sl-sign">Signing secret</label><input id="sl-sign" type="password" maxLength={200} value={slackForm.signingSecret} onChange={e => setSlackForm({ ...slackForm, signingSecret: e.target.value })} /></div>
+              <div className="field"><label htmlFor="sl-senders">Allowed senders<span className="mono">Slack member ids, comma-separated</span></label><input id="sl-senders" maxLength={600} value={slackForm.allowedSenders} onChange={e => setSlackForm({ ...slackForm, allowedSenders: e.target.value })} /><span className="hint">The identity boundary: a sender not listed is refused, never briefed.</span></div>
+              <button className="primary" disabled={busy || !slackForm.name.trim() || !slackForm.externalId.trim() || !slackForm.botToken.trim() || !slackForm.signingSecret.trim()} onClick={async () => { if (await act("createChannelConnection", { kind: "slack", name: slackForm.name, botToken: slackForm.botToken, signingSecret: slackForm.signingSecret, externalId: slackForm.externalId, teamId: slackForm.teamId || data.teams[0]?.id, allowedSenders: slackForm.allowedSenders.split(",").map(s => s.trim()).filter(Boolean) }, "Slack connection sealed")) setSlackForm({ name: "", botToken: "", signingSecret: "", externalId: "", teamId: "", allowedSenders: "" }); }}>Seal connection</button>
+            </div></div>
+            {data.slackConnections.length ? <div className="rows">{data.slackConnections.map(c => <div className="row" key={c.id}>
+              <span className="row-face"><Webhook size={15} /></span>
+              <span className="row-main"><strong>{c.name}</strong><span>{c.kind} · team {c.externalId || "unmapped"} · {data.teams.find(t => t.id === c.teamId)?.name ?? "no org"} · {c.allowedSenders.length} allowed sender(s)</span><span className="row-when">{c.lastEventAt ? `last event ${ago(c.lastEventAt)} ago` : "no events yet"} · created {stamp(c.createdAt)}</span></span>
+              <span className="row-side"><span className={`chip ${c.enabled ? "ran" : "idle"}`}><i />{c.enabled ? "enabled" : "off"}</span></span>
+              <span className="row-actions"><button className="icon-btn" title="Revoke connection" disabled={busy} onClick={() => setAskDelete({ kind: "channel", id: c.id, name: `Slack · ${c.name}` })}><Trash2 size={15} /></button></span>
+            </div>)}</div> : <div className="blank"><h3>No Slack app connected</h3><p>The webhook channels above already deliver reports out; a Slack app adds @-mention briefs in. Nothing connects until the secrets are sealed here.</p></div>}
           </div>
           <div className={toolsTab === "mcp" ? "tool-surface" : "is-hidden"}>
             {data.agents.length ? <div className="stack"><div className="block">
@@ -1546,8 +1566,10 @@ export default function Workbench() {
             {data.skills.length ? <div className="rows">{data.skills.map(s => <div className="row" key={s.id}>
               <span className="row-face"><BookOpen size={15} /></span>
               <span className="row-main"><strong>{s.name}</strong><span>{s.scope} · v{s.currentVersion} · {s.versions} version(s) · grants: {s.toolGrants.join(", ") || "none"}</span><span className="row-when">{s.description || s.instructions.slice(0, 120)}</span></span>
-              <span className="row-side"><span className={`chip ${s.status === "active" ? "ran" : "idle"}`}><i />{s.status}</span></span>
+              <span className="row-side"><span className={`chip ${s.status === "active" ? "ran" : s.status === "draft" ? "waiting" : "idle"}`}><i />{s.status === "draft" ? "draft · under review" : s.status}{s.uses > 0 ? ` · used ${s.uses}×` : ""}</span></span>
               <span className="row-actions">
+                {s.status === "draft" && <button className="ghost" disabled={busy} onClick={async () => { if (await act("activateSkill", { skillId: s.id }, "Skill activated — it reaches prompts now")) setToast("Activated. A draft never reaches a prompt until a person says so."); }}><Play size={14} />Activate</button>}
+                {s.status === "active" && <button className="ghost" disabled={busy} onClick={() => act("pauseSkill", { skillId: s.id }, "Skill back to draft — out of every prompt")}>Unpublish</button>}
                 <button className="ghost" disabled={busy} onClick={async () => { const r = await act("updateSkill", { skillId: s.id, instructions: s.instructions, toolGrants: s.toolGrants, notes: "edited from the board" }, `Skill re-versioned`); const v = r?.version as number | undefined; if (v) setToast(`Skill is now v${v}; history is immutable.`); }}><Pencil size={14} />Edit</button>
                 <button className="ghost" disabled={busy} onClick={async () => { const r = await act("exportSkill", { skillId: s.id }); if (r?.markdown) { try { await navigator.clipboard.writeText(String(r.markdown)); setToast("Markdown + frontmatter copied"); } catch { setToast("Copy failed"); } } }}><Copy size={14} />Export</button>
                 <button className="icon-btn" title="Delete skill" disabled={busy} onClick={() => setAskDelete({ kind: "skill", id: s.id, name: s.name })}><Trash2 size={15} /></button>
@@ -1786,6 +1808,7 @@ export default function Workbench() {
         <div className="dialog-meta"><State status={dialog.status} sample={isSample(dialog)} /><span className="mono">{dayLabel(dialog.startedAt)} {clock(dialog.startedAt)}</span><span>{byId(dialog.agentId)?.name ?? "removed agent"}</span><span title="A run pins the instructions and capabilities it started with; a later edit cannot rewrite it.">{dialog.agentVersionId ? "instructions pinned" : "instructions were not pinned for this run"}</span></div>
         <p className="dialog-summary">{dialog.summary}</p>
         <div className="rows">{data.steps.filter(s => s.runId === dialog.id).map(s => <div className="row" key={s.id}><span className="row-face"><Check size={14} /></span><span className="row-main"><strong>{s.title}</strong><span>{s.detail}</span></span><span className="row-side"><time className="mono">{clock(s.createdAt)}</time></span></div>)}{!data.steps.some(s => s.runId === dialog.id) && <div className="row"><span className="row-main"><span>No steps recorded.</span></span></div>}</div>
+        {data.steps.some(s => s.runId === dialog.id) && <div className="dialog-actions"><button className="ghost" disabled={busy} onClick={async () => { if (await act("draftSkillFromRun", { runId: dialog.id }, "Skill drafted from this run — review it in Integrations › Skills")) setDialog(null); }}><BookOpen size={14} />Draft skill from this run</button></div>}
         {!["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"].includes(dialog.status) && <div className="dialog-actions"><button className="ghost" disabled={busy} onClick={async () => { if (await act("cancelRun", { runId: dialog.id }, "Run cancelled")) setDialog(null); }}>Cancel run</button></div>}
       </div>}
     </div>}

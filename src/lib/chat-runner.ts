@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { agents, approvals, delegations, messages } from "@/db/schema";
 import { completionMessage, completionText, estimateTokens, loadProfiles, readSseText, requestCompletion, resolveForAgent, usageFromJson, type ModelMessage, type ProviderProfile } from "@/lib/model-gateway";
 import { loadSearchProfile } from "@/lib/web-search";
-import { READONLY_TOOL_IDS, runToolLoop, toolDefinitions } from "@/lib/tool-loop";
+import { READONLY_TOOL_IDS, runToolLoop, toolDefinitions, type ToolExecution } from "@/lib/tool-loop";
 import { ORG_SYSTEM, buildPeerPrompt, decollide, extractJsonObject, extractRoster, fallbackRoster, isOrgIntent, isTeamIntent, mentionConsult, parseRouting, parseTurn, resolvePeer, routingPrompt, type Roster, type Routing } from "@/lib/orchestration";
 import { allowsAction, normaliseCapabilities, planBlocks, resolveTools, tokenBudgetFor } from "@/lib/tools";
 import { decollideOrg, normaliseOrg, orgTemplate, type Org } from "@/lib/org";
@@ -11,9 +11,12 @@ import { requestedOrgName, summonCeiling, denialBreaker, type ApprovalOutcome } 
 import { splitReasoning } from "@/lib/markdown";
 import { audit } from "@/lib/audit";
 import { overQuota, recordUsage } from "@/lib/budget";
+import { toolCalls } from "@/db/schema";
+import { mcpCallTool, mcpDiscoverTools, mcpEndpointFromConfig, redactArguments, type McpTool } from "@/lib/mcp";
+import { argumentsHash, decideToolCall, parseAllowlist, approvalExpiry } from "@/lib/policy";
 import { workerEnabled, schedulerIntervalSeconds } from "@/lib/worker-config";
 import { board } from "@/lib/board-payload";
-import { chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
+import { chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, vaultAuthorization, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
 
 const ROUTINE_INTENT = /every day|every morning|every week|weekday|daily|weekly|each morning|every monday|every friday|schedule|remind me/;
 
@@ -150,8 +153,14 @@ export async function planReply(workspaceId: string, agent: ChatAgent, history: 
     ...granted.filter(id => (READONLY_TOOL_IDS as readonly string[]).includes(id)),
     ...(searchProfile.configured && granted.includes("web_fetch") ? ["web_search"] : []),
   ] : [];
-  const tools = toolDefinitions(toolIds, searchProfile.configured);
-  return { kind: "model" as const, profile, chat, caps, ceiling, allowed, consultPeers, handoffPeers, memory: memory.provenance, inputTokens: estimateTokens(chat.map(m => m.content ?? "").join("")), toolLoop: caps.toolLoop, toolIds, tools, searchProfile };
+  // Spec 31c — the seat's http MCP servers contribute their discovered tools to the loop. Only
+  // READ-classified tools will execute (the executor re-decides every call through the policy
+  // gateway and audits it); a write or external reach returns the rule as the tool's output.
+  const mcpTools = caps.toolLoop && caps.mcpServers.some(s => s.transport === "http" && s.url)
+    ? await discoverMcpReadTools(workspaceId, agent)
+    : [];
+  const tools = toolDefinitions(toolIds, searchProfile.configured, mcpTools);
+  return { kind: "model" as const, profile, chat, caps, ceiling, allowed, consultPeers, handoffPeers, memory: memory.provenance, inputTokens: estimateTokens(chat.map(m => m.content ?? "").join("")), toolLoop: caps.toolLoop, toolIds, tools, searchProfile, mcpTools };
 }
 
 /** Stream a provider reply straight to the client, returning the text and why it ended. */
@@ -253,7 +262,9 @@ export async function approvalReply(workspaceId: string, agent: ChatAgent, title
     await audit(workspaceId, agent.id, "approval.withheld", `${title}: ${breaker.reason ?? "denial breaker"}`);
     return { content: `I stopped short of asking again: ${breaker.reason}, so I have not raised “${title}”. Nothing was done and nothing is waiting on you. Ask me directly when you want me to propose something.`, kind: "approval_withheld", metadata: { consecutive: breaker.consecutive, denials: breaker.denials, considered: breaker.considered, title } };
   }
-  const [approval] = await db.insert(approvals).values({ workspaceId, agentId: agent.id, title, detail, risk: "WRITE" }).returning();
+  // Spec 40 — the approval is a token: bound to exactly this ask, expiring so a stale card never
+  // decides. The verdict rules live in policy.ts and are tested there; this is the binding.
+  const [approval] = await db.insert(approvals).values({ workspaceId, agentId: agent.id, title, detail, risk: "WRITE", argumentsHash: argumentsHash({ title, detail }), target: "model_action", expiresAt: approvalExpiry(new Date(), false) }).returning();
   await audit(workspaceId, agent.id, "approval.requested", title);
   void notifyChannels(workspaceId, agent.teamId, { kind: "approval", title, status: "PENDING", summary: detail, agentName: agent.name, approvalId: approval.id });
   return { content: `I stopped and raised this for you to decide: ${title}. Nothing was done, and I will not act on it until you approve it.`, kind: "approval_request", metadata: { approvalId: approval.id, title, detail } };
@@ -266,13 +277,77 @@ export type ModelPlan = Extract<Awaited<ReturnType<typeof planReply>>, { kind: "
  * web_search (when configured); it cannot call a shell. Each model turn is counted; each tool call is
  * audited. The final answer is returned to the caller, which streams it as one delta.
  */
+/**
+ * Spec 31c — discovery for the loop: the seat's http MCP servers contribute their tools, named
+ * mcp:<server>:<tool>. An unreachable server contributes nothing here and says so at execution.
+ */
+async function discoverMcpReadTools(workspaceId: string, agent: ChatAgent): Promise<{ name: string; description: string }[]> {
+  const caps = normaliseCapabilities(agent.capabilities);
+  const httpServers = caps.mcpServers.filter(s => s.transport === "http" && s.url).slice(0, 3);
+  const all: { name: string; description: string }[] = [];
+  for (const server of httpServers) {
+    const endpoint = mcpEndpointFromConfig(server, {});
+    if (!endpoint) continue;
+    try {
+      const authorization = await vaultAuthorization(workspaceId, server.credential);
+      const tools = await mcpDiscoverTools(endpoint, authorization);
+      all.push(...tools.map(t => ({ name: `mcp:${server.name}:${t.name}`, description: t.description })));
+    } catch {
+      // An unreachable server contributes nothing; the executor names it honestly if called.
+    }
+  }
+  return all;
+}
+
+/**
+ * Spec 31c — the loop's MCP executor. Discovery already classified every tool; the policy gateway
+ * re-decides every call and the decision is a tool_calls row either way. Only READ-classified tools
+ * may execute inside a reply loop: a write or external reach returns the rule as the tool's output
+ * (the model can weigh it; the loop cannot approve it — that is what the Tools surface is for).
+ */
+function mcpLoopExecutor(workspaceId: string, agent: ChatAgent, permissionMode: string) {
+  return async (name: string, args: Record<string, unknown>): Promise<ToolExecution> => {
+    const [, serverName, toolName] = name.split(":");
+    const server = normaliseCapabilities(agent.capabilities).mcpServers.find(s => s.name === serverName && s.transport === "http" && s.url);
+    if (!server) return { ok: false, output: `MCP server "${serverName}" is not configured on this seat with an http endpoint.` };
+    const endpoint = mcpEndpointFromConfig(server, {});
+    if (!endpoint) return { ok: false, output: `MCP server "${serverName}" has no usable http endpoint.` };
+    let authorization: string | undefined;
+    try { authorization = await vaultAuthorization(workspaceId, server.credential); } catch (error) {
+      return { ok: false, output: `The credential could not be opened: ${error instanceof Error ? error.message : "unknown"}` };
+    }
+    let tools: McpTool[];
+    try { tools = await mcpDiscoverTools(endpoint, authorization); } catch (error) {
+      return { ok: false, output: `MCP server "${serverName}" is unreachable: ${error instanceof Error ? error.message : "unknown"}` };
+    }
+    const tool = tools.find(t => t.name === toolName);
+    if (!tool) return { ok: false, output: `The server exposes no tool named ${toolName}; discovery refused to pretend otherwise.` };
+    const decision = decideToolCall({ tool: name, risk: tool.risk, granted: true, permissionMode, unattended: false, allowedHosts: parseAllowlist(process.env.TOOL_ALLOWED_HOSTS), preApproved: false }, {});
+    const [callRow] = await db.insert(toolCalls).values({ workspaceId, agentId: agent.id, tool: name, risk: tool.risk, decision: decision.decision, rule: decision.rule, argsDigest: argumentsHash(args), args: redactArguments(args) }).returning({ id: toolCalls.id });
+    if (decision.decision !== "allow") {
+      await db.update(toolCalls).set({ status: decision.decision === "approval" ? "APPROVAL_REQUIRED" : "REFUSED" }).where(eq(toolCalls.id, callRow.id));
+      return { ok: false, output: `The policy gateway refused "${toolName}" (${tool.risk}): ${decision.rule}. A person can run it from Tools › MCP servers; a reply loop cannot approve a write.` };
+    }
+    const started = Date.now();
+    try {
+      const text = await mcpCallTool(endpoint, toolName, args, authorization);
+      await db.update(toolCalls).set({ status: "COMPLETED", output: text.slice(0, 4000), durationMs: Date.now() - started }).where(eq(toolCalls.id, callRow.id));
+      return { ok: true, output: text.slice(0, 4000) };
+    } catch (error) {
+      const why = error instanceof Error ? error.message.slice(0, 400) : "unknown";
+      await db.update(toolCalls).set({ status: "FAILED", error: why, durationMs: Date.now() - started }).where(eq(toolCalls.id, callRow.id));
+      return { ok: false, output: `The MCP tool call failed: ${why}` };
+    }
+  };
+}
+
 async function runAgentToolLoop(workspaceId: string, agent: ChatAgent, plan: ModelPlan, messages: ModelMessage[], send: (payload: Record<string, unknown>) => void, control: { signal?: AbortSignal; shouldStop?: () => boolean } = {}) {
   let inputTokens = 0, outputTokens = 0, countedAny = false;
   const result = await runToolLoop({
     messages,
     tools: plan.tools,
     allowed: plan.toolIds,
-    deps: { searchProfile: plan.searchProfile },
+    deps: { searchProfile: plan.searchProfile, mcpExecutor: plan.mcpTools.length ? mcpLoopExecutor(workspaceId, agent, plan.caps.permissionMode) : undefined },
     maxSteps: 4,
     shouldStop: control.shouldStop,
     onEvent: event => send({ type: "tool", name: event.name, status: event.status, ...(event.detail ? { detail: event.detail } : {}) }),

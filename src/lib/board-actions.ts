@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NextRequest } from "next/server";
 import { db } from "@/db";
-import { agents, approvals, attentionItems, channels, credentials, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runs, runSteps, sandboxes, skillVersions, skills, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
+import { agents, approvals, attentionItems, channelConnections, channels, credentials, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, skillVersions, skills, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validateChannelTarget, type ChannelEvent } from "@/lib/channels";
 import { completionText, ensureServedModel, estimateTokens, loadProfiles, requestCompletion, resolveForAgent, usageFromJson } from "@/lib/model-gateway";
@@ -27,27 +27,14 @@ import { executeRoutine, inFlight } from "@/lib/routine-runner";
 import { ensureAgentVersion } from "@/lib/versions-drizzle";
 import { overQuota, recordUsage } from "@/lib/budget";
 import { mayFoundOrg, mayStaffOrg, resolveLead } from "@/lib/channel";
-import { ownedAgent, postToChannel, ownMemory, quotaReply, recentTurns, streamTimeoutMs, systemPromptFor, recordDelivery, MEMORY_SYSTEM } from "@/lib/board-core";
+import { ownedAgent, postToChannel, ownMemory, quotaReply, recentTurns, streamTimeoutMs, systemPromptFor, vaultAuthorization, recordDelivery, MEMORY_SYSTEM } from "@/lib/board-core";
 import { buildReply, streamReply } from "@/lib/chat-runner";
 import { streamBrief } from "@/lib/brief-runner";
-import { assertFetchableUrl, argumentsHash, decideToolCall, hashToken, parseAllowlist, tokenPreview } from "@/lib/policy";
+import { approvalExpiry, assertFetchableUrl, argumentsHash, decideToolCall, hashToken, parseAllowlist, tokenPreview, tokenVerdict } from "@/lib/policy";
 import { decryptSecret, encryptSecret, hasCredentialKey } from "@/lib/credentials";
 import { mcpCallTool, mcpDiscoverTools, mcpEndpointFromConfig, redactArguments } from "@/lib/mcp";
 import { nextVersion, skillExport, skillImport, slugify } from "@/lib/saved-skills";
 import { enqueueJob, queueWorkerIsLive } from "@/lib/work-queue";
-
-/**
- * Spec 31e — the vault is read server-side only: an adapter receives its bearer at call time and
- * nothing derived from it is ever returned to a payload. A missing label means "no authorization",
- * but a present label with a missing vault key refuses loudly — silence would look like an
- * unauthenticated server.
- */
-async function vaultAuthorization(workspaceId: string, label: string | undefined): Promise<string | undefined> {
-  if (!label) return undefined;
-  const [row] = await db.select().from(credentials).where(and(eq(credentials.workspaceId, workspaceId), eq(credentials.label, label))).limit(1);
-  if (!row) return undefined;
-  return `Bearer ${decryptSecret(row.envelope, process.env.CREDENTIAL_ENCRYPTION_KEY)}`;
-}
 
 const uuid = z.string().uuid();
 const text = z.string().trim().min(1).max(4000);
@@ -651,7 +638,11 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     const decision = z.enum(["APPROVED", "REJECTED"]).parse(body.decision);
     const [approval] = await db.select().from(approvals).where(and(eq(approvals.id, approvalId), eq(approvals.workspaceId, workspaceId))).limit(1);
     if (!approval || approval.status !== "PENDING") throw new Error("Approval is no longer pending");
-    await db.update(approvals).set({ status: decision }).where(eq(approvals.id, approval.id));
+    // Spec 40 — the verdict decides, not the row's age in someone's memory: consumed is final,
+    // expired means the ask went stale and the seat must raise it again.
+    const verdict = tokenVerdict(approval, { hash: approval.argumentsHash, target: approval.target, now: new Date() });
+    if (!verdict.ok) throw new Error(verdict.reason === "expired" ? "This approval expired — stale requests do not decide. Ask the seat to raise it again." : "This approval was already decided.");
+    await db.update(approvals).set({ status: decision, consumedAt: new Date() }).where(and(eq(approvals.id, approval.id), eq(approvals.status, "PENDING")));
     await audit(workspaceId, approval.agentId, `approval.${decision.toLowerCase()}`, approval.title);
   } else if (action === "renameWorkspace") {
     const name = z.string().trim().min(2).max(60).parse(body.name);
@@ -926,6 +917,78 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
         await audit(workspaceId, null, "skill.deleted", skill.name);
       }
     }
+  } else if (action === "createChannelConnection" || action === "revokeChannelConnection") {
+    // Spec 35 — the native Slack transport: an external Slack app mapped to one organisation. The
+    // bot token and signing secret are sealed together; the board carries the name and status,
+    // never the envelope. Inbound arrives at /api/channels/slack and briefs through the same
+    // durable trigger_brief job the token door uses.
+    if (action === "createChannelConnection") {
+      const input = z.object({
+        kind: z.enum(["slack"]),
+        name: z.string().trim().min(2).max(60),
+        botToken: z.string().trim().min(10).max(200),
+        signingSecret: z.string().trim().min(10).max(200),
+        externalId: z.string().trim().min(1).max(60),
+        teamId: uuid,
+        allowedSenders: z.array(z.string().trim().min(1).max(60)).max(50).default([]),
+      }).parse(body);
+      if (!hasCredentialKey(process.env.CREDENTIAL_ENCRYPTION_KEY)) throw new Error("Set CREDENTIAL_ENCRYPTION_KEY (32 bytes, hex) before storing a Slack connection — refusing to write plaintext secrets.");
+      const [org] = await db.select({ id: teams.id }).from(teams).where(and(eq(teams.id, input.teamId), eq(teams.workspaceId, workspaceId))).limit(1);
+      if (!org) throw new Error("Organisation not found");
+      const envelope = encryptSecret(JSON.stringify({ botToken: input.botToken, signingSecret: input.signingSecret }), process.env.CREDENTIAL_ENCRYPTION_KEY);
+      const [row] = await db.insert(channelConnections).values({ workspaceId, kind: input.kind, name: input.name, envelope, externalId: input.externalId, allowedSenders: input.allowedSenders, teamId: input.teamId }).returning({ id: channelConnections.id });
+      await audit(workspaceId, null, "channel.connected", `${input.kind}:${input.name} → ${input.externalId}`);
+      result = { connectionId: row.id };
+    } else {
+      const input = z.object({ connectionId: uuid }).parse(body);
+      const [row] = await db.select().from(channelConnections).where(and(eq(channelConnections.id, input.connectionId), eq(channelConnections.workspaceId, workspaceId))).limit(1);
+      if (!row) throw new Error("Connection not found");
+      await db.delete(channelConnections).where(eq(channelConnections.id, row.id));
+      await audit(workspaceId, null, "channel.revoked", `${row.kind}:${row.name}`);
+    }
+  } else if (action === "draftSkillFromRun") {
+    // Spec 41 — the self-modification loop's first half: a run's own transcript becomes a skill
+    // draft. Nothing automatic happens beyond the draft: it is a record under review (status
+    // draft, never in a prompt) until a person activates it. Writing down what verifiably happened
+    // needs no model call.
+    const runId = uuid.parse(body.runId);
+    const [run] = await db.select().from(runs).where(and(eq(runs.id, runId), eq(runs.workspaceId, workspaceId))).limit(1);
+    if (!run) throw new Error("Run not found");
+    const steps = await db.select().from(runSteps).where(eq(runSteps.runId, run.id)).orderBy(runSteps.createdAt);
+    if (!steps.length) throw new Error("This run recorded no steps, so there is nothing to learn from.");
+    const NL = String.fromCharCode(10);
+    const instructions = [
+      `Learned from the run "${run.title}" (${run.status.toLowerCase()}, started by ${run.initiator}).`,
+      `It produced: ${run.summary.slice(0, 200)}`,
+      "Steps it actually took:",
+      ...steps.map(s => `- ${s.title}${s.detail ? `: ${s.detail.slice(0, 150)}` : ""}`),
+      "Repeat this shape when the same kind of work is asked. Verify the outputs each time and say plainly what you could not verify.",
+    ].join(NL).slice(0, 4000);
+    const name = (`Run playbook · ${run.title}`).slice(0, 120);
+    const slug = slugify(name);
+    // One draft per run: a re-draft re-versions the existing draft instead of piling up twins.
+    const [existing] = await db.select().from(skills).where(and(eq(skills.workspaceId, workspaceId), eq(skills.slug, slug))).limit(1);
+    if (existing && existing.status !== "draft") throw new Error(`A skill from this run already exists and is active ("${existing.name}"). Edit it instead of re-drafting.`);
+    if (existing) {
+      const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(skillVersions).where(eq(skillVersions.skillId, existing.id));
+      const version = nextVersion(existing.currentVersion, Number(count));
+      await db.insert(skillVersions).values({ skillId: existing.id, version, instructions, toolGrants: existing.toolGrants, notes: `re-drafted from run ${run.id.slice(0, 8)}` });
+      await db.update(skills).set({ instructions, currentVersion: version, updatedAt: new Date() }).where(eq(skills.id, existing.id));
+      result = { skillId: existing.id, version, draft: true };
+    } else {
+      const [skill] = await db.insert(skills).values({ workspaceId, name, slug, description: `Drafted from the run "${run.title}"`, status: "draft", instructions, toolGrants: [], sourceRunId: run.id, createdBy: actor?.name ?? "person" }).returning();
+      await db.insert(skillVersions).values({ skillId: skill.id, version: 1, instructions, toolGrants: [], notes: `drafted from run ${run.id.slice(0, 8)}` });
+      await audit(workspaceId, run.agentId, "skill.drafted", `${skill.name} (draft, under review)`);
+      result = { skillId: skill.id, version: 1, draft: true };
+    }
+  } else if (action === "activateSkill" || action === "pauseSkill") {
+    // Spec 41 — the human confirmation step: a draft never reaches a prompt until a person says so.
+    const skillId = uuid.parse(body.skillId);
+    const [skill] = await db.select().from(skills).where(and(eq(skills.id, skillId), eq(skills.workspaceId, workspaceId))).limit(1);
+    if (!skill) throw new Error("Skill not found");
+    const next = action === "activateSkill" ? "active" : "draft";
+    await db.update(skills).set({ status: next, updatedAt: new Date() }).where(eq(skills.id, skill.id));
+    await audit(workspaceId, null, action === "activateSkill" ? "skill.activated" : "skill.paused", skill.name);
   } else {
     throw new Error("Unknown action");
   }

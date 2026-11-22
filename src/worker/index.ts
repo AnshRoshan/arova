@@ -16,8 +16,10 @@ loadEnv({ path: ".env", quiet: true });
 
 import { and, eq, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, attentionItems, events, jobs, modelUsage, routines, teams, triggers, watches, workerHeartbeats } from "@/db/schema";
+import { agents, attentionItems, channelConnections, events, jobs, modelUsage, routines, teams, triggers, watches, workerHeartbeats } from "@/db/schema";
 import { afterFailure, backoffMs, leaseUntil, retentionCutoff, type JobStatus } from "@/lib/jobs";
+import { decryptSecret } from "@/lib/credentials";
+import { slackApiBase } from "@/lib/channels/slack";
 import { assertFetchableUrl, parseAllowlist, truncateOutput } from "@/lib/policy";
 import { attentionDecision, evaluateCondition, watchDedupeKey, watchFailure } from "@/lib/goals";
 import { webFetch } from "@/lib/web-fetch";
@@ -167,7 +169,7 @@ async function execute(job: JobRow) {
         await db.update(routines).set({ lastStatus: finalStatus }).where(eq(routines.id, routine.id));
       }
     } else if (job.kind === "trigger_brief") {
-      const payload = job.payload as { triggerId?: string; teamId?: string; label?: string; text?: string; key?: string };
+      const payload = job.payload as { triggerId?: string; teamId?: string; label?: string; text?: string; key?: string; slack?: { connectionId: string; channel: string; threadTs: string | null } };
       if (!payload.teamId || !payload.text) throw new Error("The job is missing its organisation or its text.");
       const [team] = await db.select().from(teams).where(eq(teams.id, payload.teamId)).limit(1);
       if (!team) throw new Error("The organisation this trigger belonged to no longer exists.");
@@ -180,7 +182,37 @@ async function execute(job: JobRow) {
       // The cooldown runs from the end of the work, not its start — the request path already gated
       // the fire; this refresh keeps a slow brief from letting the next webhook straight through.
       if (payload.triggerId) await db.update(triggers).set({ lastFiredAt: new Date() }).where(eq(triggers.id, payload.triggerId));
-      await finalize(job, outcome);
+      const finalStatus = await finalize(job, outcome);
+      // Spec 35 — the report is a projection: ONE post into the mention's thread, spoken on the
+      // terminal outcome only (a RETRYING attempt says nothing; its successor will). A failed
+      // delivery is logged, never silently swallowed, and the brief's own record stands either way.
+      if (payload.slack && finalStatus !== "RETRYING") {
+        try {
+          const [connection] = await db.select().from(channelConnections).where(eq(channelConnections.id, payload.slack.connectionId)).limit(1);
+          if (connection) {
+            const sealed = JSON.parse(decryptSecret(connection.envelope, process.env.CREDENTIAL_ENCRYPTION_KEY)) as { botToken?: string };
+            if (sealed.botToken) {
+              // The Slack API answers 200 with ok:false on an auth refusal — that is a failed
+              // delivery and it is logged as one, never swallowed.
+              const res = await fetch(`${slackApiBase()}/chat.postMessage`, {
+                method: "POST",
+                headers: { "content-type": "application/json", authorization: `Bearer ${sealed.botToken}` },
+                body: JSON.stringify({
+                  channel: payload.slack.channel,
+                  thread_ts: payload.slack.threadTs ?? undefined,
+                  text: `${team.name} · ${outcome.status.toLowerCase()} — ${outcome.summary.slice(0, 500)}`,
+                }),
+                signal: AbortSignal.timeout(10_000),
+              });
+              const ack = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
+              if (!res.ok || ack.ok === false) console.error(`slack delivery refused: HTTP ${res.status}${ack.error ? ` (${ack.error})` : ""}`);
+              else console.log(`slack report delivered to ${payload.slack.channel}${payload.slack.threadTs ? ` (thread ${payload.slack.threadTs})` : ""}`);
+            }
+          }
+        } catch (error) {
+          console.error(`slack delivery failed: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     } else if (job.kind === "watch_check") {
       // Spec 36b: one observation through the fetch policy. The watch row carries the outcome —
       // hash, evidence, failure ladder — so the attention item, when one fires, always has evidence.

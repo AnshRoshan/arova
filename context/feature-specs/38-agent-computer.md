@@ -1,6 +1,6 @@
 # 24 — Agent computer: browser, files and terminal via a provider contract
 
-**Status: SUPERSEDED by main's spec 19 (local OS sandbox, shipped 2026-10-28).** The sandbox substrate this spec asked for exists: `src/lib/sandbox.ts` + the WSL/bubblewrap provider (live-verified) + the per-seat console. Full desktop control remains unimplemented and is tracked in that spec's own open items.
+**Status: SUPERSEDED by main's spec 19 (local OS sandbox, shipped 2026-10-28).** The sandbox substrate this spec asked for exists: `src/lib/sandbox.ts` + the WSL/bubblewrap provider (live-verified) + the per-seat console. What remains beyond it — full graphical desktop control (screens, takeover) — is the one substrate slice not built; it needs a provider that can drive a real display, and the UI refuses honestly until one exists. This is the single remaining roadmap item in the whole spec set.
 
 > Was: PROPOSED — not implemented. This is the largest substrate gap and the highest-risk unit. It should follow the worker, tool plane and auth. Part of the 2026-10-20 market roadmap.
 

@@ -150,3 +150,8 @@ ALTER TABLE triggers ADD COLUMN IF NOT EXISTS token_preview text NOT NULL DEFAUL
 -- this project owns (npm run db:check first); retrieval degrades to keyword-only without it.
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS memories_trgm_index ON memories USING gin (text gin_trgm_ops);
+
+-- Spec 40 (2026-11-22): pending approvals that predate the token rules get one fresh window,
+-- so a card printed before this migration is not born expired.
+UPDATE approvals SET expires_at = now() + interval '10 minutes'
+WHERE status = 'PENDING' AND arguments_hash = '' AND consumed_at IS NULL;

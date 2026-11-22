@@ -1,6 +1,6 @@
 # 23 — Skills and learned workflows
 
-**Status: CORE SHIPPED (ported 2026-11-22).** The saved-skills substrate is implemented end to end on main: `skills`/`skill_versions` tables, save/edit-as-new-version/rollback/import/export actions, scope rules (org/team/seat), grant intersection (skill ∩ seat) in `src/lib/saved-skills.ts`, and prompt injection through `savedSkillsBlock` in every reply path (chat, handoff, brief, routine, evals). What remains of the roadmap: model-authored skill drafts from run transcripts. Original text kept below.
+**Status: SHIPPED end to end (ported 2026-11-22, completed 2026-11-22).** Everything the roadmap asked for: `skills`/`skill_versions` tables, save/edit-as-new-version/rollback/import/export actions, scope rules (org/team/seat), grant intersection (skill ∩ seat) in `src/lib/saved-skills.ts`, prompt injection through `savedSkillsBlock` in every reply path (chat, handoff, brief, routine, evals), **usage telemetry** (`uses`/`last_used_at` recorded when a skill is actually offered), and **draft → review → activate**: run transcripts draft skills (`draftSkillFromRun`), a draft never reaches a prompt until a person activates it.
 
 > Was: PROPOSED — not approved, not implemented. Part of the 2026-10-20 market roadmap.
 

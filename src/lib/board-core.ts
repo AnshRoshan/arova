@@ -1,13 +1,14 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { agents, channels, channelDeliveries, memories, messages, skills } from "@/db/schema";
+import { agents, channels, channelDeliveries, credentials, memories, messages, skills } from "@/db/schema";
 import { deliverToChannel, type ChannelEvent } from "@/lib/channels";
 import { channelSubject, hermeticPeers } from "@/lib/channel";
 import { DEFAULT_RESERVE_TOKENS, trimToTokenBudget, type ProviderProfile } from "@/lib/model-gateway";
 import { normaliseCapabilities, resolveTools } from "@/lib/tools";
 import { skillPrompt } from "@/lib/skills";
 import { savedSkillPrompt, skillAppliesTo } from "@/lib/saved-skills";
+import { decryptSecret } from "@/lib/credentials";
 import { withProvenance } from "@/lib/provenance";
 import { dailyCallLimit, num, overQuota, usageToday } from "@/lib/budget";
 import { memoryProvenance, renderMemoryBlock, selectMemories, type MemoryKind, type MemoryRow } from "@/lib/memory";
@@ -83,9 +84,23 @@ export function systemPrompt(agent: AgentLike, peers: Peer[], channel?: string, 
 }
 
 /**
+ * Spec 31e — the vault is read server-side only: an adapter receives its bearer at call time and
+ * nothing derived from it is ever returned to a payload. A missing label means "no authorization",
+ * but a present label with a missing vault key refuses loudly — silence would look like an
+ * unauthenticated server.
+ */
+export async function vaultAuthorization(workspaceId: string, label: string | undefined): Promise<string | undefined> {
+  if (!label) return undefined;
+  const [row] = await db.select().from(credentials).where(and(eq(credentials.workspaceId, workspaceId), eq(credentials.label, label))).limit(1);
+  if (!row) return undefined;
+  return `Bearer ${decryptSecret(row.envelope, process.env.CREDENTIAL_ENCRYPTION_KEY)}`;
+}
+
+/**
  * Spec 37 — the saved skills that apply to this seat, rendered as a prompt block. Scope decides who
  * is offered a skill (org, their team, their seat); the effective grant is skill ∩ seat, so a named
- * tool the seat does not hold is labelled unusable rather than silently dropped.
+ * tool the seat does not hold is labelled unusable rather than silently dropped. Usage is a stored
+ * fact (spec 41): what a seat was actually offered counts, what was never offered does not.
  */
 export async function savedSkillsBlock(workspaceId: string, agent: { id: string; teamId?: string | null; capabilities: unknown }): Promise<string> {
   try {
@@ -96,6 +111,7 @@ export async function savedSkillsBlock(workspaceId: string, agent: { id: string;
     const held = new Set(resolveTools(caps, { hasTeam: Boolean(agent.teamId) }));
     const grants = [...new Set(applicable.flatMap(s => s.toolGrants))];
     const grantCheck = new Map(grants.map(g => [g, held.has(g)]));
+    await db.update(skills).set({ uses: sql`${skills.uses} + 1`, lastUsedAt: new Date() }).where(inArray(skills.id, applicable.map(s => s.id)));
     return savedSkillPrompt(applicable.map(s => ({ name: s.name, instructions: s.instructions, grants: s.toolGrants })), grantCheck);
   } catch {
     // A skills read must never break a reply; absence renders as absence.

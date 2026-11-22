@@ -16,7 +16,7 @@ export const READONLY_TOOL_IDS = ["calc", "now_in_timezone", "json_transform", "
 export type ToolLoopEvent = { type: "tool"; name: string; status: "running" | "completed" | "failed"; detail?: string };
 export type ToolExecution = { ok: boolean; output: string; sources?: CitationSource[] };
 export type ToolLoopResult = { content: string; used: string[]; sources: CitationSource[]; citations: CitationReport; partial: boolean; stopped: boolean; /** The loop ran out of steps, which is not the output-token cap. */ stepLimit: boolean };
-export type ToolLoopDeps = { searchProfile?: SearchProfile; fetchImpl?: typeof fetch; lookup?: FetchPolicy["lookup"] };
+export type ToolLoopDeps = { searchProfile?: SearchProfile; fetchImpl?: typeof fetch; lookup?: FetchPolicy["lookup"]; /** Spec 31c — executes a discovered MCP read tool (`mcp:<server>:<tool>`). The loop stays DB-free: the caller binds the vault, the policy decision and the audit row. */ mcpExecutor?: (name: string, args: Record<string, unknown>) => Promise<ToolExecution> };
 export type CompleteTurn = (messages: ModelMessage[], tools: ToolDefinition[]) => Promise<{ content: string; toolCalls: ToolCall[] }>;
 
 const schema = (description: string, properties: Record<string, unknown>, required: string[]): ToolDefinition["function"]["parameters"] => ({
@@ -33,14 +33,21 @@ const SCHEMAS: Record<string, { description: string; parameters: Record<string, 
   web_search: { description: "Search the public web and return numbered results with titles, URLs and snippets. Cite the results you use as [1], [2].", parameters: schema("Search the web.", { query: stringProp("The search query.") }, ["query"]) },
 };
 
-export function toolDefinitions(ids: string[], searchConfigured: boolean): ToolDefinition[] {
-  return ids
+export function toolDefinitions(ids: string[], searchConfigured: boolean, mcpTools: { name: string; description: string }[] = []): ToolDefinition[] {
+  const base = ids
     .filter(id => id !== "web_search" || searchConfigured)
     .map(id => {
       const spec = SCHEMAS[id];
       return spec ? { type: "function" as const, function: { name: id, description: spec.description, parameters: spec.parameters } } : null;
     })
     .filter((definition): definition is ToolDefinition => Boolean(definition));
+  // Spec 31c — the seat's discovered MCP read tools ride as free-object function definitions; the
+  // executor refuses anything the policy gateway does not allow, and a write always says so.
+  const mcp = mcpTools.map(t => ({
+    type: "function" as const,
+    function: { name: t.name, description: t.description || `MCP tool ${t.name}`, parameters: { type: "object", properties: {}, required: [], additionalProperties: true, description: "Arguments exactly as this MCP tool documents them." } },
+  }));
+  return [...base, ...mcp];
 }
 
 const str = (value: unknown): string => typeof value === "string" ? value : "";
@@ -48,7 +55,6 @@ const clamp = (value: string, limit: number): string => value.length <= limit ? 
 
 export async function executeToolCall(call: ToolCall, allowed: string[], deps: ToolLoopDeps = {}, ledger: CitationLedger = createLedger()): Promise<ToolExecution> {
   const name = call.function.name;
-  if (!allowed.includes(name)) return { ok: false, output: `Tool "${name}" is not granted to this seat.` };
   let args: Record<string, unknown>;
   try {
     const parsed = JSON.parse(call.function.arguments || "{}");
@@ -57,6 +63,13 @@ export async function executeToolCall(call: ToolCall, allowed: string[], deps: T
   } catch {
     return { ok: false, output: "The tool arguments were not a JSON object." };
   }
+  // Spec 31c — MCP tools are granted through the executor's own policy decision, not the seat's
+  // static grant list: the executor re-decides every call and audits it either way.
+  if (name.startsWith("mcp:")) {
+    if (!deps.mcpExecutor) return { ok: false, output: `Tool "${name}" has no MCP executor wired in this context.` };
+    return deps.mcpExecutor(name, args);
+  }
+  if (!allowed.includes(name)) return { ok: false, output: `Tool "${name}" is not granted to this seat.` };
 
   if (name === "web_fetch") {
     const fetched = await webFetch(str(args.url), { fetchImpl: deps.fetchImpl, lookup: deps.lookup });

@@ -1,6 +1,6 @@
 # 26 — Trust, cost and artifact controls
 
-**Status: APPROVED (D-22 sequence) — first slice shipped 2026-10-25 (D-23): 26e trigger-token hashing, 26c pause/kill on the queue, and the pure 26g approval-token/autonomy rules (`src/lib/policy.ts`, 9 tests). The remainder (approval-token table, budget hierarchy rows, task lineage, artifacts, credential vault, egress, trust panel) is sequenced with spec 17, where each rule gets its consumer — see D-23 for the reasoning.** Cross-cutting P0 overlay for specs 16–24. Created from the 2026-10-20 demand and enterprise deep dives.
+**Status: SHIPPED (first slice 2026-10-25 D-23; approval tokens completed 2026-11-22).** Trigger tokens are sha-256 digests with a preview; the queue pauses and resumes per workspace; and the approval is now a real token (spec 26g's rules, from `policy.ts`): every approval row binds its exact ask (`arguments_hash`, `target`), expires (10-minute window for a human decision), and `decideApproval` refuses consumed or expired tokens and stamps `consumed_at` on the decision.e pure 26g approval-token/autonomy rules (`src/lib/policy.ts`, 9 tests). The remainder (approval-token table, budget hierarchy rows, task lineage, artifacts, credential vault, egress, trust panel) is sequenced with spec 17, where each rule gets its consumer — see D-23 for the reasoning.** Cross-cutting P0 overlay for specs 16–24. Created from the 2026-10-20 demand and enterprise deep dives.
 
 ## Goal
 

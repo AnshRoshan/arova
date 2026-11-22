@@ -177,3 +177,51 @@ test("a tool error is fed back to the model, which can recover", async () => {
   assert.equal(result.content, "I could not divide by zero.");
   assert.match(seen[0], /division by zero/i);
 });
+
+// Spec 31c — MCP tools reach the loop only through the caller's executor.
+
+test("an mcp: tool call is delegated to the executor, verbatim", async () => {
+  const seen: { name: string; args: Record<string, unknown> }[] = [];
+  let turn = 0;
+  const result = await runToolLoop({
+    messages: [{ role: "user", content: "look it up" }],
+    tools: toolDefinitions([], false, [{ name: "mcp:docs:search", description: "Search the docs" }]),
+    allowed: [],
+    deps: { mcpExecutor: async (name, args) => { seen.push({ name, args }); return { ok: true, output: "42 results" }; } },
+    complete: async () => {
+      turn++;
+      if (turn === 1) return { content: "", toolCalls: [call("mcp:docs:search", { q: "queues" })] };
+      return { content: "42 results", toolCalls: [] };
+    },
+    audit: () => {},
+  });
+  assert.deepEqual(seen, [{ name: "mcp:docs:search", args: { q: "queues" } }], "the executor owns the vault, the policy decision and the audit row");
+  assert.equal(result.content, "42 results");
+});
+
+test("an mcp: call with no executor wired refuses honestly", async () => {
+  let toolFeedback = "";
+  let turn = 0;
+  const result = await runToolLoop({
+    messages: [{ role: "user", content: "look it up" }],
+    tools: toolDefinitions([], false, [{ name: "mcp:docs:search", description: "" }]),
+    allowed: [],
+    complete: async messages => {
+      turn++;
+      if (turn === 1) return { content: "", toolCalls: [call("mcp:docs:search", {})] };
+      const last = messages[messages.length - 1];
+      if (last.role === "tool") toolFeedback = String(last.content);
+      return { content: "I could not look it up.", toolCalls: [] };
+    },
+    audit: () => {},
+  });
+  assert.match(toolFeedback, /no MCP executor wired/i);
+  assert.equal(result.content, "I could not look it up.");
+});
+
+test("mcp tool definitions ride as free-object function definitions", () => {
+  const defs = toolDefinitions(["calc"], false, [{ name: "mcp:docs:search", description: "" }]);
+  const mcp = defs.find(d => d.function.name === "mcp:docs:search");
+  assert.ok(mcp, "the mcp tool is in the set");
+  assert.equal((mcp!.function.parameters as Record<string, unknown>).additionalProperties, true, "arguments are the tool's own shape");
+});

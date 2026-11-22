@@ -516,3 +516,45 @@ failed honestly (no model key on this host), retried with backoff and dead-lette
 two `watch_check` jobs **SUCCEEDED** through the fetch policy; heartbeat recorded. `npm run db:check`
 passes; `drizzle-kit push` replaced by generated SQL applied idempotently (kit's interactive prompt
 hangs on this host — recorded as a trap).
+
+### 2026-11-22 — the last roadmap items, closed (same session, third pass)
+
+Every "not implemented" row from the audit table was implemented:
+- **Spec 35 native Slack transport**: `channel_connections` + `channel_events` restored; signature-
+  verified ingress at `/api/channels/slack` (url_verification handshake, app_mention → allow-list →
+  event-id idempotency → durable trigger_brief job); the worker posts ONE report into the mention's
+  thread on the terminal outcome; `createChannelConnection`/`revokeChannelConnection` actions and a
+  Channels › Native Slack app section (secrets sealed together, never returned).
+- **Spec 41 + 37 self-modification**: `draftSkillFromRun` turns a run's own transcript into a
+  versioned draft (one per run, re-draft re-versions); `activateSkill`/`pauseSkill` gate it — a
+  draft never reaches a prompt until a person activates it; `uses`/`last_used_at` telemetry is
+  recorded when a skill is actually offered; UI shows drafts, usage, and activate/pause; the run
+  dialog has a Draft-skill-from-this-run button.
+- **Spec 31c model-driven MCP**: discovered MCP tools join the reply loop's tool set; the executor
+  re-decides every call through the policy gateway and writes a `tool_calls` row either way — only
+  READ-classified tools execute; a write returns the rule as the tool's output (the loop cannot
+  approve a write), keeping D-50's trust boundary with real reach added.
+- **Spec 40 approval tokens**: approval rows bind their exact ask (`arguments_hash`, `target`) and
+  expire (10-minute window); `decideApproval` runs `tokenVerdict`, refuses consumed/expired, stamps
+  `consumed_at`. Migration backfills pre-token pending cards.
+- Schema grew to 40 tables (db:check AROVA-ONLY, schema complete); `drizzle/0001` applied
+  idempotently; migration SQL recorded for fresh deploys.
+
+Honest boundary after this pass: model calls (no key), real search endpoints, live OIDC issuer,
+Windows-native sandbox and CRON_SECRET remain env/OS-side inputs, not code gaps; full graphical
+desktop control (spec 38's last slice) is the only unimplemented substrate item, and the UI
+refuses it honestly.
+
+### 2026-11-23 — final pass verified live (Slack loop closed end to end)
+
+The native Slack transport was driven against `scripts/mock-slack.cjs` with a real signing secret
+and a sealed bot token: url_verification echoed its challenge (200); a tampered signature was
+refused 401; an app_mention enqueued a durable `trigger_brief` job (202, event-id idempotent — the
+duplicate got `duplicate: true`); the worker claimed it, failed honestly through three backoff
+attempts (no model key), dead-lettered, and posted **one** thread report — mock received
+`{"channel":"C123","text":"Drive Org · failed — …","auth":"Bearer xoxb-…"}`. The delivery outcome
+is now logged by the worker (an `ok:false` auth refusal is a logged failed delivery, not silence).
+Also verified live this pass: `draftSkillFromRun` on a real run (draft v1, source-run bound, never
+in a prompt) → `activateSkill`; expired-approval refusal (`decideApproval` → "This approval
+expired — stale requests do not decide"). `npm test` **351/351** (MCP executor tests added),
+`tsc --noEmit` ✓, production build ✓.

@@ -1,6 +1,6 @@
 # 27 — Reviewable self-modification and feedback loops
 
-**Status: PARTIALLY SHIPPED — core substrate in place via spec 37 (ported 2026-11-22).** Versioned skills with immutable history and rollback are the self-modification core and are live; the full feedback loop (run transcripts proposing skill drafts, human confirmation, telemetry-driven revision) is NOT implemented and remains roadmap.
+**Status: SHIPPED (2026-11-22) — the loop is closed.** Run transcripts propose skill drafts (`draftSkillFromRun`: a run's own steps become a versioned draft, one per run, re-drafting re-versions in place); a human confirmation step gates it (`activateSkill` — a draft never reaches a prompt until a person says so); and telemetry drives the record (`uses`/`last_used_at` are stored facts about what was actually offered). What remains is polish, not substrate: richer model-assisted drafting once model keys exist.
 
 > Was: PROPOSED — not approved, not implemented. Created from the 2026-10-25 market refresh (`context/market-deep-dives/07-october-refresh-2026-10-25.md`).
 

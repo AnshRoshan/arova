@@ -4,7 +4,7 @@
  * and exits. Neither ever mutates the database.
  */
 
-/** The public-schema tables Arova's schema creates (src/db/schema.ts), specs 01–41 (main 01–29, ported 30–41). */
+/** The public-schema tables Arova's schema creates (src/db/schema.ts), specs 01–41 (main 01–29, ported 30–41, slack transport 35). */
 export const AROVA_TABLES = [
   "workspaces",
   "teams",
@@ -28,7 +28,7 @@ export const AROVA_TABLES = [
   "memberships",
   "sessions",
   "channels",
-  "channel_deliveries",
+  "channel_connections", "channel_deliveries", "channel_events",
   "eval_tasks",
   "eval_suites",
   "eval_results",

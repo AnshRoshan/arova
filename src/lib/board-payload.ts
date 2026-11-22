@@ -1,6 +1,6 @@
 import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, approvals, attentionItems, channelDeliveries, channels, connections, credentials, delegations, evalResults, evalSuites, evalTasks, events, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, schedulerHeartbeats, skillVersions, skills, teams, triggers, watches, workerHeartbeats, workspaces } from "@/db/schema";
+import { agents, approvals, attentionItems, channelConnections, channelDeliveries, channels, connections, credentials, delegations, evalResults, evalSuites, evalTasks, events, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, schedulerHeartbeats, skillVersions, skills, teams, triggers, watches, workerHeartbeats, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { redactTarget } from "@/lib/channels";
 import { WORKER_STALE_MS, workerIsStale } from "@/lib/jobs";
@@ -28,7 +28,7 @@ export async function board(workspaceId: string) {
   // loadEarlier action. The completed-runs total is counted in SQL over ALL rows, so windowing the
   // payload never changes a number the board claims.
   const MESSAGE_WINDOW = 200, RUN_WINDOW = 60, STEP_WINDOW = 300, APPROVAL_WINDOW = 60;
-  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, suiteList, researchProjectList, researchSourceList, researchFindingList, runStats, pendingStats, routineStats, totalsRows, goalList, watchList, attentionList, credentialList, skillList, versionCounts, jobList, queueBeats] = await Promise.all([
+  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, suiteList, researchProjectList, researchSourceList, researchFindingList, runStats, pendingStats, routineStats, totalsRows, goalList, watchList, attentionList, credentialList, skillList, versionCounts, jobList, queueBeats, slackConnections] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
     db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt), desc(messages.id)).limit(MESSAGE_WINDOW + 1),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
@@ -84,6 +84,7 @@ export async function board(workspaceId: string) {
       .where(sql`${skillVersions.skillId} in (select id from skills where workspace_id = ${workspaceId})`).groupBy(skillVersions.skillId),
     db.select().from(jobs).where(eq(jobs.workspaceId, workspaceId)).orderBy(desc(jobs.createdAt)).limit(30),
     db.select().from(workerHeartbeats).orderBy(desc(workerHeartbeats.lastSeenAt)).limit(1),
+    db.select({ id: channelConnections.id, kind: channelConnections.kind, name: channelConnections.name, externalId: channelConnections.externalId, allowedSenders: channelConnections.allowedSenders, teamId: channelConnections.teamId, enabled: channelConnections.enabled, lastEventAt: channelConnections.lastEventAt, createdAt: channelConnections.createdAt }).from(channelConnections).where(eq(channelConnections.workspaceId, workspaceId)).orderBy(desc(channelConnections.createdAt)),
   ]);
   const olderMessages = messagePage.length > MESSAGE_WINDOW;
   const messageList = (olderMessages ? messagePage.slice(0, MESSAGE_WINDOW) : messagePage).reverse();
@@ -210,6 +211,8 @@ export async function board(workspaceId: string) {
         pending: jobList.filter(j => j.status === "QUEUED" || j.status === "RETRYING").length,
       };
     })(),
+    // Spec 35 — native Slack app connections: names and status only, never the sealed envelope.
+    slackConnections: slackConnections.map(c => ({ id: c.id, kind: c.kind, name: c.name, externalId: c.externalId, allowedSenders: c.allowedSenders, teamId: c.teamId, enabled: c.enabled, lastEventAt: c.lastEventAt?.toISOString() ?? null, createdAt: c.createdAt.toISOString() })),
     toolPolicy: { allowedHosts: parseAllowlist(process.env.TOOL_ALLOWED_HOSTS).length, credentialKeyConfigured: Boolean(process.env.CREDENTIAL_ENCRYPTION_KEY) },
     limits: { dailyModelCalls: dailyCallLimit(), usage, maxDelegations: maxDelegations() },
     // Names only: what the sign-in screen would build itself from, and what a half-configured
