@@ -293,3 +293,25 @@ test("a reasoning block that mentions the shapes is not read as the decision", (
   assert.equal(t.consult, null, "a consult mentioned in reasoning is not a consult");
   assert.equal(t.text, "I will answer this myself.");
 });
+
+import { parseToolDirective } from './orchestration.ts';
+
+test('parseTurn exposes a tool directive the model asked for, and strips it from the text', () => {
+  const r = parseTurn('Let me look that up. ' + String.fromCharCode(123) + '"tool": {"name": "web_fetch", "arguments": {"url": "https://example.com/x"}}' + String.fromCharCode(125));
+  assert.deepEqual(r.tool, { name: 'web_fetch', arguments: { url: 'https://example.com/x' } });
+  assert.equal(r.text, 'Let me look that up.');
+});
+
+test('a tool directive with junk arguments is ignored, not executed', () => {
+  assert.equal(parseTurn(String.fromCharCode(123) + '"tool": {"name": 7}' + String.fromCharCode(125)).tool, undefined);
+  assert.deepEqual(parseTurn(String.fromCharCode(123) + '"tool": {"name": "web_fetch"}' + String.fromCharCode(125)).tool, { name: 'web_fetch', arguments: {} }, 'missing arguments are an empty bag, not a refusal');
+  assert.equal(parseTurn('no directive here').tool, undefined);
+});
+
+test('parseToolDirective only accepts a known-safe shape', () => {
+  assert.deepEqual(parseToolDirective({ tool: { name: 'web_fetch', arguments: { url: 'https://x.test' } } }), { name: 'web_fetch', arguments: { url: 'https://x.test' } });
+  assert.equal(parseToolDirective('nope'), undefined);
+  assert.equal(parseToolDirective({ tool: { name: '' } }), undefined);
+  assert.equal(parseToolDirective({ tool: { name: 'web_fetch', arguments: 'str' } }), undefined);
+  assert.equal(parseToolDirective({ consult: { agent: 'A', question: 'q' } }), undefined);
+});

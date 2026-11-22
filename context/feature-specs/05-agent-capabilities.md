@@ -5,7 +5,7 @@ Goal: an agent has a real configuration surface — which tools it holds, what i
 Modelled on xAI's `grok-build` `AgentDefinition` (tools, disallowedTools, permissionMode, allowedSubagentTypes, mcpServers, mcpInheritance, effort, maxTurns, isolation) and OpenAI's Agents SDK (`handoffs` as transfer of control vs a subagent called as a tool). Deliberately narrower: only what this deployment can perform.
 
 ## Registry (`src/lib/tools.ts`)
-14 tools. **Available (4):** `consult_teammate`, `handoff`, `create_routine` (propose-then-confirm), `request_approval`. **Unavailable, listed with a reason (10):** `save_note`, `web_fetch`, `web_search`, `browser`, `run_command`, `read_file`, four connectors. A grant can only narrow the available set — naming an unavailable tool cannot bring it into existence.
+**15 tools (2026-10-20).** **Available (6):** `consult_teammate`, `handoff`, `create_routine` (propose-then-confirm), `request_approval`, `build_org` (propose-then-confirm), `save_note` (org memory; added by Feature 12). **Unavailable, listed with a reason (9):** `web_fetch`, `web_search`, `browser`, `run_command`, `read_file`, and four connectors (`connect_gmail`, `connect_slack`, `connect_github`, `connect_calendar`). A grant can only narrow the available set — naming an unavailable tool cannot bring it into existence.
 
 ## Enforcement
 - The routing pass is offered only the actions the agent holds. Removing `handoff` removes the option from the prompt, so the model cannot take it even when told to.

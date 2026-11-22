@@ -7,6 +7,7 @@ import {
   Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, type LucideIcon,
 } from "lucide-react";
 import { TOOL_REGISTRY, mcpSummary, resolveTools, tokenBudgetFor, type Capabilities as ToolCaps } from "@/lib/tools";
+import { encodeCursor } from "@/lib/pagination";
 import { SKILL_REGISTRY, resolveSkills } from "@/lib/skills";
 import { parseMarkdown, splitReasoning, type Block, type Inline as MdInline } from "@/lib/markdown";
 import { hueFor, hueVars } from "@/lib/identity";
@@ -27,25 +28,43 @@ type Capabilities = {
   tools: string[]; deniedTools: string[]; permissionMode: "default" | "plan" | "auto";
   canConsult: string[]; canHandoffTo: string[]; effort: "low" | "medium" | "high";
   maxTurns: number | null; modelParams: { temperature?: number; maxTokens?: number };
-  mcpServers: { name: string; transport: string }[]; mcpInheritance: unknown; skills: string[];
+  mcpServers: { name: string; transport: string; url?: string; credential?: string }[]; mcpInheritance: unknown; skills: string[];
 };
 type Team = { id: string; name: string; brief: string; createdAt: string; leadAgentId: string | null; creatorAgentId: string | null };
 /** What an organisation recorded. Scoped to its team, authored by a seat or by the human. */
 type Memory = { id: string; workspaceId: string; teamId: string; agentId: string | null; kind: "note" | "decision" | "glossary"; text: string; sourceIds: string[]; supersedes: string | null; pinned: boolean; lastUsedAt: string | null; hits: number; createdAt: string };
-/** A bearer token that lets something outside the app brief one organisation. */
-type Trigger = { id: string; teamId: string; token: string; label: string; enabled: boolean; lastFiredAt: string | null; hits: number; createdAt: string };
+/** A bearer token that lets something outside the app brief one organisation. The raw token was
+ * shown exactly once at creation; the row keeps a digest server-side and a preview for recognition. */
+type Trigger = { id: string; teamId: string; tokenPreview: string; label: string; enabled: boolean; lastFiredAt: string | null; hits: number; createdAt: string };
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
 type BoardEvent = { id: string; agentId: string | null; type: string; detail: string; createdAt: string };
 type Board = {
-  workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null };
+  workspace: { id: string; name: string; timezone: string; creatorAgentId: string | null; pausedAt: string | null };
   overview: { activeAgents: number; enabledRoutines: number; completedRuns: number; pendingApprovals: number; messagesToday: number };
   agents: Agent[]; messages: Message[]; routines: Routine[]; runs: Run[]; steps: Step[]; approvals: Approval[];
   connections: { agentId: string; slug: string }[]; events: BoardEvent[];
   sandboxProvider: string; modelConfigured: boolean; profiles: Profile[];
   auth: { providers: { name: string; label: string }[]; incomplete: { name: string; missing: string[] }[] };
   teams: Team[]; delegations: Delegation[]; memories: Memory[]; triggers: Trigger[];
+  /** Spec 22: goals, watches and the deduplicated attention inbox. */
+  goals: { id: string; title: string; description: string; successCriteria: string; cadence: string; status: string; lastCheckedAt: string | null; nextCheckAt: string | null; createdAt: string }[];
+  watches: { id: string; goalId: string | null; title: string; url: string; condition: "changed" | "contains" | "not_contains"; comparator: string; cadence: string; enabled: boolean; lastHash: string | null; lastObservation: string | null; lastCheckedAt: string | null; nextCheckAt: string | null; failStreak: number; lastError: string | null; createdAt: string }[];
+  attention: { id: string; kind: string; severity: string; title: string; body: string; evidence: Record<string, unknown>; dedupeKey: string; status: string; lastSeenAt: string; createdAt: string; resolvedAt: string | null }[];
+  openAttention: number;
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
+  /** Spec 21a: external channel connections — the envelope never crosses to the browser. */
+  channels: { id: string; kind: string; name: string; externalId: string; allowedSenders: string[]; teamId: string | null; enabled: boolean; lastEventAt: string | null; createdAt: string }[];
+  /** Spec 19a: the board carries the newest page; these are the honest bounds. */
+  pages: { messages: { truncated: boolean; oldestCursor: string | null } };
+  /** The vault's labels — values are sealed server-side and never returned (spec 17e). */
+  vault: { label: string; kind: string; createdAt: string }[];
+  /** Runtime tool configuration: web_fetch is live the moment an allow-list exists. */
+  toolEnv: { webFetch: boolean };
+  /** The durable queue (spec 16): every row is work the worker owes or did. */
+  jobs: { id: string; kind: string; status: string; attempts: number; maxAttempts: number; runAt: string; lastError: string | null; runId: string | null; createdAt: string }[];
+  /** Liveness from stored rows: the board may say "running" only while a heartbeat is fresh. */
+  worker: { lastSeenAt: string | null; stale: boolean; workerId: string | null; queueDepth: number; oldestQueuedAt: string | null };
 };
 type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel";
 type Tone = "ran" | "waiting" | "fault" | "idle";
@@ -71,6 +90,14 @@ const est = (s: string) => Math.ceil(s.length / 4);
 
 /** Reformat an ISO instant embedded in stored prose; the words around it are untouched. */
 const humanStamps = (text: string) => text.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, m => { const d = new Date(m); return Number.isNaN(d.getTime()) ? m : `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`; });
+
+/** Where you left off: the seat the board opens on when you have not picked one — the saved seat,
+ * else the last one that spoke, else the first. `arova.lastAgent` is the only memory the browser keeps. */
+const readSavedSeat = () => (typeof window === "undefined" ? null : window.localStorage.getItem("arova.lastAgent"));
+const defaultSeatId = (board: Board, saved: string | null) => {
+  const touched = [...board.messages].reverse().find(m => board.agents.some(a => a.id === m.agentId))?.agentId;
+  return board.agents.find(a => a.id === saved)?.id ?? board.agents.find(a => a.id === touched)?.id ?? board.agents[0]?.id ?? null;
+};
 
 /** What a reply may claim about memory: only the ids the server recorded as used, never a guess. */
 const memoryNote = (metadata: Record<string, unknown> | undefined) => {
@@ -190,8 +217,12 @@ export default function Workbench() {
   const [agentTab, setAgentTab] = useState<"all" | "active" | "paused">("all");
   const [orgTab, setOrgTab] = useState<"teams" | "bench">("teams");
   const [orgSel, setOrgSel] = useState<string | null>(null);
-  const [autoTab, setAutoTab] = useState<"routines" | "runs">("routines");
-  const [toolsTab, setToolsTab] = useState<"connectors" | "mcp">("connectors");
+  const [autoTab, setAutoTab] = useState<"routines" | "runs" | "goals">("routines");
+  const [goalForm, setGoalForm] = useState({ title: "", description: "", cadence: "Every day at 8:00 AM" });
+  const [watchForm, setWatchForm] = useState({ title: "", url: "", condition: "changed", comparator: "", cadence: "Every hour" });
+  const [toolsTab, setToolsTab] = useState<"connectors" | "mcp" | "credentials" | "channels">("connectors");
+  const [channelForm, setChannelForm] = useState({ name: "", botToken: "", signingSecret: "", externalId: "", teamId: "", senders: "" });
+  const [credentialForm, setCredentialForm] = useState({ label: "", value: "" });
   const [settingsTab, setSettingsTab] = useState<"workspace" | "models" | "limits">("workspace");
   const [teamForm, setTeamForm] = useState({ name: "", brief: "" });
   const [activity, setActivity] = useState(false);
@@ -208,12 +239,17 @@ export default function Workbench() {
   const [proposals, setProposals] = useState<{ kind: "note" | "decision" | "glossary"; text: string }[]>([]);
   const [triggerOpen, setTriggerOpen] = useState(false);
   const [triggerLabel, setTriggerLabel] = useState("");
-  /** The origin is only known in the browser, so the copy line is filled after mount rather than rendered from a guess. */
+  /** The raw trigger token exists in the browser exactly once — in the creation response. */
+  const [freshCallLine, setFreshCallLine] = useState<string | null>(null);
+  /** The origin is only known in the browser, so the click that opens the trigger panel records it
+   * and the copy line is never rendered from a guess. */
   const [origin, setOrigin] = useState("");
-  useEffect(() => { setOrigin(window.location.origin); }, []);
+  /** The clock the board is measured against: state ticking from a timer callback, so nothing in
+   * render reads `Date.now()` itself and a due routine ages on screen without a reload. */
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [atBottom, setAtBottom] = useState(true);
   const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team"; id: string; name: string } | null>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "goal" | "watch"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -228,14 +264,24 @@ export default function Workbench() {
       const j = await r.json();
       if (!r.ok) throw new Error(j.error);
       setData(j);
+      /** A daily driver opens where you left off, not on an overview: the saved seat, else the last
+       * one that spoke, else the first. Chosen in the load continuation, where the board has actually
+       * arrived, rather than in an effect that renders once to ask and again to answer. An explicit
+       * pick always wins. */
+      const saved = readSavedSeat();
+      setAgentId(picked => picked ?? defaultSeatId(j, saved));
     } catch (e) { setToast(e instanceof Error ? e.message : "Could not load your workspace"); }
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (agentId) localStorage.setItem("arova.lastAgent", agentId); }, [agentId]);
+
+  useEffect(() => { const open = async () => { await load(); }; void open(); }, [load]);
   /** A scheduled run finishes after the page loaded, so keep looking while anything is RUNNING. */
   const executing = !!data && (data.runs.some(r => r.status === "RUNNING") || data.routines.some(r => r.lastStatus === "RUNNING"));
   useEffect(() => { if (!executing) return; const t = setInterval(() => { void load(); }, 5000); return () => clearInterval(t); }, [executing, load]);
+  /** Keep the clock the board is measured against current while the page is open. */
+  useEffect(() => { const t = setInterval(() => setNowMs(Date.now()), 30_000); return () => clearInterval(t); }, []);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 5200); return () => clearTimeout(t); }, [toast]);
   /** Follow the reply only while the reader is at the bottom; scrolling up is a request to be left alone.
    * The container is pinned directly — scrollIntoView can climb to the document scroller and miss. */
@@ -257,15 +303,6 @@ export default function Workbench() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-
-  /** A daily driver opens where you left off, not on an overview. */
-  useEffect(() => {
-    if (!data?.agents.length || agentId) return;
-    const saved = localStorage.getItem("arova.lastAgent");
-    const touched = [...data.messages].reverse().find(m => data.agents.some(a => a.id === m.agentId))?.agentId;
-    setAgentId(data.agents.find(a => a.id === saved)?.id ?? data.agents.find(a => a.id === touched)?.id ?? data.agents[0].id);
-  }, [data, agentId]);
-  useEffect(() => { if (agentId) localStorage.setItem("arova.lastAgent", agentId); }, [agentId]);
 
   async function act(action: string, payload: Record<string, unknown> = {}, say?: string) {
     setBusy(true);
@@ -423,23 +460,48 @@ export default function Workbench() {
   const openChannel = (teamId: string) => { setChannelId(teamId); setPane("channel"); setLivePosts([]); setLiveRunId(null); setMemoryOpen(false); setProposals([]); setTriggerOpen(false); setTriggerLabel(""); setPanelOpen(true); setRail(false); };
 
   const channel = data?.teams.find(t => t.id === channelId) ?? null;
-  const channelSeats = useMemo(() => (data && channel ? data.agents.filter(a => a.teamId === channel.id) : []), [data, channel]);
+  /* Every one of these is a plain derivation of `data`: the arrays are a handful of stored rows,
+   * and the compiler memoises them itself — a hand-written useMemo over a locally derived object
+   * is exactly what it refuses to preserve. */
+  const channelSeats = data && channel ? data.agents.filter(a => a.teamId === channel.id) : [];
   /** The same rule the server applies, imported rather than restated: the UI must not name a lead a brief would not reach. */
-  const briefLead = useMemo(() => (channel ? resolveLead(channelSeats, channel.leadAgentId) ?? null : null), [channel, channelSeats]);
+  const briefLead = channel ? resolveLead(channelSeats, channel.leadAgentId) ?? null : null;
   /** Stored posts, plus the ones this brief has already landed before the board refresh arrives. */
-  const channelFeed = useMemo(() => (data && channel ? [...data.messages.filter(m => m.teamId === channel.id), ...livePosts] : []), [data, channel, livePosts]);
+  const channelFeed = data && channel ? [...data.messages.filter(m => m.teamId === channel.id), ...livePosts] : [];
   /** The ceiling the server will actually apply to this lead, so the bar never promises a summons it would refuse. */
   const leadCeiling = summonCeiling({ envMax: data?.limits.maxDelegations ?? 0, seatMaxTurns: briefLead?.capabilities?.maxTurns ?? null });
-  const orgMemories = useMemo(() => (data && channel ? data.memories.filter(m => m.teamId === channel.id) : []), [data, channel]);
+  const orgMemories = data && channel ? data.memories.filter(m => m.teamId === channel.id) : [];
   /** A note something newer supersedes stays listed, struck through, so a correction is visible as one. */
-  const staleMemoryIds = useMemo(() => new Set(orgMemories.map(m => m.supersedes).filter((id): id is string => !!id)), [orgMemories]);
-  const orgTriggers = useMemo(() => (data && channel ? data.triggers.filter(t => t.teamId === channel.id) : []), [data, channel]);
+  const staleMemoryIds = new Set(orgMemories.map(m => m.supersedes).filter((id): id is string => !!id));
+  const orgTriggers = data && channel ? data.triggers.filter(t => t.teamId === channel.id) : [];
 
   /** True once the server has stored the message being answered: the echo would be a duplicate. */
   const threadHasPending = !!pending && (data?.messages ?? []).some(m => m.role === "user" && m.content === pending);
 
   const agent = data?.agents.find(a => a.id === agentId) ?? data?.agents[0];
-  const thread = useMemo(() => (data && agent ? data.messages.filter(m => m.agentId === agent.id) : []), [data, agent]);
+  const thread = data && agent ? data.messages.filter(m => m.agentId === agent.id) : [];
+  /** Spec 19a: load earlier rows for one thread or channel, merged newest-first without duplicates. */
+  const [earlierState, setEarlierState] = useState<Record<string, boolean>>({});
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const loadEarlier = async (subject: { agentId?: string; teamId?: string }) => {
+    if (!data || loadingEarlier) return;
+    const key = subject.agentId ?? subject.teamId ?? "";
+    const subjectRows = data.messages.filter(m => (subject.agentId ? m.agentId === subject.agentId : m.teamId === subject.teamId));
+    const oldest = subjectRows[0];
+    setLoadingEarlier(true);
+    try {
+      const qs = new URLSearchParams({ page: "messages", limit: "50", ...(subject.agentId ? { agentId: subject.agentId } : {}), ...(subject.teamId ? { teamId: subject.teamId } : {}), ...(oldest ? { before: encodeCursor({ at: new Date(oldest.createdAt).toISOString(), id: oldest.id }) } : {}) });
+      const r = await fetch(`/api/board?${qs}`, { cache: "no-store" });
+      const j = await r.json();
+      const older: Message[] = Array.isArray(j.messages) ? j.messages : [];
+      setEarlierState(prev => ({ ...prev, [key]: Boolean(j.hasMore) }));
+      if (older.length) setData({ ...data, messages: [...older, ...data.messages.filter(m => !older.some((x: Message) => x.id === m.id))] });
+    } catch { /* the button stays; the reader can retry */ } finally {
+      setLoadingEarlier(false);
+    }
+  };
+  const subjectKey = agent?.id ?? channel?.id ?? "";
+  const canLoadEarlier = Boolean(data?.pages.messages.truncated || earlierState[subjectKey]);
   const byId = (id: string) => data?.agents.find(a => a.id === id);
   /** Which model a seat would really be answered by, in the seat's own words and the server's. */
   const profileOf = (providerName: string | undefined) => (!data || !providerName || providerName === "local"
@@ -452,7 +514,7 @@ export default function Workbench() {
   /** Only a message the gateway actually produced counts as a reply; a seeded greeting does not. */
   const lastReply = [...thread].reverse().find(m => m.role === "assistant" && m.kind !== "routine_proposal" && m.metadata?.provider);
   /** The board also returns hops that document an older reply, so a "today" label must say so. */
-  const delegationsToday = (data?.delegations ?? []).filter(d => d.createdAt.slice(0, 10) === new Date().toISOString().slice(0, 10));
+  const delegationsToday = (data?.delegations ?? []).filter(d => d.createdAt.slice(0, 10) === new Date(nowMs).toISOString().slice(0, 10));
   const lastMessageOf = (id: string) => (data?.messages ?? []).filter(m => m.agentId === id).pop();
   const messageCountOf = (id: string) => (data?.messages ?? []).filter(m => m.agentId === id).length;
   /** Posts in an organisation's channel — the count on the bench's channel entry. */
@@ -464,9 +526,8 @@ export default function Workbench() {
   const mcpCount = (data?.agents ?? []).reduce((n, a) => n + (a.capabilities?.mcpServers?.length ?? 0), 0);
 
   /* ── the workbench computes: what each seat is doing, and what the server recorded ── */
-  const nowMs = Date.now();
-  const dueRoutines = useMemo(() => (data?.routines ?? []).filter(r => r.enabled && r.nextRunAt && new Date(r.nextRunAt).getTime() <= nowMs), [data, nowMs]);
-  const seatTone = useMemo(() => {
+  const dueRoutines = (data?.routines ?? []).filter(r => r.enabled && r.nextRunAt && new Date(r.nextRunAt).getTime() <= nowMs);
+  const seatTone = (() => {
     const map = new Map<string, Tone>();
     if (!data) return map;
     const put = (id: string, tone: Tone) => {
@@ -478,37 +539,39 @@ export default function Workbench() {
     for (const a of data.approvals) if (a.status === "PENDING" && !a.detail.includes("Sample approval")) put(a.agentId, "waiting");
     for (const rt of dueRoutines) put(rt.agentId, "waiting");
     return map;
-  }, [data, dueRoutines]);
+  })();
   /** Teams split into the ones with real reporting lines (a chart) and families (a flat roster). */
-  const teamGroups = useMemo(() => {
+  const teamGroups = (() => {
     if (!data) return [];
     const hasLines = new Set(data.agents.filter(a => a.teamId && a.managerId).map(a => a.teamId as string));
     return data.teams
       .map(t => ({ team: t, charted: hasLines.has(t.id), members: data.agents.filter(a => a.teamId === t.id) }))
       .filter(g => g.members.length > 0);
-  }, [data]);
-  const unfiled = useMemo(() => (data?.agents ?? []).filter(a => !a.teamId), [data]);
+  })();
+  const unfiled = (data?.agents ?? []).filter(a => !a.teamId);
   /** The selected seat's reporting line, in words, for the identity bar. `manager_id` is the source. */
-  const reportsLine = useMemo(() => {
+  const reportsLine = (() => {
     if (!data || !agent?.managerId) return null;
     const manager = data.agents.find(a => a.id === agent.managerId);
     if (!manager) return null;
     const chain = [manager.name];
-    let cursor = manager;
-    while (cursor.managerId) {
-      const up = data.agents.find(a => a.id === cursor.managerId);
+    let cursor: Agent = manager;
+    for (;;) {
+      const nextId = cursor.managerId;
+      if (!nextId) break;
+      const up = data.agents.find(a => a.id === nextId);
       if (!up) break;
       chain.push(up.name);
       cursor = up;
     }
     return `reports to ${chain.join(" · ")}`;
-  }, [data, agent]);
+  })();
 
   const openSeat = (id: string) => { setAgentId(id); setPane(null); setRail(false); setActivity(false); };
 
   /* Activity board rows: every one is a stored row (run, delegation, approval, event) or a live
    * SSE fact this client itself received. Nothing here is decorative. */
-  const inFlight = useMemo(() => {
+  const inFlight = (() => {
     const rows: { label: string; note?: string }[] = [];
     // Whichever subject this turn belongs to: a seat's thread, or an organisation's channel.
     const subject = (pane === "channel" ? briefLead?.name : agent?.name) ?? "The agent";
@@ -517,16 +580,17 @@ export default function Workbench() {
     if (busy && stream) { const r = splitReasoning(stream); rows.push({ label: `${subject} is ${r.reasoning && !r.answer ? "reasoning" : "answering"}`, note: `${stream.length} chars received · saved when the reply completes` }); }
     else if (busy) rows.push({ label: `${subject} is waiting on the model`, note: "the request was sent; nothing has arrived yet" });
     return rows;
-  }, [consulting, busy, stream, agent?.name, briefLead?.name, pane, livePosts.length, channel?.name]);
-  const waitingRows = useMemo(() => {
+  })();
+  const waitingRows = (() => {
     if (!data) return [];
     return data.runs.filter(r => ["WAITING_FOR_TOOL", "QUEUED", "RUNNING"].includes(r.status)).map(r => ({
       run: r, tone: toneOf(r.status, isSample(r)) as Tone,
-      note: r.status === "RUNNING" ? r.routineId ? "executing now — the scheduler claimed it when this workspace was read" : "a brief is being answered in its channel right now"
-        : r.status === "WAITING_FOR_TOOL" ? r.routineId ? "there is no worker on this server, so it stays waiting" : "the daily model budget stopped this brief part-way"
-        : "queued behind the worker",
+      note: r.status === "RUNNING" ? r.routineId ? "executing now on the worker" : "a brief is being answered in its channel right now"
+        : r.status === "WAITING_FOR_TOOL" ? "the daily model budget stopped this run; the job retries with backoff"
+        : data.worker.stale ? "waiting in the queue — no worker is running to claim it"
+        : "waiting for the worker to claim it",
     }));
-  }, [data]);
+  })();
 
   if (loading) return <div style={{ display: "grid", placeItems: "center", height: "100dvh" }}><span className="mark"><Sparkles size={15} /></span><p style={{ color: "var(--ink-2)", fontSize: 13, marginTop: 12 }}>Opening your workspace…</p></div>;
   if (!data) return <div className="blank" style={{ margin: 40 }}><h3>Arova could not open</h3><p>{toast ?? "The workspace did not load."}</p><button className="primary" onClick={load}>Try again</button></div>;
@@ -535,13 +599,15 @@ export default function Workbench() {
   const upcoming = data.routines.filter(r => r.enabled && r.nextRunAt && new Date(r.nextRunAt).getTime() > nowMs).sort((x, y) => String(x.nextRunAt).localeCompare(String(y.nextRunAt))).slice(0, 5);
   const callsToday = data.limits.usage.reduce((n, u) => n + u.calls, 0);
   const realPending = pendingApprovals.filter(a => !a.detail.includes("Sample approval"));
+  /** Spec 22c: the open attention inbox — deduplicated observations with evidence, never toasts. */
+  const openAttentionRows = (data?.attention ?? []).filter(a => a.status === "open" || a.status === "snoozed");
   // The channel is reached from the bench, so the bench stays on screen while the channel is open.
   const section: Pane | "agents" = !pane || pane === "channel" ? "agents" : pane;
   const panelTitle = { overview: "Shortcuts", agents: "The bench", org: "Reporting lines", scheduler: "Routines", tools: "Connectors", settings: "Workspace" }[section];
   const agentMatch = (a: Agent) => (!filter || `${a.name} ${a.role}`.toLowerCase().includes(filter.toLowerCase())) && (agentTab === "all" || (agentTab === "active") === (a.status === "ACTIVE"));
   const activeTeam = data.teams.find(t => t.id === orgSel) ?? data.teams[0];
   const railItems: { id: Pane | "agents"; label: string; icon: LucideIcon; badge?: number }[] = [
-    { id: "overview", label: "Overview", icon: LayoutDashboard, badge: data.overview.pendingApprovals },
+    { id: "overview", label: "Overview", icon: LayoutDashboard, badge: data.overview.pendingApprovals + data.openAttention },
     { id: "agents", label: "Agents", icon: Bot },
     { id: "org", label: "Organisation", icon: Network },
     { id: "scheduler", label: "Automations", icon: CalendarDays },
@@ -698,7 +764,7 @@ export default function Workbench() {
       </>}
 
       {section === "scheduler" && <>
-        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }]} />
+        <Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "goals", label: "Goals", count: data.goals.length + data.watches.length }]} />
         <div className="sp-scroll">
           {autoTab === "routines" && <>
             {!data.routines.length && <p className="bench-none">No routines yet. Use + to add one.</p>}
@@ -720,7 +786,7 @@ export default function Workbench() {
       </>}
 
       {section === "tools" && <>
-        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "mcp", label: "MCP servers", count: mcpCount }]} />
+        <Tabs value={toolsTab} onChange={setToolsTab} items={[{ id: "connectors", label: "Connectors", count: toolCatalog.length }, { id: "mcp", label: "MCP servers", count: mcpCount }, { id: "credentials", label: "Credentials", count: data.vault.length }, { id: "channels", label: "Channels", count: data.channels.length }]} />
         <div className="sp-scroll">
           {toolsTab === "connectors" && [...new Set(toolCatalog.map(t => t.category))].map(cat => <div key={cat}>
             <div className="sp-group">{cat}</div>
@@ -815,7 +881,7 @@ export default function Workbench() {
           </div>
           <div className="memory-bar">
             <button type="button" className={`ghost ${memoryOpen ? "on" : ""}`} onClick={() => setMemoryOpen(o => !o)} aria-expanded={memoryOpen}><Brain size={14} />Memory<span className="mono">{orgMemories.length}</span></button>
-            <button type="button" className={`ghost ${triggerOpen ? "on" : ""}`} onClick={() => setTriggerOpen(o => !o)} aria-expanded={triggerOpen}><Webhook size={14} />Trigger<span className="mono">{orgTriggers.length}</span></button>
+            <button type="button" className={`ghost ${triggerOpen ? "on" : ""}`} onClick={() => { const next = !triggerOpen; if (next) setOrigin(window.location.origin); setTriggerOpen(next); }} aria-expanded={triggerOpen}><Webhook size={14} />Trigger<span className="mono">{orgTriggers.length}</span></button>
             <span className="push" />
             {(memoryOpen || triggerOpen) && <span className="memory-scope mono">scoped to {channel.name}</span>}
           </div>
@@ -848,18 +914,27 @@ export default function Workbench() {
             </div>)}
           </div>}
           {triggerOpen && <div className="memory-panel">
-            <p className="hint">Something outside this app can brief {channel.name} by posting to it. There is no worker here, so the work runs when the call arrives and its report lands in this channel — nothing keeps going after the caller hangs up.</p>
-            <form className="memory-add" onSubmit={async e => { e.preventDefault(); const label = triggerLabel.trim(); if (label.length < 2 || busy) return; if (await act("createTrigger", { teamId: channel.id, label }, "Trigger created — copy the call line")) setTriggerLabel(""); }}>
+            <p className="hint">Something outside this app can brief {channel.name} by posting to it. The call is queued durably and the worker runs the brief; its report lands in this channel with the trigger named as its author. If no worker is running, the job waits, and the caller is told so.</p>
+            <form className="memory-add" onSubmit={async e => {
+              e.preventDefault(); const label = triggerLabel.trim(); if (label.length < 2 || busy) return;
+              const r = await act("createTrigger", { teamId: channel.id, label }, "Trigger created — copy the call line now; it is shown only this once");
+              if (r?.token) setFreshCallLine(`curl -X POST ${origin || "https://this-server"}/api/trigger -H "Authorization: Bearer ${r.token}" -H "content-type: application/json" -d '{"text":"what to work on"}'`);
+              if (r) setTriggerLabel("");
+            }}>
               <input aria-label="Trigger name" value={triggerLabel} maxLength={60} placeholder="Name it (e.g. nightly build report)" onChange={e => setTriggerLabel(e.target.value)} />
               <button className="primary" type="submit" disabled={busy || triggerLabel.trim().length < 2}><Plus size={13} />Create trigger</button>
             </form>
             {!orgTriggers.length && <p className="bench-none">No trigger is wired to this organisation.</p>}
+            {freshCallLine && <div className="memory-row">
+              <span className="memory-kind">NEW</span>
+              <span className="memory-main"><b className="call-line">{freshCallLine}</b><em>Shown only this once — the server stores a digest, not the token. Copy it now; if it is lost, revoke the trigger and create another.</em></span>
+              <CopyBtn text={freshCallLine} label="Copy" />
+              <button className="icon-btn" type="button" title="Dismiss — the line cannot be shown again" onClick={() => setFreshCallLine(null)}><X size={14} /></button>
+            </div>}
             {orgTriggers.map(t => {
-              const line = `curl -X POST ${origin || "https://this-server"}/api/trigger -H "Authorization: Bearer ${t.token}" -H "content-type: application/json" -d '{"text":"what to work on"}'`;
               return <div className="memory-row" key={t.id}>
                 <span className="memory-kind">POST</span>
-                <span className="memory-main"><b className="call-line">{line}</b><em>{t.label} · fired {t.hits} {t.hits === 1 ? "time" : "times"}{t.lastFiredAt ? ` (${ago(t.lastFiredAt)})` : " · never"} · one organisation only · 60s cooldown · the token is the only credential</em></span>
-                <CopyBtn text={line} label="Copy" />
+                <span className="memory-main"><b className="call-line">POST /api/trigger · {t.tokenPreview}</b><em>{t.label} · fired {t.hits} {t.hits === 1 ? "time" : "times"}{t.lastFiredAt ? ` (${ago(t.lastFiredAt)})` : " · never"} · one organisation only · 60s cooldown · the call line was shown once at creation; if it is lost, revoke and create a new trigger</em></span>
                 <button className="icon-btn" type="button" title="Revoke this trigger" disabled={busy} onClick={() => void act("revokeTrigger", { triggerId: t.id }, "Trigger revoked")}><Trash2 size={14} /></button>
               </div>;
             })}
@@ -870,6 +945,7 @@ export default function Workbench() {
             <p>Say what you want done. {briefLead?.name ?? "The lead"} answers as the organisation: any teammate it pulls in posts its own answer in this channel, and the report names those posts.</p>
           </div>}
           <div className="thread channel">
+            {canLoadEarlier && <div style={{ textAlign: "center", margin: "8px 0" }}><button className="ghost" disabled={loadingEarlier} onClick={() => void loadEarlier({ teamId: channel.id })}>{loadingEarlier ? "Loading…" : "Load earlier posts"}</button></div>}
             {channelFeed.map((m, i) => {
               const authorId = m.metadata?.authoredBy ? String(m.metadata.authoredBy) : null;
               const author = authorId ? byId(authorId) : null;
@@ -936,6 +1012,7 @@ export default function Workbench() {
         </>}
 
         {!pane && agent && <div className="thread">
+          {canLoadEarlier && <div style={{ textAlign: "center", margin: "8px 0" }}><button className="ghost" disabled={loadingEarlier} onClick={() => void loadEarlier({ agentId: agent.id })}>{loadingEarlier ? "Loading…" : "Load earlier messages"}</button></div>}
           {!thread.length && <div className="thread-empty">
             <span className="entry-face" style={hue}><FaceIcon agent={agent} /></span>
             <h2>No conversation here yet</h2>
@@ -1024,14 +1101,19 @@ export default function Workbench() {
         </div>}
 
         {pane === "scheduler" && <div className="pane">
-          <div className="pane-head"><div><h1>Scheduler</h1><p>A due routine runs the next time this workspace is opened — there is no background daemon on this server, so a routine that fell due while the laptop was closed fires once on the next open and is marked late.</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
+          <div className="pane-head"><div><h1>Scheduler</h1><p>Due work is queued durably and executed by the worker process. While no worker runs, jobs wait — a routine that fell due while the laptop was closed fires as soon as one starts, exactly once.</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
+          <p className="hint">
+            {data.worker.stale
+              ? <>No worker running — routines, Run Now and triggers wait in the queue until <code>npm run worker</code> starts{data.worker.queueDepth ? ` (${data.worker.queueDepth} waiting)` : ""}.</>
+              : <>Worker running · last seen {ago(data.worker.lastSeenAt!)} ago · {data.worker.queueDepth} job{data.worker.queueDepth === 1 ? "" : "s"} in the queue.</>}
+          </p>
           {autoTab === "routines" && <><h2 className="pane-h2">Routines<span className="mono">{data.routines.length}</span></h2>
           {data.routines.length ? <div className="rows">{data.routines.map(r => <div className="row" key={r.id}>
             <span className="row-face"><CalendarDays size={15} /></span>
             <span className="row-main"><strong>{r.name}</strong><span>{r.description} · {byId(r.agentId)?.name}</span><span className="row-when">{r.enabled ? <>next {r.nextRunAt ? `${dayLabel(r.nextRunAt)} ${clock(r.nextRunAt)}` : "not scheduled"} · {describeSchedule(r.schedule, r.timezone)}{r.failStreak > 0 ? ` · ${r.failStreak} failed in a row` : ""}</> : <>{r.failStreak >= 10 ? `switched off after ${r.failStreak} failures` : "paused"} · {r.schedule}</>}</span></span>
             <span className="row-actions">
               <span className="row-side">{r.lastStatus ? <State status={r.lastStatus} /> : null}</span>
-              <button className="ghost" disabled={busy} onClick={() => act("runRoutine", { routineId: r.id }, "Run started")}><Play size={14} />Run now</button>
+              <button className="ghost" disabled={busy} onClick={() => act("runRoutine", { routineId: r.id }, "Run queued for the worker")}><Play size={14} />Run now</button>
               <button className="icon-btn" title={r.enabled ? "Pause" : "Resume"} disabled={busy} onClick={() => act("toggleRoutine", { routineId: r.id })}>{r.enabled ? <Pause size={15} /> : <Play size={15} />}</button>
               <button className="icon-btn" title="Delete" disabled={busy} onClick={() => setAskDelete({ kind: "routine", id: r.id, name: r.name })}><Trash2 size={15} /></button>
             </span>
@@ -1042,7 +1124,42 @@ export default function Workbench() {
             <span className="row-main"><strong>{r.title}</strong><span>{byId(r.agentId)?.name ?? "removed agent"} · {r.initiator === "person" ? "" : r.initiator === "routine" ? "started by its schedule · " : "started by an inbound trigger · "}{r.summary}</span></span>
             <span className="row-side"><State status={r.status} sample={isSample(r)} /><time>{dayLabel(r.startedAt)} {clock(r.startedAt)}</time></span>
           </button>)}</div> : <div className="blank"><h3>No runs yet</h3><p>Run a routine and the request is recorded here.</p></div>}</>}
-        </div>}
+          {autoTab === "goals" && <><h2 className="pane-h2">Goals<span className="mono">{data.goals.length}</span></h2>
+          {data.goals.length ? <div className="rows">{data.goals.map(g => <div className="row" key={g.id}>
+            <span className="row-face"><Brain size={15} /></span>
+            <span className="row-main"><strong>{g.title}</strong><span>{g.description || g.successCriteria || "no criteria written"} · {g.cadence}</span><span className="row-when">{g.lastCheckedAt ? `last checked ${ago(g.lastCheckedAt)} ago` : "never checked"}{g.nextCheckAt ? ` · next ${dayLabel(g.nextCheckAt)} ${clock(g.nextCheckAt)}` : ""}</span></span>
+            <span className="row-side"><State status={g.status === "active" ? "COMPLETED" : g.status === "paused" ? "WAITING_FOR_TOOL" : "FAILED"} /></span>
+            <span className="row-actions">
+              <button className="ghost" disabled={busy} onClick={() => act("updateGoalStatus", { goalId: g.id, status: g.status === "active" ? "paused" : "active" }, g.status === "active" ? "Goal paused" : "Goal resumed")}>{g.status === "active" ? <Pause size={14} /> : <Play size={14} />}</button>
+              <button className="ghost" disabled={busy} onClick={() => act("updateGoalStatus", { goalId: g.id, status: "achieved" }, "Goal achieved")}>Achieved</button>
+              <button className="icon-btn" title="Delete goal" disabled={busy} onClick={() => setAskDelete({ kind: "goal", id: g.id, name: g.title })}><Trash2 size={15} /></button>
+            </span>
+          </div>)}</div> : <div className="blank"><h3>No goals</h3><p>Give an agent a responsibility below — it is checked on its cadence, and anything worth your eyes lands in the inbox.</p></div>}
+          <form className="memory-add" onSubmit={async e => { e.preventDefault(); if (goalForm.title.trim().length < 2 || busy) return; if (await act("createGoal", goalForm, "Goal created")) setGoalForm({ title: "", description: "", cadence: "Every day at 8:00 AM" }); }}>
+            <input aria-label="Goal title" value={goalForm.title} maxLength={120} placeholder="Title (e.g. Keep the vendor page honest)" onChange={e => setGoalForm({ ...goalForm, title: e.target.value })} />
+            <input aria-label="Goal description" value={goalForm.description} maxLength={1000} placeholder="What does it mean?" onChange={e => setGoalForm({ ...goalForm, description: e.target.value })} />
+            <button className="primary" type="submit" disabled={busy || goalForm.title.trim().length < 2}><Plus size={13} />Add goal</button>
+          </form>
+          <h2 className="pane-h2">Watches<span className="mono">{data.watches.length}</span></h2>
+          {data.watches.length ? <div className="rows">{data.watches.map(w => <div className="row" key={w.id}>
+            <span className="row-face"><Globe2 size={15} /></span>
+            <span className="row-main"><strong>{w.title}</strong><span>{w.condition}{w.comparator ? ` “${w.comparator}”` : ""} · {w.url}</span><span className="row-when">{w.lastCheckedAt ? `checked ${ago(w.lastCheckedAt)} ago` : "never checked"}{w.nextCheckAt && w.enabled ? ` · next ${clock(w.nextCheckAt)}` : ""}{w.failStreak > 0 ? ` · ${w.failStreak} failed in a row` : ""}{w.lastError ? ` · ${w.lastError.slice(0, 60)}` : ""}</span></span>
+            <span className="row-side"><span className={`chip ${w.enabled ? "ran" : "idle"}`}><i />{w.enabled ? "watching" : "paused"}</span></span>
+            <span className="row-actions">
+              <button className="ghost" disabled={busy} onClick={() => act("runWatchNow", { watchId: w.id }, "Check queued for the worker")}>Test check</button>
+              <button className="icon-btn" title={w.enabled ? "Pause" : "Resume"} disabled={busy} onClick={() => act("toggleWatch", { watchId: w.id })}>{w.enabled ? <Pause size={15} /> : <Play size={15} />}</button>
+              <button className="icon-btn" title="Delete watch" disabled={busy} onClick={() => setAskDelete({ kind: "watch", id: w.id, name: w.title })}><Trash2 size={15} /></button>
+            </span>
+          </div>)}</div> : <div className="blank"><h3>No watches</h3><p>Watch a page for a change or a keyword — the worker checks it on its cadence through the fetch policy.</p></div>}
+          <form className="memory-add" onSubmit={async e => { e.preventDefault(); if (watchForm.title.trim().length < 2 || busy) return; if (await act("createWatch", watchForm, "Watch created — first check is queued")) setWatchForm({ title: "", url: "", condition: "changed", comparator: "", cadence: "Every hour" }); }}>
+            <input aria-label="Watch title" value={watchForm.title} maxLength={120} placeholder="Title (e.g. Vendor status page)" onChange={e => setWatchForm({ ...watchForm, title: e.target.value })} />
+            <input aria-label="Watch url" value={watchForm.url} maxLength={300} placeholder="https://… (allow-listed hosts only)" onChange={e => setWatchForm({ ...watchForm, url: e.target.value })} />
+            <select aria-label="Watch condition" value={watchForm.condition} onChange={e => setWatchForm({ ...watchForm, condition: e.target.value })}><option value="changed">page changes</option><option value="contains">contains…</option><option value="not_contains">no longer contains…</option></select>
+            {watchForm.condition !== "changed" && <input aria-label="Watch comparator" value={watchForm.comparator} maxLength={200} placeholder="text to look for" onChange={e => setWatchForm({ ...watchForm, comparator: e.target.value })} />}
+            <button className="primary" type="submit" disabled={busy || watchForm.title.trim().length < 2 || !watchForm.url}><Plus size={13} />Watch</button>
+          </form>
+          </>}
+          </div>}
 
         {pane === "org" && <OrgManager tab={orgTab} team={activeTeam} sel={orgSel} agents={data.agents} teams={data.teams} busy={busy} act={act}
           onOpen={openSeat} onNewTeam={() => setDialog("team")} onAskDelete={(id, name) => setAskDelete({ kind: "team", id, name })}
@@ -1060,9 +1177,51 @@ export default function Workbench() {
           <div className={toolsTab === "mcp" ? "" : "is-hidden"}><h2 className="pane-h2">MCP servers<span className="mono">{mcpCount}</span></h2>
           {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
             <span className="row-face"><Settings2 size={15} /></span>
-            <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}</span></span>
-            <span className="row-side"><span className="chip idle"><i />no transport</span></span>
-          </div>))}</div> : <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities. It is stored and shown, and nothing connects until a transport exists.</p></div>}</div>
+            <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}{srv.url ? ` · ${srv.url}` : ""}{srv.credential ? ` · credential: ${srv.credential}` : ""}</span></span>
+            <span className="row-side"><span className={`chip ${srv.transport === "http" && srv.url ? "ran" : "idle"}`}><i />{srv.transport === "http" && srv.url ? "http · gateway-gated" : "no transport"}</span></span>
+          </div>))}</div> : <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities. http servers with a URL run through the policy gateway; their writes pause for approval.</p></div>}</div>
+          <div className={toolsTab === "credentials" ? "" : "is-hidden"}><h2 className="pane-h2">Credentials<span className="mono">{data.vault.length}</span></h2>
+          <p className="hint">Stored encrypted at rest and never returned — the server can use them, nothing can read them back, and rotation is saving the same label again.</p>
+          {data.vault.length ? <div className="rows">{data.vault.map(c => <div className="row" key={c.label}>
+            <span className="row-face"><Settings2 size={15} /></span>
+            <span className="row-main"><strong>{c.label}</strong><span>{c.kind} · sealed; never displayed again</span></span>
+            <span className="row-actions"><button className="icon-btn" title="Delete this credential" disabled={busy} onClick={() => void act("deleteCredential", { label: c.label }, "Credential deleted")}><Trash2 size={14} /></button></span>
+          </div>)}</div> : <div className="blank"><h3>No credentials</h3><p>Store one below for an MCP server that needs it.</p></div>}
+          <form className="memory-add" onSubmit={async e => {
+            e.preventDefault();
+            const label = credentialForm.label.trim(); const value = credentialForm.value;
+            if (label.length < 2 || !value || busy) return;
+            if (await act("storeCredential", { label, value, kind: "mcp" }, "Credential sealed — it will not be shown again")) setCredentialForm({ label: "", value: "" });
+          }}>
+            <input aria-label="Credential name" value={credentialForm.label} maxLength={60} placeholder="Name it (e.g. mcp-github)" onChange={e => setCredentialForm({ ...credentialForm, label: e.target.value })} />
+            <input aria-label="Credential value" type="password" value={credentialForm.value} placeholder="The secret" onChange={e => setCredentialForm({ ...credentialForm, value: e.target.value })} />
+            <button className="primary" type="submit" disabled={busy || credentialForm.label.trim().length < 2 || !credentialForm.value}><Plus size={13} />Seal</button>
+          </form>
+          </div>
+          <div className={toolsTab === "channels" ? "" : "is-hidden"}><h2 className="pane-h2">Channels<span className="mono">{data.channels.length}</span></h2>
+          <p className="hint">A channel maps to one organisation. A mention from an allow-listed sender enqueues the same durable brief the token door uses; the report lands back in the thread. Secrets are sealed; the allow-list is the identity boundary.</p>
+          {data.channels.length ? <div className="rows">{data.channels.map(c => <div className="row" key={c.id}>
+            <span className="row-face"><Webhook size={15} /></span>
+            <span className="row-main"><strong>{c.name}</strong><span>{c.kind} · external {c.externalId || "—"} · {c.teamId ? byId(c.teamId)?.name ?? "no organisation" : "no organisation"} · {c.allowedSenders.length} allowed sender{c.allowedSenders.length === 1 ? "" : "s"}{c.lastEventAt ? ` · last event ${ago(c.lastEventAt)} ago` : " · never fired"}</span></span>
+            <span className="row-side"><span className={`chip ${c.enabled ? "ran" : "idle"}`}><i />{c.enabled ? "live" : "off"}</span></span>
+            <span className="row-actions"><button className="icon-btn" title="Revoke this connection" disabled={busy} onClick={() => void act("revokeChannelConnection", { connectionId: c.id }, "Connection revoked")}><Trash2 size={14} /></button></span>
+          </div>)}</div> : <div className="blank"><h3>No channels</h3><p>Connect Slack below: an @mention of the app briefs the mapped organisation.</p></div>}
+          <form className="memory-add" onSubmit={async e => {
+            e.preventDefault();
+            const f = channelForm;
+            if (f.name.trim().length < 2 || !f.botToken || !f.signingSecret || !f.externalId || !f.teamId || busy) return;
+            const r = await act("createChannelConnection", { kind: "slack", name: f.name.trim(), botToken: f.botToken.trim(), signingSecret: f.signingSecret.trim(), externalId: f.externalId.trim(), teamId: f.teamId, allowedSenders: f.senders.split(/[\s,]+/).map(x => x.trim()).filter(Boolean) }, "Channel connected — secrets sealed");
+            if (r) setChannelForm({ name: "", botToken: "", signingSecret: "", externalId: "", teamId: "", senders: "" });
+          }}>
+            <input aria-label="Connection name" value={channelForm.name} maxLength={60} placeholder="Name (e.g. company-slack)" onChange={e => setChannelForm({ ...channelForm, name: e.target.value })} />
+            <input aria-label="Slack bot token" type="password" value={channelForm.botToken} placeholder="xoxb-… bot token" onChange={e => setChannelForm({ ...channelForm, botToken: e.target.value })} />
+            <input aria-label="Slack signing secret" type="password" value={channelForm.signingSecret} placeholder="signing secret" onChange={e => setChannelForm({ ...channelForm, signingSecret: e.target.value })} />
+            <input aria-label="Slack team id" value={channelForm.externalId} maxLength={60} placeholder="T-team id" onChange={e => setChannelForm({ ...channelForm, externalId: e.target.value })} />
+            <select aria-label="Mapped organisation" value={channelForm.teamId} onChange={e => setChannelForm({ ...channelForm, teamId: e.target.value })}><option value="">Map to…</option>{data.teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+            <input aria-label="Allowed sender ids" value={channelForm.senders} placeholder="U-member ids, comma separated" onChange={e => setChannelForm({ ...channelForm, senders: e.target.value })} />
+            <button className="primary" type="submit" disabled={busy || channelForm.name.trim().length < 2 || !channelForm.botToken || !channelForm.signingSecret || !channelForm.externalId || !channelForm.teamId}><Plus size={13} />Connect</button>
+          </form>
+          </div>
         </div>}
 
         {pane === "settings" && <div className="pane">
@@ -1076,6 +1235,13 @@ export default function Workbench() {
                 <option value="">None designated · any seat may propose an organisation</option>
                 {data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}
               </select><span className="hint">With a creator seat chosen, only that seat may found an organisation on its own behalf; an organisation&rsquo;s own lead may add seats inside it. You can always create one yourself.</span></div>
+              <div className="field"><label>Queued work</label>
+                <div className="seg">
+                  <button type="button" className={data.workspace.pausedAt ? "" : "on"} disabled={busy} onClick={() => void act("resumeWork", {}, "Queued work resumed")}>Running</button>
+                  <button type="button" className={data.workspace.pausedAt ? "on" : ""} disabled={busy} onClick={() => void act("pauseWork", {}, "Queued work paused — the worker claims nothing until you resume")}>Paused</button>
+                </div>
+                <span className="hint">{data.workspace.pausedAt ? `Paused since ${stamp(data.workspace.pausedAt)} — queued jobs wait; a running step finishes.` : "The worker claims jobs for this workspace normally."} {data.worker.queueDepth > 0 && <button type="button" className="ghost" disabled={busy} onClick={() => void act("killJobs", {}, `${data.worker.queueDepth} queued job(s) cancelled`)}>Kill {data.worker.queueDepth} queued job{data.worker.queueDepth === 1 ? "" : "s"}</button>}</span>
+              </div>
             </div>
             <div className={`block ${settingsTab !== "models" ? "is-hidden" : ""}`}>
               <h2>Model providers</h2><p>Configured on the server in <span className="mono">.env.local</span>. A key never reaches the browser.</p>
@@ -1090,7 +1256,7 @@ export default function Workbench() {
             <div className={`block ${settingsTab !== "limits" ? "is-hidden" : ""}`}>
               <h2>What cannot run here</h2><p>Limits of this deployment, not switches for you to find.</p>
               <div className="kv"><span>Sign-in</span><span className="push"><span className="chip idle"><i />cookie demo{data.auth.providers.length ? ` · ${data.auth.providers.map(p => p.label).join(", ")} env-ready, flow pending` : data.auth.incomplete.length ? ` · ${data.auth.incomplete.map(i => `${i.name} missing ${i.missing.join("/")}`).join("; ")}` : ""}</span></span></div>
-              <div className="kv"><span>Scheduler</span><span className="push"><span className="chip waiting"><i />runs on open</span></span></div>
+              <div className="kv"><span>Scheduler</span><span className="push"><span className="chip waiting"><i />durable queue · {data.worker.stale ? "no worker" : "worker running"}</span></span></div>
               <div className="kv"><span>Tool connectors</span><span className="push"><span className="chip idle"><i />not configured</span></span></div>
               <div className="kv"><span>Computer / browser</span><span className="push"><span className="chip idle"><i />{data.sandboxProvider}</span></span></div>
             </div>
@@ -1153,14 +1319,14 @@ export default function Workbench() {
           </div>)}
         </div>}
 
-        {(realPending.length > 0 || waitingRows.length > 0 || dueRoutines.length > 0) && <div className="board-sec">
-          <div className="group-label"><ShieldCheck size={11} /><span>Needs attention</span><span className="group-count">{realPending.length + waitingRows.length + dueRoutines.length}</span></div>
-          {realPending.map(a => <div className="bd-row" key={a.id}>
-            <span className={`st ${toneOf(a.status)}`}><i /></span>
-            <span className="bd-main"><b>{a.title}</b><em>{a.detail}</em>
-              <span className="bd-actions"><button className="ghost" disabled={busy} onClick={() => act("decideApproval", { approvalId: a.id, decision: "REJECTED" }, "Rejected")}>Reject</button><button className="primary" disabled={busy} onClick={() => act("decideApproval", { approvalId: a.id, decision: "APPROVED" }, "Recorded. Nothing was sent.")}>Approve</button></span>
+        {(realPending.length > 0 || waitingRows.length > 0 || dueRoutines.length > 0 || openAttentionRows.length > 0) && <div className="board-sec">
+          <div className="group-label"><ShieldCheck size={11} /><span>Needs attention</span><span className="group-count">{realPending.length + waitingRows.length + dueRoutines.length + openAttentionRows.length}</span></div>
+          {openAttentionRows.map(at => <div className="bd-row" key={at.id}>
+            <span className={`st ${at.severity === "urgent" ? "fault" : "waiting"}`}><i /></span>
+            <span className="bd-main"><b>{at.title}</b><em>{at.body}{typeof at.evidence?.url === "string" ? ` · ${at.evidence.url}` : ""}{at.lastSeenAt !== at.createdAt ? ` · seen again ${ago(at.lastSeenAt)} ago` : ""}</em>
+              <span className="bd-actions"><button className="ghost" disabled={busy} onClick={() => act("setAttentionStatus", { itemId: at.id, status: "seen" }, "Marked seen")}>Seen</button><button className="ghost" disabled={busy} onClick={() => act("setAttentionStatus", { itemId: at.id, status: "dismissed" }, "Dismissed")}>Dismiss</button></span>
             </span>
-            <time className="mono">{stamp(a.createdAt)}</time>
+            <time className="mono">{stamp(at.createdAt)}</time>
           </div>)}
           {waitingRows.map(w => <button className="bd-row" key={w.run.id} onClick={() => { openSeat(w.run.agentId); setDialog(w.run); }}>
             <span className={`st ${w.tone}`}><i /></span>
@@ -1199,7 +1365,7 @@ export default function Workbench() {
         </div>
       </div>
       <div className="board-foot">
-        <span>No background worker: due work executes when this workspace is read.</span>
+        <span>{data.worker.stale ? `No worker: queued work waits (${data.worker.queueDepth} job${data.worker.queueDepth === 1 ? "" : "s"}).` : `Worker running · ${data.worker.queueDepth} queued.`}</span>
         <span className="board-usage mono">{callsToday} of {data.limits.dailyModelCalls || "no"} model calls today</span>
       </div>
     </aside>
@@ -1221,7 +1387,7 @@ export default function Workbench() {
         <div className="field"><label htmlFor="rn">Name</label><input id="rn" required placeholder="Morning briefing" value={routineForm.name} onChange={e => setRoutineForm({ ...routineForm, name: e.target.value })} /></div>
         <div className="field"><label htmlFor="ra">Agent</label><select id="ra" value={routineForm.agentId} onChange={e => setRoutineForm({ ...routineForm, agentId: e.target.value })}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select></div>
         <div className="field"><label htmlFor="rd">What should they do?</label><textarea id="rd" required rows={3} value={routineForm.description} onChange={e => setRoutineForm({ ...routineForm, description: e.target.value })} /></div>
-        <div className="field"><label htmlFor="rs">Schedule</label><select id="rs" value={routineForm.schedule} onChange={e => setRoutineForm({ ...routineForm, schedule: e.target.value })}>{["Every day at 8:00 AM", "Weekdays at 8:00 AM", "Every Monday at 9:00 AM", "Every Friday at 4:00 PM", "Every week"].map(s => <option key={s}>{s}</option>)}</select><span className="hint">A due routine executes the next time this workspace is opened; nothing fires while the app is closed.</span></div>
+        <div className="field"><label htmlFor="rs">Schedule</label><select id="rs" value={routineForm.schedule} onChange={e => setRoutineForm({ ...routineForm, schedule: e.target.value })}>{["Every day at 8:00 AM", "Weekdays at 8:00 AM", "Every Monday at 9:00 AM", "Every Friday at 4:00 PM", "Every week"].map(s => <option key={s}>{s}</option>)}</select><span className="hint">When it comes due, the job waits in the durable queue; the worker (<code>npm run worker</code>) picks it up and posts the answer.</span></div>
         <div className="dialog-actions"><button type="button" className="ghost" onClick={() => setDialog(null)}>Cancel</button><button className="primary" disabled={busy}>Save routine</button></div>
       </form>}
 
@@ -1241,7 +1407,7 @@ export default function Workbench() {
       </div>}
     </div>}
 
-    {settingsFor && byId(settingsFor) && <AgentDialog key={settingsFor} agent={byId(settingsFor)!} team={(() => { const id = byId(settingsFor)?.teamId; return id ? data.teams.find(t => t.id === id) ?? null : null; })()} tierActive={!!data.workspace.creatorAgentId} profiles={data.profiles} teammates={(() => { const target = byId(settingsFor); if (!target?.teamId) return []; return data.agents.filter(a => a.teamId === target.teamId && a.id !== target.id).map(a => ({ id: a.id, name: a.name, role: a.role })); })()} busy={busy} act={act} onClose={() => setSettingsFor(null)} onAskDelete={(id, name) => setAskDelete({ kind: "agent", id, name })} />}
+    {settingsFor && byId(settingsFor) && <AgentDialog key={settingsFor} agent={byId(settingsFor)!} team={(() => { const id = byId(settingsFor)?.teamId; return id ? data.teams.find(t => t.id === id) ?? null : null; })()} tierActive={!!data.workspace.creatorAgentId} profiles={data.profiles} teammates={(() => { const target = byId(settingsFor); if (!target?.teamId) return []; return data.agents.filter(a => a.teamId === target.teamId && a.id !== target.id).map(a => ({ id: a.id, name: a.name, role: a.role })); })()} busy={busy} act={act} onClose={() => setSettingsFor(null)} onAskDelete={(id, name) => setAskDelete({ kind: "agent", id, name })} webFetchAllowed={data.toolEnv.webFetch} />}
 
     {askDelete && <div className="scrim" onMouseDown={e => { if (e.target === e.currentTarget) setAskDelete(null); }}>
       <div className="dialog" style={{ width: 'min(380px, 100%)' }}>
@@ -1249,7 +1415,7 @@ export default function Workbench() {
         <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'goal') await act('deleteGoal', { goalId: target.id }, 'Goal deleted'); else if (target.kind === 'watch') await act('deleteWatch', { watchId: target.id }, 'Watch deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}
@@ -1280,7 +1446,7 @@ function SeatBranch({ node, depth, members, current, toneOfSeat, counts, lastAt,
   </>;
 }
 
-function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; setCaps: (c: Capabilities) => void; teammates: { id: string; name: string; role: string }[] }) {
+function CapabilitiesEditor({ caps, setCaps, teammates, webFetchAllowed }: { caps: Capabilities; setCaps: (c: Capabilities) => void; teammates: { id: string; name: string; role: string }[]; webFetchAllowed: boolean }) {
   const effective = new Set(resolveTools(caps as unknown as ToolCaps, { hasTeam: teammates.length > 0 }));
   const toggleTool = (id: string) => setCaps({ ...caps, tools: caps.tools.includes(id) ? caps.tools.filter(t => t !== id) : [...caps.tools, id] });
   const toggleSkill = (id: string) => setCaps({ ...caps, skills: caps.skills.includes(id) ? caps.skills.filter(x => x !== id) : [...caps.skills, id] });
@@ -1295,12 +1461,14 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
       <label className="caps-label">Tools</label>
       <p className="caps-help">Only what this deployment can actually perform is selectable. Everything else is listed so you can see the boundary, not pretend it away.</p>
       {TOOL_REGISTRY.map(t => {
+        // Availability is the server's runtime answer, not a hardcoded flag (spec 17a).
+        const available = t.id === "web_fetch" ? webFetchAllowed : t.available;
         const granted = caps.tools.includes(t.id);
-        const dormant = t.available && granted && !effective.has(t.id);
-        return <label key={t.id} className={`tool-row ${t.available ? "" : "off"} ${dormant ? "dormant" : ""}`} title={t.available ? t.description : t.whyUnavailable}>
-          <input type="checkbox" disabled={!t.available} checked={granted} onChange={() => toggleTool(t.id)} />
-          <span className="tool-row-main"><b>{t.label}</b><em>{t.available ? (dormant ? `${t.description} — inactive until this agent joins a team.` : t.description) : t.whyUnavailable}</em></span>
-          <span className={`chip ${dormant ? "waiting" : t.available ? "ran" : "idle"}`}><i />{dormant ? "no team" : t.available ? t.kind : "unavailable"}</span>
+        const dormant = available && granted && !effective.has(t.id);
+        return <label key={t.id} className={`tool-row ${available ? "" : "off"} ${dormant ? "dormant" : ""}`} title={available ? t.description : (t.id === "web_fetch" ? "Set TOOL_ALLOWED_HOSTS on the server to enable it." : t.whyUnavailable)}>
+          <input type="checkbox" disabled={!available} checked={granted} onChange={() => toggleTool(t.id)} />
+          <span className="tool-row-main"><b>{t.label}</b><em>{available ? (dormant ? `${t.description} — inactive until this agent joins a team.` : t.description) : (t.id === "web_fetch" ? "No allow-list is configured; set TOOL_ALLOWED_HOSTS on the server to let the gateway fetch." : t.whyUnavailable)}</em></span>
+          <span className={`chip ${dormant ? "waiting" : available ? "ran" : "idle"}`}><i />{dormant ? "no team" : available ? t.kind : "unavailable"}</span>
         </label>;
       })}
     </div>
@@ -1333,7 +1501,7 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
     </div>
     <div className="caps-group">
       <label className="caps-label">Skills</label>
-      <p className="caps-help">A skill is a named block of instructions added to this agent's system prompt. It changes how a reply is written. It cannot grant a tool, and the server drops any name that is not in the registry.</p>
+      <p className="caps-help">A skill is a named block of instructions added to this agent&apos;s system prompt. It changes how a reply is written. It cannot grant a tool, and the server drops any name that is not in the registry.</p>
       {SKILL_REGISTRY.map(s => <label key={s.id} className={`tool-row ${s.available ? "" : "off"}`} title={s.available ? s.description : s.whyUnavailable}>
         <input type="checkbox" disabled={!s.available} checked={caps.skills.includes(s.id)} onChange={() => toggleSkill(s.id)} />
         <span className="tool-row-main"><b>{s.label}</b><em>{s.available ? s.description : s.whyUnavailable}</em></span>
@@ -1342,10 +1510,12 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
     </div>
     <div className="caps-group">
       <label className="caps-label">MCP servers</label>
-      <p className="caps-help">{mcpSummary(caps as unknown as ToolCaps, { transportWired: false })}</p>
+      <p className="caps-help">{mcpSummary(caps as unknown as ToolCaps, { transportWired: true })} http servers run through the policy gateway; their writes pause for approval.</p>
       {caps.mcpServers.map((srv, i) => <div className="mcp-row" key={`${srv.name}-${i}`}>
         <input value={srv.name} maxLength={40} aria-label={`Server ${i + 1} name`} placeholder="server name" onChange={e => setCaps({ ...caps, mcpServers: caps.mcpServers.map((s, j) => j === i ? { ...s, name: e.target.value } : s) })} />
         <select value={srv.transport} aria-label={`Server ${i + 1} transport`} onChange={e => setCaps({ ...caps, mcpServers: caps.mcpServers.map((s, j) => j === i ? { ...s, transport: e.target.value } : s) })}><option value="stdio">stdio</option><option value="http">http</option></select>
+        <input value={srv.url ?? ""} maxLength={300} aria-label={`Server ${i + 1} url`} placeholder="https://…/mcp (http only)" onChange={e => setCaps({ ...caps, mcpServers: caps.mcpServers.map((s, j) => j === i ? { ...s, url: e.target.value } : s) })} />
+        <input value={srv.credential ?? ""} maxLength={60} aria-label={`Server ${i + 1} credential label`} placeholder="credential label" onChange={e => setCaps({ ...caps, mcpServers: caps.mcpServers.map((s, j) => j === i ? { ...s, credential: e.target.value } : s) })} />
         <button type="button" className="icon-btn" aria-label={`Remove ${srv.name || "server"}`} onClick={() => setCaps({ ...caps, mcpServers: caps.mcpServers.filter((_, j) => j !== i) })}><X size={15} /></button>
       </div>)}
       <div><button type="button" className="ghost" disabled={caps.mcpServers.length >= 6} onClick={() => setCaps({ ...caps, mcpServers: [...caps.mcpServers, { name: "", transport: "stdio" }] })}><Plus size={14} />Add server</button></div>
@@ -1354,7 +1524,7 @@ function CapabilitiesEditor({ caps, setCaps, teammates }: { caps: Capabilities; 
   </div>;
 }
 
-function AgentDialog({ agent, team, tierActive, profiles, teammates, busy, act, onClose, onAskDelete }: { agent: Agent; team: Team | null; tierActive: boolean; profiles: Profile[]; teammates: { id: string; name: string; role: string }[]; busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>; onClose: () => void; onAskDelete: (id: string, name: string) => void }) {
+function AgentDialog({ agent, team, tierActive, profiles, teammates, busy, act, onClose, onAskDelete, webFetchAllowed }: { agent: Agent; team: Team | null; tierActive: boolean; profiles: Profile[]; teammates: { id: string; name: string; role: string }[]; busy: boolean; act: (a: string, p?: Record<string, unknown>, s?: string) => Promise<unknown>; onClose: () => void; onAskDelete: (id: string, name: string) => void; webFetchAllowed: boolean }) {
   const [name, setName] = useState(agent.name);
   const [role, setRole] = useState(agent.role);
   const [instructions, setInstructions] = useState(agent.instructions);
@@ -1375,7 +1545,7 @@ function AgentDialog({ agent, team, tierActive, profiles, teammates, busy, act, 
           <button type="button" className={section === "identity" ? "on" : ""} onClick={() => setSection("identity")}>Identity</button>
           <button type="button" className={section === "capabilities" ? "on" : ""} onClick={() => setSection("capabilities")}><ListChecks size={13} />Capabilities</button>
         </div>
-        {section === "capabilities" ? <CapabilitiesEditor caps={caps} setCaps={setCaps} teammates={teammates} /> : null}
+        {section === "capabilities" ? <CapabilitiesEditor caps={caps} setCaps={setCaps} teammates={teammates} webFetchAllowed={webFetchAllowed} /> : null}
         <div className="dialog-actions"><button className="primary" type="submit" disabled={busy}>Save</button></div>
       </form>
       {team && <div className="dialog-hire">

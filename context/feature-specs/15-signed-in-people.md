@@ -1,5 +1,9 @@
 # 15 — Signed-in people: env-driven OIDC (spec only — waiting on credentials)
 
+> **Status 2026-10-20 (sync, D-18): foundation only.** The diagnostics module and the secret-free board
+> view exist; there are no `users`/`sessions`, auth routes, session cookie or `/admin/people`. Setting
+> `AUTH_*` variables does **not** enable sign-in. Do not describe OAuth as working.
+
 The user asked (2026-10-01): "allow the sign in with Google and other things". Decisions taken with
 them (D-17): **one workspace, signed-in people**; **env-driven providers with a Google preset** (the
 `PROVIDERS` doctrine applied to identity); **steals first** (done — spec 14).

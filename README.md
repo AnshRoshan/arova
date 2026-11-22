@@ -4,9 +4,11 @@ Arova is an agent workspace built with Next.js, PostgreSQL, Drizzle ORM, and Tai
 
 ## Run locally
 
-1. Set `DATABASE_URL` in `.env` to a PostgreSQL database.
+1. Set `DATABASE_URL` in `.env.local` to a PostgreSQL database (copy `.env.example`).
 2. Run `npm install` and `npx drizzle-kit push`.
 3. Run `npm run dev` and open `http://localhost:3000`.
+
+Checks: `npm test` (153 unit tests over the pure libraries — needs Node ≥ 22.18, which runs TypeScript directly), `npm run typecheck`, `npm run lint`, `npm run build` (compiles without a live database). CI runs all four on every push.
 
 First visit creates an empty personal workspace. You add the first agent yourself, and every number on the overview is then something you did. Agent creation/editing/pausing/deletion, persisted chat, natural-language routine proposals, routine creation/toggling/deletion, manual run requests, run cancellation, approval decisions, timezone changes, and audit events are backed by PostgreSQL.
 
@@ -58,7 +60,7 @@ Project guidance and handoff live in `AGENTS.md`, `memory.md`, and `context/`, s
 
 Each agent has a **Capabilities** tab in its settings: which tools it holds, its permission mode, which teammates it may consult or hand off to, its effort and output budget, and any MCP servers it is configured with.
 
-The tool list is a registry, not a wish list. Four tools genuinely run today — consult a teammate, hand off, propose a routine, request approval. Ten more are listed and greyed out with the reason they cannot run (no sandbox, no OAuth, no network policy), and **granting one of those to an agent cannot make it exist**. Removing a capability also removes it from the routing decision the model is shown, so an agent that lost `handoff` cannot hand off even when you tell it to.
+The tool list is a registry, not a wish list. Six tools genuinely run today — consult a teammate, hand off, propose a routine, request approval, propose an organisation, and record org memory. Nine more are listed and greyed out with the reason they cannot run (no sandbox, no OAuth, no network policy), and **granting one of those to an agent cannot make it exist**. Removing a capability also removes it from the routing decision the model is shown, so an agent that lost `handoff` cannot hand off even when you tell it to.
 
 `permissionMode: plan` lets an agent advise and delegate but refuses its write actions with a message naming the switch to change. MCP servers are stored and displayed honestly as "no transport wired" until a client exists.
 
@@ -68,16 +70,16 @@ Ask an agent to build a team — "create a product agency for a fitness app" —
 
 Once agents share a team, the one answering you can consult a teammate. A separate routing pass decides, before the answer is written, whether a teammate's specialism beats the asker's own; if you name a teammate, that request wins. When it consults, you see a "Meridian consulted Scout" card with the exact question asked and the teammate's full answer, and the reply is recorded in `delegations`.
 
-A consulted answer costs three model calls — routing, the peer, then the integrating answer — so `MAX_DELEGATIONS` caps hops (default 1, `0` turns delegation off). Every call counts against the daily budget.
+A consulted answer costs three model calls — routing, the peer, then the integrating answer — so `MAX_DELEGATIONS` caps hops (default 2; `0` turns delegation off). Every call counts against the daily budget.
 
 Delegation is model-to-model. It is not a connector: no agent here can read your inbox, open a browser, or write to another system.
 
 ## Infrastructure boundaries
 
-- **Authentication:** The demo uses a random, HTTP-only workspace cookie for separation. This is **not production authentication**. Add Google/GitHub OAuth, authenticated user-to-workspace membership, CSRF protection, and session rotation before a public deployment.
+- **Authentication:** The demo uses a random, HTTP-only workspace cookie for separation. This is **not production authentication**. `src/lib/auth-providers.ts` can read an env-driven OIDC registry and report which variables are missing, but **no sign-in flow exists** — setting `AUTH_PROVIDERS` changes the diagnostics, not the door. Add real OAuth, authenticated user-to-workspace membership, CSRF protection, and session rotation before a public deployment.
 - **Tools:** The catalog is present, but OAuth providers are not configured. Connect buttons fail safely and do not pretend to connect accounts.
-- **Scheduling:** Routines execute. A due routine runs the next time the workspace is opened — there is no background daemon in this deployment, so a routine that fell due while the machine was off fires once on the next open and is marked late. Each execution creates a real run with steps and posts the answer into that agent's thread, under the same daily model-call budget as chat.
-- **Runs:** Run Now and the scheduler both execute the agent and record the outcome. A run still cannot touch anything outside the workspace, because no browser, files or connectors exist here. Runs inserted by the seed script are labelled as sample activity and excluded from the overview counters.
+- **Scheduling:** A due routine executes the next time **`GET /api/board`** is read — there is no background daemon in this deployment. A routine that fell due while the machine was off fires once on the next open; it is not currently written as "missed" (spec 08's status note). Each execution creates a real run with steps and posts the answer into that agent's thread, under the same daily model-call budget as chat.
+- **Runs:** The scheduler executes due routines. **Run Now is still a waiting stub**: it records a `WAITING_FOR_TOOL` run and says that no external action was performed; it does not call the model. No run can touch anything outside the workspace, because no browser, files or connectors exist here. Runs inserted by the seed script are labelled as sample activity and excluded from the overview counters.
 - **Computer:** `SandboxProvider` is defined in `src/lib/sandbox.ts`. The default `UnconfiguredSandboxProvider` deliberately rejects start and execute requests. It does not execute host commands or pretend to provide a browser. Integrate an isolated Docker/Playwright or hosted provider through this contract before enabling it.
 - **Approvals:** A fresh workspace has no pending approvals; one exists only if you seeded sample content. Resolving an approval records a decision; it does not trigger an external write.
 

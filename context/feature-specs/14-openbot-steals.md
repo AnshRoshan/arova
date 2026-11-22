@@ -44,7 +44,7 @@ the order (steals first, sign-in second — D-17). Three separate units, each wi
   per-seat lists; a CEL engine is a different product).
 
 ## Verification
-- 144/144 tests (was 135 + 9 new), typegen/tsc/build green, `drizzle-kit push` applied both columns to
+- 144/144 tests at build time (was 135 + 9 new; the suite is **153** as of 2026-10-20), typegen/tsc/build green, `drizzle-kit push` applied both columns to
   `arova_demo`, server on :3123: `/api/health` 200, fresh board payload read — 3 runs all carry
   `initiator` (`"person"`), 3 routines all carry `failStreak` (0).
 - **Not driven live:** a real ten-failure streak and a trigger-fired `initiator:"trigger"` row. Both

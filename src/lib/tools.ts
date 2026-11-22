@@ -18,36 +18,53 @@ export type ToolSpec = {
   kind: ToolKind;
   /** Writes a row that changes workspace state, as opposed to producing text. */
   writes: boolean;
+  /** Spec 17a: the gateway's risk class. READ never mutates; WRITE changes workspace state; EXTERNAL reaches beyond it. */
+  risk: "READ" | "WRITE" | "EXTERNAL";
   available: boolean;
   whyUnavailable?: string;
 };
 
 export const TOOL_REGISTRY: ToolSpec[] = [
-  { id: "consult_teammate", label: "Consult a teammate", description: "Ask one teammate a question and use their answer, keeping the floor yourself.", kind: "delegation", writes: false, available: true },
-  { id: "handoff", label: "Hand off", description: "Transfer the turn to a teammate, who then answers the user directly.", kind: "delegation", writes: false, available: true },
-  { id: "create_routine", label: "Propose routine", description: "Propose a routine for the user to confirm before it is saved.", kind: "workspace", writes: true, available: true },
-  { id: "request_approval", label: "Request approval", description: "Raise an action for the user to approve before it is recorded.", kind: "workspace", writes: true, available: true },
-  { id: "build_org", label: "Propose an organisation", description: "Propose a set of agents with reporting lines for the user to confirm before any of them exist.", kind: "workspace", writes: true, available: true },
+  { id: "consult_teammate", label: "Consult a teammate", description: "Ask one teammate a question and use their answer, keeping the floor yourself.", kind: "delegation", writes: false, risk: "READ", available: true },
+  { id: "handoff", label: "Hand off", description: "Transfer the turn to a teammate, who then answers the user directly.", kind: "delegation", writes: false, risk: "READ", available: true },
+  { id: "create_routine", label: "Propose routine", description: "Propose a routine for the user to confirm before it is saved.", kind: "workspace", writes: true, risk: "WRITE", available: true },
+  { id: "request_approval", label: "Request approval", description: "Raise an action for the user to approve before it is recorded.", kind: "workspace", writes: true, risk: "WRITE", available: true },
+  { id: "build_org", label: "Propose an organisation", description: "Propose a set of agents with reporting lines for the user to confirm before any of them exist.", kind: "workspace", writes: true, risk: "WRITE", available: true },
   
-  { id: "save_note", label: "Record org memory", description: "Write a durable note into this organisation's memory, attributed to this seat and readable only inside it.", kind: "workspace", writes: true, available: true },
-  { id: "web_fetch", label: "Fetch a URL", description: "Read a web page the user names.", kind: "external", writes: false, available: false, whyUnavailable: "No network tool is enabled in this deployment; it needs an allow-listed fetch policy first." },
-  { id: "web_search", label: "Web search", description: "Search the public web.", kind: "external", writes: false, available: false, whyUnavailable: "No search provider is configured, and results would need a source to be citable." },
-  { id: "browser", label: "Browser", description: "Operate a page in an isolated session.", kind: "external", writes: false, available: false, whyUnavailable: "No sandbox provider is wired, so nothing can host a browser session." },
-  { id: "run_command", label: "Run command", description: "Execute a shell command in a workspace.", kind: "external", writes: true, available: false, whyUnavailable: "No isolated runtime exists here; commands would run on your machine, so this stays off." },
-  { id: "read_file", label: "Read files", description: "Open files in a project workspace.", kind: "external", writes: false, available: false, whyUnavailable: "There is no mounted workspace for an agent to read." },
-  { id: "connect_gmail", label: "Gmail", description: "Read and draft in your inbox.", kind: "external", writes: true, available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
-  { id: "connect_slack", label: "Slack", description: "Post and read in channels.", kind: "external", writes: true, available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
-  { id: "connect_github", label: "GitHub", description: "Read issues and open pull requests.", kind: "external", writes: true, available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
-  { id: "connect_calendar", label: "Calendar", description: "Read and create events.", kind: "external", writes: true, available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
+  { id: "save_note", label: "Record org memory", description: "Write a durable note into this organisation's memory, attributed to this seat and readable only inside it.", kind: "workspace", writes: true, risk: "WRITE", available: true },
+  { id: "web_fetch", label: "Fetch a URL", description: "Read a web page the user names.", kind: "external", writes: false, risk: "READ", available: false, whyUnavailable: "No allow-list is configured: set TOOL_ALLOWED_HOSTS on the server and web_fetch goes live through the policy gateway." },
+  { id: "web_search", label: "Web search", description: "Search the public web.", kind: "external", writes: false, risk: "READ", available: false, whyUnavailable: "No search provider is configured, and results would need a source to be citable." },
+  { id: "browser", label: "Browser", description: "Operate a page in an isolated session.", kind: "external", writes: false, risk: "EXTERNAL", available: false, whyUnavailable: "No sandbox provider is wired, so nothing can host a browser session." },
+  { id: "run_command", label: "Run command", description: "Execute a shell command in a workspace.", kind: "external", writes: true, risk: "EXTERNAL", available: false, whyUnavailable: "No isolated runtime exists here; commands would run on your machine, so this stays off." },
+  { id: "read_file", label: "Read files", description: "Open files in a project workspace.", kind: "external", writes: false, risk: "READ", available: false, whyUnavailable: "There is no mounted workspace for an agent to read." },
+  { id: "connect_gmail", label: "Gmail", description: "Read and draft in your inbox.", kind: "external", writes: true, risk: "WRITE", available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
+  { id: "connect_slack", label: "Slack", description: "Post and read in channels.", kind: "external", writes: true, risk: "WRITE", available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
+  { id: "connect_github", label: "GitHub", description: "Read issues and open pull requests.", kind: "external", writes: true, risk: "WRITE", available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
+  { id: "connect_calendar", label: "Calendar", description: "Read and create events.", kind: "external", writes: true, risk: "WRITE", available: false, whyUnavailable: "OAuth connectors are not configured on this server." },
 ];
 
 export const LIVE_TOOL_IDS = TOOL_REGISTRY.filter(t => t.available).map(t => t.id);
 const DELEGATION_IDS = ["consult_teammate", "handoff"];
 
+/**
+ * Spec 17a: availability is computed from configuration, never hardcoded. `web_fetch` is live the
+ * moment an allow-list exists — the SSRF guard and the gateway gate every call after that.
+ */
+export function fetchAllowlistConfigured(env: Record<string, string | undefined> = process.env): boolean {
+  return (env.TOOL_ALLOWED_HOSTS ?? "").split(/[\s,]+/).map(h => h.trim().toLowerCase()).filter(Boolean).length > 0;
+}
+
+/** What the registry says about a tool right now, with runtime configuration applied. */
+export function isToolAvailable(id: string, env: Record<string, string | undefined> = process.env): boolean {
+  const spec = TOOL_REGISTRY.find(t => t.id === id);
+  if (!spec) return false;
+  return spec.id === "web_fetch" ? fetchAllowlistConfigured(env) : spec.available;
+}
+
 export type PermissionMode = "default" | "plan" | "auto";
 export type Effort = "low" | "medium" | "high";
 export type McpTransport = "stdio" | "http";
-export type McpServer = { name: string; transport: McpTransport };
+export type McpServer = { name: string; transport: McpTransport; /** Streamable-HTTP endpoint (spec 17c); stdio has none in this process. */ url?: string; /** Optional vault label (spec 17e) — the secret is resolved at call time, never stored here. */ credential?: string };
 export type McpInheritance = "all" | "none" | { named: string[] } | { except: string[] };
 
 export type Capabilities = {
@@ -100,7 +117,9 @@ function applyInheritance(servers: McpServer[], inheritance: McpInheritance): Mc
  */
 export function normaliseCapabilities(raw: unknown): Capabilities {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  const grantable = new Set(LIVE_TOOL_IDS);
+  // Runtime-configurable tools are grantable too: a grant can only narrow what can really run, so
+  // the grantable set must come from the same availability the gateway enforces (spec 17a).
+  const grantable = new Set([...LIVE_TOOL_IDS, ...(fetchAllowlistConfigured() ? ["web_fetch"] : [])]);
   const tools = list(o.tools).filter(t => grantable.has(t));
   const denied = list(o.deniedTools).filter(t => grantable.has(t));
   const permissionMode: PermissionMode = ["default", "plan", "auto"].includes(str(o.permissionMode)) ? (o.permissionMode as PermissionMode) : DEFAULT_CAPABILITIES.permissionMode;
@@ -111,9 +130,17 @@ export function normaliseCapabilities(raw: unknown): Capabilities {
   const temperature = Number.isFinite(Number(params.temperature)) ? Math.max(0, Math.min(2, Number(params.temperature))) : undefined;
   const maxTokens = Number.isFinite(Number(params.maxTokens)) ? Math.max(64, Math.min(4000, Math.trunc(Number(params.maxTokens)))) : undefined;
   const servers: McpServer[] = (Array.isArray(o.mcpServers) ? o.mcpServers : [])
-    .map(s => ({ name: str((s as Record<string, unknown>)?.name).slice(0, 40), transport: str((s as Record<string, unknown>)?.transport) as McpTransport }))
+    .map(s => {
+      const raw = (s as Record<string, unknown>) ?? {};
+      const url = typeof raw.url === "string" ? raw.url.trim() : "";
+      // Spec 17c: streamable HTTP first. A URL is kept only when it is a real http(s) endpoint —
+      // a malformed one is dropped at normalisation, not stored to fail later.
+      const safeUrl = url && /^https?:\/\//i.test(url) ? url.slice(0, 300) : undefined;
+      const credential = typeof raw.credential === "string" && raw.credential.trim() ? raw.credential.trim().slice(0, 60) : undefined;
+      return { name: str(raw.name).slice(0, 40), transport: str(raw.transport) as McpTransport, ...(safeUrl ? { url: safeUrl } : {}), ...(credential ? { credential } : {}) };
+    })
     .filter(s => s.name)
-    .map(s => ({ name: s.name, transport: s.transport === "http" ? "http" as const : "stdio" as const }));
+    .map(s => ({ name: s.name, transport: s.transport === "http" ? "http" as const : "stdio" as const, ...(s.url ? { url: s.url } : {}), ...(s.credential ? { credential: s.credential } : {}) }));
   const inheritance: McpInheritance = o.mcpInheritance === "all" || o.mcpInheritance === "none" ? o.mcpInheritance
     : (o.mcpInheritance && typeof o.mcpInheritance === "object") ? (o.mcpInheritance as McpInheritance)
     : DEFAULT_CAPABILITIES.mcpInheritance;
@@ -134,9 +161,8 @@ export function normaliseCapabilities(raw: unknown): Capabilities {
 }
 
 export function resolveTools(caps: Capabilities, ctx: { hasTeam: boolean }): string[] {
-  const spec = new Map(TOOL_REGISTRY.map(t => [t.id, t]));
   return Array.from(new Set(caps.tools))
-    .filter(id => spec.get(id)?.available)
+    .filter(id => isToolAvailable(id))
     .filter(id => (DELEGATION_IDS.includes(id) ? ctx.hasTeam : true))
     .filter(id => !caps.deniedTools.includes(id));
 }

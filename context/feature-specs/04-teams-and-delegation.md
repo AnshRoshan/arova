@@ -5,7 +5,7 @@ Goal: an agent can form a team from one sentence and consult a teammate, with ev
 ## Contract
 - Team intent proposes a roster of 2-4 specialists and creates nothing until `createTeam` is confirmed.
 - Roster source: the configured model, else `fallbackRoster` keyword families. Name clashes are renamed by `decollide`, never dropped.
-- Delegation: a separate routing pass (`routingPrompt`) answers `{"consult":null}` or `{"consult":{agent,question}}` before the reply is written. `MAX_DELEGATIONS` (default 1, 0 = off) caps hops; a peer is resolved by `resolvePeer`, which cannot return the caller.
+- Delegation: a separate routing pass (`routingPrompt`) answers `{"consult":null}` or `{"consult":{agent,question}}` before the reply is written. `MAX_DELEGATIONS` (default **2**, 0 = off) caps hops; a peer is resolved by `resolvePeer`, which cannot return the caller.
 - A consulted reply is three model calls: route, peer, integrate. All are counted in `model_usage`; the hop is stored in `delegations`.
 
 Acceptance checks:

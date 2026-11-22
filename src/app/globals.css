@@ -416,6 +416,9 @@ button.bd-row:hover { background: #1f2226; }
 .pane-head h1 { font-size: 24px; margin: 0; }
 .pane-head p { margin: 3px 0 0; font-size: 13px; color: var(--ink-2); }
 .pane-h2 { display: flex; align-items: center; gap: 8px; margin: 24px 0 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+/* The shared explanatory line. All `.hint` paragraphs are prose about a state — muted, never a heading. */
+.hint { margin: 8px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--ink-2); }
+.hint code { font-family: var(--font-mono), ui-monospace, monospace; font-size: 11px; }
 .pane-h2 .mono { margin-left: auto; font-size: 11px; letter-spacing: 0; }
 .rows { border: 1px solid var(--rule); border-radius: var(--r); background: var(--card); overflow: hidden; }
 .row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 14px; }

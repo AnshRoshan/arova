@@ -14,7 +14,20 @@ import { normaliseOrg } from "./org.ts";
 import { withProvenance } from "./provenance.ts";
 
 export type Consult = { agent: string; question: string };
-export type Turn = { consult: Consult | null; text: string };
+export type Turn = { consult: Consult | null; text: string; tool?: { name: string; arguments: Record<string, unknown> } };
+
+/**
+ * Spec 17b: a tool request is a directive exactly like a consult. Only a string tool name with a
+ * plain-object argument bag survives parsing — anything else is prose, never execution.
+ */
+export function parseToolDirective(parsed: unknown): { name: string; arguments: Record<string, unknown> } | undefined {
+  if (!parsed || typeof parsed !== "object") return undefined;
+  const tool = (parsed as { tool?: { name?: unknown; arguments?: unknown } }).tool;
+  if (!tool || typeof tool !== "object") return undefined;
+  if (typeof tool.name !== "string" || !tool.name.trim()) return undefined;
+  if (tool.arguments !== undefined && (typeof tool.arguments !== "object" || tool.arguments === null || Array.isArray(tool.arguments))) return undefined;
+  return { name: tool.name.trim(), arguments: (tool.arguments ?? {}) as Record<string, unknown> };
+}
 export type RosterAgent = { name: string; role: string; instructions: string };
 /** A roster with reporting lines: the difference between a team and an organisation. */
 export type OrgProposal = { team: string; brief: string; agents: (RosterAgent & { reportsTo: string | null })[] };
@@ -40,9 +53,9 @@ const clean = (text: string) =>
  */
 const stripReasoning = (text: string) => text.replace(/<think>([\s\S]*?)<\/think>/gi, " ");
 
-/** Locate a balanced `{"consult": …}` object, tolerating prose and fences around it. */
+/** Locate a balanced `{"consult": …}` / `{"tool": …}` directive object, tolerating prose and fences around it. */
 function locateDirective(text: string): { json: string; start: number; end: number } | null {
-  const opener = /\{\s*"consult"\s*:/g;
+  const opener = /\{\s*"(?:consult|tool)"\s*:/g;
   let match: RegExpExecArray | null;
   while ((match = opener.exec(text))) {
     const start = match.index;
@@ -83,8 +96,13 @@ export function parseTurn(raw: string): Turn {
   const consult = (parsed as { consult?: { agent?: unknown; question?: unknown } })?.consult;
   const agent = typeof consult?.agent === "string" ? consult.agent.trim() : "";
   const question = typeof consult?.question === "string" ? consult.question.trim() : "";
-  if (!agent || !question) return { consult: null, text: clean(source) };
-  return { consult: { agent, question }, text: clean(source.slice(0, found.start) + source.slice(found.end)) };
+  const tool = parseToolDirective(parsed);
+  const rest = clean(source.slice(0, found.start) + source.slice(found.end));
+  // A tool request rides alongside or instead of a consult; both are directives the server —
+  // never the model — decides whether to honour.
+  if (tool) return { consult: agent && question ? { agent, question } : null, tool, text: rest };
+  if (!agent || !question) return { consult: null, text: rest };
+  return { consult: { agent, question }, text: rest };
 }
 
 /** "create a product agency" / "build me a team of agents" — a verb plus a collective noun. */

@@ -11,9 +11,10 @@
  * instead of being special-cased.
  */
 
-export type Schedule = { minute: number; hour: number | null; weekdays: number[] | null; everyHours: number | null };
+/** `everyDays` is the only shape with no wall clock and no epoch grid: a plain interval from the last run. */
+export type Schedule = { minute: number; hour: number | null; weekdays: number[] | null; everyHours: number | null; everyDays?: number };
 
-const WEEKDAYS: Record<string, number> = { sunday: 1 === 1 ? 7 : 7, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+const WEEKDAYS: Record<string, number> = { sunday: 7, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
 
 const timeOf = (text: string): { hour: number; minute: number } | null => {
   const m = /(\d{1,2}):(\d{2})\s*(am|pm)?/i.exec(text);
@@ -27,7 +28,7 @@ const timeOf = (text: string): { hour: number; minute: number } | null => {
   return { hour, minute };
 };
 
-/** The five labels the UI offers, plus `Every N hours`. Anything else is not a schedule. */
+/** The five labels the UI offers, plus `Every N hours` and `Every week`. Anything else is not a schedule. */
 export function parseSchedule(label: string): Schedule | null {
   const text = (label ?? "").trim();
   if (!text) return null;
@@ -37,6 +38,10 @@ export function parseSchedule(label: string): Schedule | null {
     const hours = Number(every[1]);
     return hours >= 1 && hours <= 168 ? { minute: 0, hour: null, weekdays: null, everyHours: hours } : null;
   }
+
+  // A weekly with no weekday and no clock named is the interval the label states: seven days from the
+  // run that just happened. It cannot use the hourly grid, whose week boundary is a Thursday in UTC.
+  if (/^every\s+week$/i.test(text)) return { minute: 0, hour: null, weekdays: null, everyHours: null, everyDays: 7 };
 
   const named = /^every\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\s+at\s+(.+)$/i.exec(text);
   if (named) {
@@ -103,6 +108,7 @@ function zonedToInstant(y: number, mo: number, d: number, h: number, mi: number,
 export function nextRunAt(label: string, timeZone: string, after: Date | null): Date | null {
   const schedule = parseSchedule(label);
   if (!schedule || !after) return null;
+  if (schedule.everyDays) return new Date(after.getTime() + schedule.everyDays * 24 * 3600_000);
   if (schedule.everyHours) {
     const step = schedule.everyHours * 3600_000;
     return new Date((Math.floor(after.getTime() / step) + 1) * step);
@@ -127,7 +133,9 @@ export const isDue = (nextRun: Date | null, now: Date): boolean => !!nextRun && 
 export function missedIntervalMs(schedule: Schedule, nextRun: Date, now: Date): boolean {
   const late = now.getTime() - nextRun.getTime();
   if (late <= 0) return false;
-  const window = schedule.everyHours ? schedule.everyHours * 3600_000 : 24 * 3600_000 * (schedule.weekdays?.length === 5 ? 3 : 1);
+  const window = schedule.everyDays
+    ? schedule.everyDays * 24 * 3600_000
+    : schedule.everyHours ? schedule.everyHours * 3600_000 : 24 * 3600_000 * (schedule.weekdays?.length === 5 ? 3 : 1);
   return late > window;
 }
 
@@ -135,6 +143,7 @@ const DAY_NAMES = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 export function describeSchedule(label: string, timeZone: string): string {
   const schedule = parseSchedule(label);
   if (!schedule) return "no recognised schedule — it will not run";
+  if (schedule.everyDays) return `every ${schedule.everyDays} days, ${timeZone}`;
   if (schedule.everyHours) return `every ${schedule.everyHours} hours, ${timeZone}`;
   const hour = schedule.hour ?? 0;
   const meridiem = hour < 12 ? "AM" : "PM";

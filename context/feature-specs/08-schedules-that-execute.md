@@ -1,5 +1,11 @@
 # Feature 08 — Schedules that execute
 
+> **Status 2026-10-20 (sync, D-18): PARTIAL.** The text below is the original intent. What the code
+> actually does: due routines are claimed and executed only on `GET /api/board` (via `after()`), not on
+> POST; a missed routine fires once on the next read and is **not** written as `missed`; **Run Now is
+> still a `WAITING_FOR_TOOL` stub** and does not call the model. See `context/current-issues.md`
+> issues 01–03. Do not describe the unimplemented parts as working.
+
 Goal: a routine that says "every weekday at 8:00 AM" produces a real run at 8:00 AM, with a real
 answer in the thread, instead of a row that waits forever for a worker nobody configured.
 

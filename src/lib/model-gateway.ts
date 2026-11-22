@@ -105,15 +105,19 @@ export function trimToTokenBudget<T extends { role: string; content: string }>(h
   return kept.reverse();
 }
 
-/** Base URL or full completions URL in, safe completions URL out. A bearer key rides on this request. */
-export function buildEndpoint(base: string): string {
+/**
+ * Base URL or full completions URL in, safe completions URL out. A bearer key rides on this request.
+ * The label names the vendor in the thrown message; the raw base never leaves here, because thrown
+ * messages end up in stored rows — the server log is where the endpoint itself belongs.
+ */
+export function buildEndpoint(base: string, label = "provider"): string {
   let url: URL;
   try {
     url = new URL(base);
   } catch {
-    throw new Error(`Invalid provider base URL: ${base}`);
+    throw new Error(`Invalid ${label} base URL`);
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`Provider base URL must be http(s): ${base}`);
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error(`${label} base URL must be http(s)`);
   if (url.pathname.endsWith("/chat/completions")) return url.toString();
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/chat/completions`;
   return url.toString();
@@ -227,7 +231,7 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
   const doFetch = fetchImpl ?? fetch;
   const key = apiKeyFor(profile.name);
   if (!key) throw new Error(`${profile.label} is selected, but its server API key is not configured.`);
-  const endpoint = buildEndpoint(profile.base);
+  const endpoint = buildEndpoint(profile.base, profile.label);
   // Some compatible servers reject an unknown stream_options field. Fall back to streaming without
   // the usage frame rather than failing the user's message.
   let requestUsage = stream;
@@ -255,6 +259,9 @@ export async function requestCompletion({ profile, messages, maxTokens = 800, st
       throw new Error(`${profile.label} returned ${response.status}${detail ? `: ${detail}` : ""}`);
     }
     const retryAfter = Number(response.headers.get("retry-after"));
+    // A retried response is thrown away unread, and an open body is a held socket: cancel it before
+    // waiting out `retry-after`, or every retry leaves a connection dangling until it times out.
+    await response.body?.cancel().catch(() => {});
     if (Number.isFinite(retryAfter) && retryAfter > 0) await wait(Math.min(retryAfter * 1000, 8000));
   }
   throw new Error(`${profile.label} did not respond (${lastError}) after ${RETRYABLE_WAIT_MS.length + 1} attempts.`);

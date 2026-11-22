@@ -14,10 +14,15 @@ test("parse: the five saved labels and an hourly form all resolve", () => {
 });
 
 test("parse: anything unrecognised is null, not a guess", () => {
-  assert.equal(parseSchedule("Every week"), null);
+  assert.equal(parseSchedule("Every fortnight"), null);
   assert.equal(parseSchedule(""), null);
   assert.equal(parseSchedule("sometime on tuesday maybe"), null);
   assert.equal(parseSchedule("Every day at 25:00"), null);
+});
+
+test("parse: every week is a seven day interval, not a weekday pin", () => {
+  assert.deepEqual(parseSchedule("Every week"), { minute: 0, hour: null, weekdays: null, everyHours: null, everyDays: 7 });
+  assert.deepEqual(parseSchedule("every week"), parseSchedule("Every week"), "the label is saved as typed, so case cannot change the rule");
 });
 
 test("next: daily 8am rolls to tomorrow after the hour, in UTC", () => {
@@ -46,6 +51,11 @@ test("next: hourly schedules step from the instant asked about", () => {
   assert.equal(utc(nextRunAt("Every 6 hours", "UTC", at("2026-03-02T12:00:00Z"))), "2026-03-02T18:00:00.000Z");
 });
 
+test("next: weekly schedules step seven days from the instant asked about", () => {
+  assert.equal(utc(nextRunAt("Every week", "UTC", at("2026-03-02T00:00:00Z"))), "2026-03-09T00:00:00.000Z");
+  assert.equal(utc(nextRunAt("every week", "America/New_York", at("2026-03-02T13:00:00Z"))), "2026-03-09T13:00:00.000Z", "the label is case-insensitive and the zone cannot move a plain interval");
+});
+
 test("next: a wall clock that spring-forward deletes is skipped, not invented", () => {
   // 2026-03-08 in the US: 02:00 EST becomes 03:00 EDT, so 02:30 New York time never exists that day.
   const before = at("2026-03-07T09:00:00Z");
@@ -54,7 +64,7 @@ test("next: a wall clock that spring-forward deletes is skipped, not invented", 
 });
 
 test("next: an unparseable label or unknown zone yields no time", () => {
-  assert.equal(nextRunAt("Every week", "UTC", at("2026-03-02T00:00:00Z")), null);
+  assert.equal(nextRunAt("Every fortnight", "UTC", at("2026-03-02T00:00:00Z")), null);
   assert.equal(nextRunAt("Every day at 8:00 AM", "Mars/Olympus_Mons", at("2026-03-02T00:00:00Z")), null);
   assert.equal(nextRunAt("Every day at 8:00 AM", "UTC", null), null);
 });
@@ -74,6 +84,9 @@ test("missed: lateness beyond the schedule's own interval is flagged, once", () 
   assert.equal(missedIntervalMs(daily, next, at("2026-03-05T08:00:00Z")), true, "three days late means the laptop was closed");
   const hourly = parseSchedule("Every 6 hours")!;
   assert.equal(missedIntervalMs(hourly, next, at("2026-03-02T20:00:00Z")), true);
+  const weekly = parseSchedule("Every week")!;
+  assert.equal(missedIntervalMs(weekly, next, at("2026-03-08T07:00:00Z")), false, "six days late on a weekly is still one week");
+  assert.equal(missedIntervalMs(weekly, next, at("2026-03-09T09:00:00Z")), true, "later than a whole week means a run never happened");
 });
 
 test("describe: the UI gets a sentence that names the zone", () => {
@@ -82,5 +95,6 @@ test("describe: the UI gets a sentence that names the zone", () => {
   assert.equal(describeSchedule("Every 6 hours", "UTC"), "every 6 hours, UTC");
   assert.equal(describeSchedule("Every Friday at 4:00 PM", "UTC"), "4:00 PM Fri, UTC", "a PM hour must not print as 16:00 PM");
   assert.equal(describeSchedule("Every day at 12:00 AM", "UTC"), "12:00 AM daily, UTC");
-  assert.equal(describeSchedule("Every week", "UTC"), "no recognised schedule — it will not run");
+  assert.equal(describeSchedule("Every week", "UTC"), "every 7 days, UTC");
+  assert.equal(describeSchedule("Every fortnight", "UTC"), "no recognised schedule — it will not run");
 });

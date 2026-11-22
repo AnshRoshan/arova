@@ -8,7 +8,7 @@ web
 
 ## Users
 
-One person, every day. They keep a small set of named agents they actually talk to, and the threads accumulate real history. Success is opening the app and continuing where they left off, not touring a dashboard. Secondary audience: whoever they hand a link to, who lands in a fresh cookie-scoped demo workspace with seeded sample agents.
+One person, every day. They keep a small set of named agents they actually talk to, and the threads accumulate real history. Success is opening the app and continuing where they left off, not touring a dashboard. Secondary audience: whoever they hand a link to, who lands in a fresh, empty cookie-scoped demo workspace (sample content appears only if seeded deliberately).
 
 ## Product Purpose
 
@@ -26,12 +26,12 @@ Every claim in a thread is a row the server actually returned. The app states it
 
 ## Capabilities and Constraints
 
-- Working today: workspace seeding; agent create/edit/pause/delete; persisted per-agent threads; provider selection per agent (auto, any configured endpoint, or local); streamed replies with bounded retry; routine proposals from natural language; routine create/toggle/delete; Run Now requests; approval decisions; timezone change; audit events; per-workspace daily model-call budget with estimated token counts.
-- Deliberately not working, and must never be presented as working: authentication (cookie demo only), scheduler/worker execution, OAuth connectors, sandbox/computer execution. Existing UI surfaces explain their own unconfigured state.
+- Working today: workspace creation; agent create/edit/pause/delete; persisted per-agent threads; provider selection per agent (auto, any configured endpoint, or local); streamed replies with bounded retry, provenance and usage accounting; team proposals and one-hop delegation; organisations with reporting lines; a durable organisation channel with briefs; org-scoped keyword memory; inbound trigger tokens; routine proposals, create/toggle/delete; due-routine execution on workspace read; approval decisions with a denial breaker; fatigue shutoff; timezone change; audit events; per-workspace daily model-call budget with estimated token counts.
+- Deliberately not working, and must never be presented as working: production authentication (cookie demo only; Feature 15 is env diagnostics), Run Now execution (a `WAITING_FOR_TOOL` stub), background work after the request (no worker), OAuth connectors, sandbox/computer execution and MCP transport. Existing UI surfaces explain their own unconfigured state.
 - Any OpenAI-compatible endpoint is a provider by configuration: `PROVIDERS` plus `<NAME>_BASE_URL` / `_MODEL` / `_API_KEY` / optional `_MAX_CONTEXT`.
 - Token figures are estimates at roughly four characters per token and are labelled as such; call counts are exact.
 - Some endpoints stream model reasoning inside the answer text; whether to strip, collapse, or pass it through is an open decision (context/current-issues.md L-04).
-- All existing views stay reachable. The dashboard views (Runs, Schedule, Tools, Approvals, Settings) are demoted from the main frame to the agent rail, not deleted.
+- All existing views stay reachable through the icon rail (Overview, Agents, Organisation, Automations, Integrations, Settings); approvals are acted on inline and on the activity board rather than in their own pane.
 
 ## Brand Commitments
 
@@ -41,7 +41,7 @@ Named Arova, with a calm, plain-spoken voice in its own copy ("Make room for the
 
 - Real PostgreSQL rows: workspaces, agents, messages, routines, runs, run steps, approvals, connections, sandboxes, events, per-day model usage.
 - A verified live call to a third-party endpoint (`inference.dahl.global`, model `MiniMaxAI/MiniMax-M2.7`) that streamed 122 deltas into one persisted reply, with usage counted once.
-- 17 unit tests over the model gateway (`src/lib/model-gateway.test.ts`), run with `npm test`.
+- 153 unit tests over the pure libraries (`src/lib/*.test.ts`, run with `npm test`), plus a clean typecheck, lint, production build and live browser passes recorded in `context/progress-tracker.md`.
 - Sample data exists only in clearly-labelled seed form ("Sample run:", "SAMPLE ACTIVITY"), and the seeded approvals row is labelled a sample.
 - Absent, and never to be invented: latency benchmarks, uptime, user counts, testimonials, pricing, integrations that have not been configured.
 

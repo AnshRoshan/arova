@@ -1,5 +1,14 @@
 # Feature parity — Grok bot and OpenAI Dots vs Arova
 
+> **Snapshot notice (2026-10-20):** this is a dated research document. §1 was read from the code on
+> 2026-10-01; counts and statuses may have moved since. Re-derive §1 from `src/` before citing it, and
+> treat §2–§7 as the external-product snapshots they were on that date. Current build status lives in
+> `context/build-plan.md` and `context/progress-tracker.md`.
+>
+> **Market scope superseded:** `context/market-comparison.md` (2026-10-20) reviews 14 products and
+> supersedes this document for the current market map and roadmap. Keep this file for its dated
+> deep-dives on Grok, Dots and OpenBot.
+
 Purpose: an outside-in check on what this workbench is missing. Two products were researched as of
 **2026-10-01**: xAI's **Grok** (assistant + agent surfaces) and OpenAI's **Dots** (the always-on agent
 feature inside ChatGPT, which is the "ChatGPT alternative to the Grok bot" the comparison is about).
@@ -106,7 +115,7 @@ Checked against the running database on 2026-10-01 so the gap ranking below is b
 - **Built-in full-text search works today**: `to_tsvector('english', …)` + a GIN index needs no extension
   and no dependency. So *org memory that compounds from the channel* is buildable in this repo as-is;
   semantic/vector memory is a server-install decision that belongs to the user, not a feature to fake.
-- Only two HTTP routes exist (`/api/board`, `/api/health`) and there is no upload handling anywhere, so
+- Only three HTTP routes exist (`/api/board`, `/api/health`, `/api/trigger`) and there is no upload handling anywhere, so
   "no inbound triggers, no files" is structural, not an oversight.
 
 ---
@@ -310,7 +319,7 @@ means the product refuses the feature out loud, in the UI, rather than silently 
 | Who may create an agent | Admin (enterprise) | IT-provisioned | Designated creator seat founds; lead staffs its own org (`mayFoundOrg`/`mayStaffOrg`) | Ours, in-code and testable |
 | Memory | Cross-chat memory GA; "memory in Build" | Account memory + dot's own notes; **delete only by deleting the dot** | **None** beyond the transcript in the token budget | **Biggest gap — §5.1** |
 | Per-org memory isolation | n/a | n/a | Reach + history are hermetic; no stored knowledge | Gap, and the one the user asked for |
-| Tool execution | Real: browser, X, office apps, connectors | Real: own VM, own browser, saved passwords | **None.** 12 tools listed with `whyUnavailable` each | **Deliberate; the real ceiling** |
+| Tool execution | Real: browser, X, office apps, connectors | Real: own VM, own browser, saved passwords | **None.** 15 tools listed, 6 live, 9 with `whyUnavailable` each | **Deliberate; the real ceiling** |
 | Sandbox isolation | Per-run sandboxes (enterprise) | Persistent per-dot cloud computer | `sandboxes` table exists; `sandboxAction` throws the reason | Deliberate |
 | Connectors/OAuth | 7 named + BYO-MCP | ~4,000 apps | None; `connectTool` refuses | Deliberate; needs your credentials |
 | Web grounding with citations | Yes (web + X firehose) | Via browser/connectors | No search provider; `web_search` off | Gap, external dependency |
