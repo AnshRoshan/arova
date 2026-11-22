@@ -254,6 +254,8 @@ export default function Workbench() {
   const [mcpCheck, setMcpCheck] = useState<Record<string, { name: string; reachable: boolean; tools: { name: string; description: string; risk: string }[]; error: string | null }[]>>({});
   const [slackForm, setSlackForm] = useState({ name: "", botToken: "", signingSecret: "", externalId: "", teamId: "", allowedSenders: "" });
   const [mcpAgent, setMcpAgent] = useState("");
+  const [mcpRunName, setMcpRunName] = useState("");
+  const [mcpRunArgs, setMcpRunArgs] = useState("{}");
   const [mcpResult, setMcpResult] = useState<{ toolCall?: string; decision?: string; rule?: string; output?: string } | null>(null);
   const [registryQuery, setRegistryQuery] = useState("");
   const [activity, setActivity] = useState(false);
@@ -1534,6 +1536,18 @@ export default function Workbench() {
               <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}{srv.url ? ` · ${srv.url}` : ""}{srv.credential ? ` · vault: ${srv.credential}` : ""}</span></span>
               <span className="row-side"><span className={`chip ${srv.transport === "http" ? "waiting" : "idle"}`}><i />{srv.transport === "http" ? "http · callable" : "no transport"}</span></span>
             </div>))}</div> : !mcpCheck.servers && <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities with a streamable-http URL. Discovery classifies each tool the server exposes; an unannotated tool counts as a write and asks first.</p></div>}
+            {(() => {
+              const checks = mcpCheck.servers ?? [];
+              const tools = checks.flatMap(c => c.tools.map(t => ({ ...t, server: c.name })));
+              if (!tools.length) return null;
+              const selected = tools.find(t => t.name === mcpRunName) ?? tools[0];
+              return <div className="stack"><div className="block">
+                <div className="field"><label htmlFor="mcp-run-tool">Run a discovered tool</label><select id="mcp-run-tool" value={selected.name} onChange={e => setMcpRunName(e.target.value)}>{tools.map(t => <option key={t.name} value={t.name}>{t.name.replace(/^mcp:[^:]+:/, "")} · {t.risk.toLowerCase()} · {t.server}</option>)}</select></div>
+                <div className="field"><label htmlFor="mcp-run-args">Arguments<span className="mono">JSON</span></label><textarea id="mcp-run-args" rows={3} maxLength={20000} value={mcpRunArgs} onChange={e => setMcpRunArgs(e.target.value)} /></div>
+                <p className="hint">The policy gateway decides every call and writes an audit row either way: a READ executes; a write or external reach returns the rule as the tool's answer — a button cannot approve a write.</p>
+                <button className="primary" disabled={busy} onClick={async () => { let parsed = {}; try { parsed = JSON.parse(mcpRunArgs || "{}"); } catch { setToast("The arguments are not valid JSON."); return; } const r = await act("runMcpTool", { agentId: mcpAgent || data.agents[0]?.id, server: selected.server, tool: selected.name.split(":").slice(2).join(":"), args: parsed }); if (r) setMcpResult(r as typeof mcpResult); }}>Run through the gateway</button>
+              </div></div>;
+            })()}
             {mcpResult && <div className="code"><div className="code-bar"><span className="code-lang">tool result · {mcpResult.decision ?? "—"}</span></div><pre><code>{mcpResult.output ?? mcpResult.rule ?? ""}</code></pre></div>}
           </div>
 

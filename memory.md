@@ -69,3 +69,16 @@ LOCKED` claim, lease, retry/backoff, dead-letter, heartbeats); goals/watches/att
 stores plaintext); policy gateway (`src/lib/policy.ts`, `TOOL_ALLOWED_HOSTS`); saved skills;
 `db:check`/`db:start` scripts (spec 25 bootstrap). Specs 16–27 on that branch use the same
 numbers as main's specs 16–29 for different work — never merge the spec files by number.
+
+## Reconciliation (2026-11-23) — building finished
+
+The last roadmap rows are implemented and live-verified: native Slack transport (spec 35, full
+loop against mock-slack: signed handshake, 401 on tampering, mention → 202 → worker → one thread
+report on the terminal outcome), self-modification (spec 41: draftSkillFromRun → activateSkill,
+usage telemetry), MCP in the reply loop (spec 31c: reads execute through the gateway, writes
+return the rule — audited in tool_calls; verified against mock-mcp), approval tokens (spec 40:
+bound + expiring; expired refusal verified). `db:start` no longer hangs the console (port-poll
+then exit). The single remaining substrate item is full graphical desktop control (spec 38's last
+slice) — the sandbox-runtime exposes no display API, so it stays refused honestly until a real
+provider exists. Remaining env-side inputs: model key, real search endpoints, live OIDC issuer,
+CRON_SECRET. Tests 351/351; tsc and build clean.

@@ -13,6 +13,10 @@ The default screen is **Overview**: a warm, editorial command center with a live
 ## Current slice (2026-10-28)
 
 - **Channels** (Integrations → Channels): a generic HTTPS webhook (Slack incoming webhooks work as-is), an inbound token for an organisation channel, a 60 s inbound cooldown, and a delivery ledger. The target is a credential and only its host is sent to the browser.
+- **Native Slack app** (Integrations → Channels): a Slack app mapped to one organisation — @-mentions brief it through the same durable queue as triggers, and the report lands in the mention's thread. Signature-verified ingress at /api/channels/slack; secrets sealed, never returned.
+- **Goals & attention** (Automations → Goals): a responsibility on a cadence, watches observing public pages through the fetch policy, and a deduplicated inbox with evidence. Checks run only when a queue worker is live; without one, the board says jobs are waiting.
+- **Credential vault** (Integrations → Credential vault): AES-256-GCM sealed labels; MCP servers point at a label, and the value never comes back out.
+- **Skills** (Integrations → Skills): versioned workflow records with grant intersection (skill ∩ seat); a run's transcript can draft one for review, and a person activates it.
 - **Evals** (Automations → Evals): one prompt, one expected fragment, a case-insensitive substring score; `SKIPPED` and `ERROR` are stored states, not passes; every attempt is a real run.
 - **Agent registry** (Settings → Agent registry): every seat with team/manager, provider, tool count, permission mode, last run/status and exact run/pending/routine counts. Read-only; no health score.
 - **Local OS sandbox** (Integrations → Sandbox, opt-in): `AROVA_SANDBOX_PROVIDER=local-os` enables shell/files execution through `@anthropic-ai/sandbox-runtime`. It is fail-closed until the host is provisioned, has no GUI stream/snapshot/takeover, and records every command as a real run. Spec 19, D-23.
@@ -23,7 +27,7 @@ The default screen is **Overview**: a warm, editorial command center with a live
 
 `src/app/api/board/route.ts` owns workspace initialization, board serialization, streaming chat, agent/team/org actions, routines, execution, approvals, usage, workspace renaming, and tool-connection boundaries. `src/db/schema.ts` defines PostgreSQL storage; `src/lib/` holds model routing, orchestration, markdown, scheduler, tools, skills, and identity logic. Board `overview` totals are derived server-side from workspace-scoped stored rows. Completed-run and pending-approval totals exclude seeded samples. Workspace renaming is a persistent audited action.
 
-Without a configured provider key, chat shows an explicit local-mode notice. Tool connectors and computer sessions require deployment credentials/runtime and must never pretend to have executed. Schedules execute through the in-process worker (on by default) or an outside clock calling `/api/cron`; board reads also tick due routines. When no driver is actually beating, the UI says so — never imply background execution or fabricated outcomes.
+Without a configured provider key, chat shows an explicit local-mode notice. Tool connectors and computer sessions require deployment credentials/runtime and must never pretend to have executed. Schedules execute through the in-process worker (on by default) or an outside clock calling `/api/cron`; board reads also tick due routines. When a durable-queue worker (`npm run worker`) is live, claimed occurrences become queued jobs it executes with leases and retries; when none is, the tick executes inline exactly as before — the app never depends on the optional second process. When no driver is actually beating, the UI says so — never imply background execution or fabricated outcomes.
 
 ## Design direction
 
