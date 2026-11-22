@@ -7,13 +7,19 @@ mistyped instruction was permanent clutter and a wrong direction could not be re
 before it.
 
 **Scope shipped.**
-- `resendFromMessage`: an edit on your own question inserts a **new** user turn marked
-  `branchFrom` (carrying the original's content in metadata for the record) and re-runs the reply
-  through the identical streaming path. The original row is never rewritten — append-only is an
-  invariant, and the audit stream records `chat.branch`.
-- The composer shows a branch banner, the seat thread carries an edit affordance on your own
-  questions, and the branched turn names itself ("branched re-ask · the original stays").
-**Acceptance met.** Editing mutates nothing; the branch renders and is navigable in the thread;
-streaming and unary paths behave identically (same runner).
-**Honest boundary.** No tree view of all branches — the newest path reads first; the original
-stays in place below.
+- `resendFromMessage`: only a person's own user turn may be re-asked. The **original row is never
+  rewritten** (append-only stays an invariant); the edited turn is a new row marked
+  `metadata.branchFrom` (carrying the original's text for display), an audit event records the
+  re-ask, and the reply runs the same streamed path `sendMessage` uses.
+- The seat thread: user turns get an edit affordance ("opens a branch; the original is never
+  rewritten"); the branched turn renders with a "branched re-ask · the original stays" chip.
+- The composer shows it is re-asking while a branch is open; sending clears it.
+
+**Acceptance met.** Editing never mutates the original row; a branch renders and navigates in the
+thread; the audit stream shows the edit as an event; the streaming path is the same one
+`sendMessage` uses, so the unary/stream parity invariant holds by construction. 361/361 tests,
+tsc clean.
+
+**Honest boundary.** One branch level per re-ask (a branched turn cannot be re-branched — the
+button hides on branched rows); no tree-view diff of parallel branches beyond the chips; runs
+already keep their own lineage through `runId` metadata.
