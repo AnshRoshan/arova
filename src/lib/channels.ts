@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { validateFetchTarget, type FetchPolicy } from "./web-fetch.ts";
 
-export type ChannelKind = "webhook" | "slack";
+export type ChannelKind = "webhook" | "slack" | "teams" | "telegram";
 export const CHANNEL_KINDS: ChannelKind[] = ["webhook", "slack"];
 
 export type ChannelEventKind = "run" | "approval" | "test" | "digest";
@@ -29,7 +29,7 @@ export function newChannelToken(): string {
 }
 
 export function isChannelKind(value: string): value is ChannelKind {
-  return value === "webhook" || value === "slack";
+  return value === "webhook" || value === "slack" || value === "teams" || value === "telegram";
 }
 
 /** What the browser may know about a target: its host, never its path or query. */
@@ -58,7 +58,8 @@ export function channelEventText(event: ChannelEvent): string {
  */
 export function webhookPayload(kind: ChannelKind, event: ChannelEvent): Record<string, unknown> {
   const text = channelEventText(event).slice(0, 3500);
-  return kind === "slack"
+  // Teams incoming webhooks accept a plain text payload too; the metadata rides for generic JSON.
+  return kind === "slack" || kind === "teams" || kind === "telegram"
     ? { text }
     : { text, event: event.kind, title: event.title, status: event.status, runId: event.runId ?? null, approvalId: event.approvalId ?? null };
 }
@@ -72,11 +73,30 @@ export async function validateChannelTarget(raw: string, deps: FetchPolicy = {})
 }
 
 export async function deliverToChannel(
-  channel: { name: string; kind: string; target: string },
+  channel: { name: string; kind: string; target: string; credentialLabel?: string | null },
   event: ChannelEvent,
-  deps: DeliveryDeps = {},
+  deps: DeliveryDeps & { botToken?: string } = {},
 ): Promise<DeliveryResult> {
   if (!isChannelKind(channel.kind)) return { ok: false, status: "REFUSED", detail: `Unknown channel kind "${channel.kind}".` };
+  // Spec 49 — Telegram is an API, not a webhook: the bot token arrives from the vault (resolved by
+  // the caller), the target is the chat id, and Telegram's own text limit applies.
+  if (channel.kind === "telegram") {
+    if (!deps.botToken) return { ok: false, status: "REFUSED", detail: "No Telegram bot token — point the channel at a vault credential." };
+    if (!/^(-?\d+|@[A-Za-z0-9_]{4,})$/.test(channel.target)) return { ok: false, status: "REFUSED", detail: "The target is not a chat id." };
+    const doFetch0 = deps.fetchImpl ?? fetch;
+    try {
+      const response = await doFetch0(`https://api.telegram.org/bot${deps.botToken}/sendMessage`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ chat_id: channel.target, text: channelEventText(event).slice(0, 4000) }),
+        signal: AbortSignal.timeout(deps.timeoutMs ?? 8000),
+      });
+      const ack = (await response.json().catch(() => ({}))) as { ok?: boolean; description?: string };
+      if (response.ok && ack.ok !== false) return { ok: true, status: "DELIVERED", detail: "Delivered to Telegram." };
+      return { ok: false, status: "FAILED", detail: `Telegram answered ${response.status}${ack.description ? ` (${ack.description})` : ""}.` };
+    } catch (error) {
+      return { ok: false, status: "FAILED", detail: `Telegram did not answer (${error instanceof Error ? error.name : "network error"}).` };
+    }
+  }
   const target = await validateChannelTarget(channel.target, deps);
   if ("error" in target) return { ok: false, status: "REFUSED", detail: target.error };
   const doFetch = deps.fetchImpl ?? fetch;

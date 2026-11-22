@@ -284,19 +284,28 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     await db.delete(triggers).where(eq(triggers.id, row.id));
     await audit(workspaceId, null, "trigger.revoked", `${row.label} (${row.hits} fire(s))`);
   } else if (action === "createChannel") {
-    const input = z.object({ name: z.string().trim().min(1).max(60), kind: z.enum(["webhook", "slack"]), target: z.string().trim().url().max(2000), teamId: uuid.optional() }).parse(body);
+    const input = z.object({ name: z.string().trim().min(1).max(60), kind: z.enum(["webhook", "slack", "teams", "telegram"]), target: z.string().trim().min(1).max(2000), teamId: uuid.optional(), credentialLabel: z.string().trim().max(80).optional() }).parse(body);
     if (!isChannelKind(input.kind)) throw new Error("Unknown channel kind.");
     if (input.teamId) {
       const [team] = await db.select().from(teams).where(and(eq(teams.id, input.teamId), eq(teams.workspaceId, workspaceId))).limit(1);
       if (!team) throw new Error("Organisation not found");
       await mayRemember(input.teamId);
     }
-    // The same SSRF policy as web_fetch: https, 443, public address, no credentials in the URL.
-    const target = await validateChannelTarget(input.target);
-    if ("error" in target) throw new Error(target.error);
-    const [row] = await db.insert(channels).values({ workspaceId, teamId: input.teamId ?? null, name: input.name, kind: input.kind, target: input.target, token: newChannelToken() }).returning();
-    await audit(workspaceId, null, "channel.created", `${row.name} → ${redactTarget(row.target)}`);
-    result = { channelId: row.id, token: row.token };
+    if (input.kind === "telegram") {
+      // Spec 49 — the bot token stays in the vault; the target is a chat id, so no URL policy.
+      if (!input.credentialLabel) throw new Error("A Telegram channel needs a vault credential holding the bot token.");
+      if (!/^(-?\d+|@[A-Za-z0-9_]{4,})$/.test(input.target)) throw new Error("The target must be a Telegram chat id (numeric, or @channelname).");
+      const [row] = await db.insert(channels).values({ workspaceId, teamId: input.teamId ?? null, name: input.name, kind: input.kind, target: input.target, credentialLabel: input.credentialLabel, token: newChannelToken() }).returning();
+      await audit(workspaceId, null, "channel.created", `${row.name} → telegram ${row.target}`);
+      result = { channelId: row.id, token: row.token };
+    } else {
+      // The same SSRF policy as web_fetch: https, 443, public address, no credentials in the URL.
+      const target = await validateChannelTarget(input.target);
+      if ("error" in target) throw new Error(target.error);
+      const [row] = await db.insert(channels).values({ workspaceId, teamId: input.teamId ?? null, name: input.name, kind: input.kind, target: input.target, token: newChannelToken() }).returning();
+      await audit(workspaceId, null, "channel.created", `${row.name} → ${redactTarget(row.target)}`);
+      result = { channelId: row.id, token: row.token };
+    }
   } else if (action === "updateChannel") {
     const input = z.object({ channelId: uuid, name: z.string().trim().min(1).max(60).optional(), enabled: z.boolean().optional() }).parse(body);
     const [row] = await db.select().from(channels).where(and(eq(channels.id, input.channelId), eq(channels.workspaceId, workspaceId))).limit(1);

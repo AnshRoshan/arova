@@ -28,7 +28,7 @@ import { resolveLead } from "@/lib/channel";
 import { executeRoutine } from "@/lib/routine-runner";
 import { renderDigest } from "@/lib/digest";
 import { deliverToChannel } from "@/lib/channels";
-import { recordDelivery } from "@/lib/board-core";
+import { recordDelivery, vaultAuthorization as vaultAuthForDelivery } from "@/lib/board-core";
 import { runBrief } from "@/lib/brief-runner";
 
 const envNum = (name: string, fallback: number) => (process.env[name] === undefined || process.env[name] === "" || Number.isNaN(Number(process.env[name])) ? fallback : Number(process.env[name]));
@@ -216,6 +216,18 @@ async function execute(job: JobRow) {
           console.error(`slack delivery failed: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
+    } else if (job.kind === "channel_retry") {
+      // Spec 49 — the durable second chance for a failed delivery. The job's own retry/backoff
+      // policy is the schedule; three dead attempts land in the ledger and the digest.
+      const payload = job.payload as { channelId?: string; event?: { kind: string; title: string; status: string; summary: string }; botTokenLabel?: string | null };
+      const [channel] = payload.channelId ? await db.select().from(channels).where(eq(channels.id, payload.channelId)).limit(1) : [];
+      if (!channel || !channel.enabled) { await finalize(job, { status: "COMPLETED" }); return; }
+      const event = payload.event ? { ...payload.event, kind: payload.event.kind as "run" | "approval" | "test" | "digest" } : null;
+      if (!event) { await finalize(job, null, new Error("The retry job carries no event.")); return; }
+      const botToken = channel.credentialLabel ? await vaultAuthorizationSafe(job.workspaceId, channel.credentialLabel) : undefined;
+      const out = await deliverToChannel(channel, event, { botToken });
+      await recordDelivery(job.workspaceId, channel, event, out);
+      await finalize(job, out.ok ? { status: "COMPLETED" } : null, out.ok ? undefined : new Error(out.detail.slice(0, 200)));
     } else if (job.kind === "digest") {
       // Spec 44 — the proactive digest: model-free by construction, so it ships with or without a
       // model key. Facts come from stored rows; delivery goes through the same channel contract as
@@ -413,6 +425,11 @@ async function loop() {
 let running = true;
 process.on("SIGINT", () => { running = false; });
 process.on("SIGTERM", () => { running = false; });
+
+/** The vault read for a retry delivery, degraded to undefined when the key or row is absent. */
+function vaultAuthorizationSafe(workspaceId: string, label: string): Promise<string | undefined> {
+  return vaultAuthForDelivery(workspaceId, label).then(t => t?.replace(/^Bearer /, "")).catch(() => undefined);
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import { agents, channels, channelDeliveries, credentials, memories, messages, skills } from "@/db/schema";
 import { deliverToChannel, type ChannelEvent } from "@/lib/channels";
+import { enqueueJob } from "@/lib/work-queue";
 import { channelSubject, hermeticPeers } from "@/lib/channel";
 import { DEFAULT_RESERVE_TOKENS, trimToTokenBudget, type ProviderProfile } from "@/lib/model-gateway";
 import { normaliseCapabilities, resolveTools } from "@/lib/tools";
@@ -34,12 +35,28 @@ export async function notifyChannels(workspaceId: string, teamId: string | null,
       teamId ? or(isNull(channels.teamId), eq(channels.teamId, teamId)) : isNull(channels.teamId),
     ));
     for (const channel of rows) {
-      const out = await deliverToChannel(channel, event);
+      // Spec 49 — Telegram's bot token is resolved from the vault at call time.
+      const botToken = channel.kind === "telegram" && channel.credentialLabel
+        ? await vaultAuthorizationSafe(workspaceId, channel.credentialLabel)
+        : undefined;
+      const out = await deliverToChannel(channel, event, { botToken });
       await recordDelivery(workspaceId, channel, event, out);
+      // Spec 49 — a failed delivery is retried durably: the queue owns the backoff, the ledger
+      // owns the record, and a dead-letter is visible in the digest.
+      if (!out.ok && out.status === "FAILED") {
+        try {
+          await enqueueJob({ workspaceId, kind: "channel_retry", subjectId: channel.id, payload: { channelId: channel.id, event, botTokenLabel: channel.credentialLabel ?? null }, idempotencyKey: `retry:${channel.id}:${event.kind}:${event.runId ?? event.title}`.slice(0, 200), createdBy: "delivery" });
+        } catch { /* the ledger row above already records the failure */ }
+      }
     }
   } catch (error) {
     console.error("Channel notification failed", error instanceof Error ? error.message : "unknown error");
   }
+}
+
+/** The vault read for delivery, degraded to undefined when the key or row is absent. */
+async function vaultAuthorizationSafe(workspaceId: string, label: string): Promise<string | undefined> {
+  try { return (await vaultAuthorization(workspaceId, label))?.replace(/^Bearer /, ""); } catch { return undefined; }
 }
 
 export async function recordDelivery(workspaceId: string, channel: { id: string }, event: ChannelEvent, out: { ok: boolean; status: string; detail: string }, direction: "out" | "in" = "out") {

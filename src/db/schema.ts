@@ -146,7 +146,8 @@ export const channels = pgTable("channels", {
   target: text("target").notNull().default(""),
   token: text("token").notNull(),
   enabled: boolean("enabled").notNull().default(true),
-  lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true }),
+  /** Spec 49 — Telegram's bot token lives in the vault; the row stores only its label. */
+  credentialLabel: text("credential_label"), lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true }),
   lastStatus: text("last_status"),
   lastError: text("last_error"),
   delivered: integer("delivered").notNull().default(0),
