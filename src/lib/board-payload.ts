@@ -14,6 +14,7 @@ import { listPeople, readActor } from "@/lib/auth-sessions";
 import { suitePassRate } from "@/lib/suite";
 import { dailyCallLimit, num, usageToday } from "@/lib/budget";
 import { maxDelegations } from "@/lib/board-core";
+import { costUsd, parsePricing } from "@/lib/cost";
 
 /** What the browser may know about a provider: never the key, and never the raw base URL. */
 function publicProfiles(profiles: ProviderProfile[]) {
@@ -220,7 +221,18 @@ export async function board(workspaceId: string) {
     // rate are read from this sequence, not from the suite's latest-counts row.
     suiteRuns: suiteRunHistory.map(h => ({ id: h.id, suiteId: h.suiteId, status: h.status, passed: h.passed, failed: h.failed, skipped: h.skipped, errored: h.errored, modelCalls: h.modelCalls, trigger: h.trigger, startedAt: h.startedAt.toISOString(), finishedAt: h.finishedAt?.toISOString() ?? null })),
     toolPolicy: { allowedHosts: parseAllowlist(process.env.TOOL_ALLOWED_HOSTS).length, credentialKeyConfigured: Boolean(process.env.CREDENTIAL_ENCRYPTION_KEY) },
-    limits: { dailyModelCalls: dailyCallLimit(), usage, maxDelegations: maxDelegations() },
+    // Spec 46 — the usage rows priced where the env declares a price; unpriced providers carry
+    // null, and the UI says so instead of implying free work.
+    limits: (() => {
+      const prices = parsePricing(process.env);
+      return {
+        dailyModelCalls: dailyCallLimit(),
+        usage: usage.map(u => ({ ...u, costUsd: costUsd(prices, u.provider, u.inputTokens, u.outputTokens) })),
+        todayCostUsd: usage.reduce((sum, u) => sum + (costUsd(prices, u.provider, u.inputTokens, u.outputTokens) ?? 0), 0),
+        pricingConfigured: usage.every(u => costUsd(prices, u.provider, u.inputTokens, u.outputTokens) !== null),
+        maxDelegations: maxDelegations(),
+      };
+    })(),
     // Names only: what the sign-in screen would build itself from, and what a half-configured
     // provider is missing. A secret never appears here — this whole payload goes to the browser.
     auth: (() => { const d = loadAuthProviders(process.env); return { providers: d.providers.map(p => ({ name: p.name, label: p.label })), incomplete: d.incomplete }; })(),

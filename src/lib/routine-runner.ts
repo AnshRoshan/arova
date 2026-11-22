@@ -234,6 +234,8 @@ export async function executeRoutine(workspaceId: string, routine: typeof routin
     if (!answer) return finish("FAILED", "The model returned no text.");
     const counted = usageFromJson(body);
     await recordUsage(workspaceId, profile.name, counted?.input ?? estimateTokens(task), counted?.output ?? estimateTokens(answer), Boolean(counted));
+    // Spec 46 — the run carries its own tokens, so cost is derivable from stored rows alone.
+    await db.update(runs).set({ inputTokens: counted?.input ?? estimateTokens(task), outputTokens: counted?.output ?? estimateTokens(answer) }).where(eq(runs.id, run.id));
     const said = splitReasoning(answer).rest;
     await step("Answered", `${said.length} characters from ${profile.model}`);
     await db.insert(messages).values({ workspaceId, agentId: routine.agentId, role: "assistant", content: answer, kind: "message", metadata: { provider: profile.name, model: profile.model, scheduled: !manual, routineId: routine.id, runId: run.id } });

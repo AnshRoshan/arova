@@ -27,7 +27,7 @@ type Step = { id: string; runId: string; title: string; detail: string; createdA
 type Approval = { id: string; agentId: string; title: string; detail: string; status: string; createdAt: string };
 type Profile = { name: string; label: string; model: string; configured: boolean; builtIn: boolean; modelPinned?: boolean; maxContextTokens: number };
 type ModelSelection = { name: string; model: string; auto: boolean; served: boolean; checkedAt: number; suggestion?: string };
-type Usage = { provider: string; calls: number; inputTokens: number; outputTokens: number; estimated: boolean };
+type Usage = { provider: string; calls: number; inputTokens: number; outputTokens: number; estimated: boolean; costUsd?: number | null };
 type Capabilities = {
   tools: string[]; deniedTools: string[]; permissionMode: "default" | "plan" | "auto";
   toolLoop: boolean;
@@ -80,7 +80,7 @@ type Board = {
   evals: { tasks: EvalTask[]; results: EvalResultRow[]; suites: EvalSuite[]; summary: EvalSummary };
   research: { projects: ResearchProject[]; sources: ResearchSource[]; findings: ResearchFinding[] };
   registry: RegistryRow[];
-  limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
+  limits: { dailyModelCalls: number; usage: Usage[]; todayCostUsd: number; pricingConfigured: boolean; maxDelegations: number };
   scheduler: SchedulerInfo;
   goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[]; slackConnections: SlackConnection[]; digest: DigestRow[]; suiteRuns: SuiteRun[];
   jobs: JobRow[];
