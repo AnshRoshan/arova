@@ -1,4 +1,6 @@
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import { db } from "@/db";
 import { agents, channels, channelDeliveries, credentials, memories, messages, skills } from "@/db/schema";
@@ -119,19 +121,51 @@ export async function savedSkillsBlock(workspaceId: string, agent: { id: string;
   }
 }
 
+/**
+ * Spec 42 — what a turn's attachments become. Text-like files are read inline (capped); images
+ * become base64 data URLs for a vision-capable model's content parts. The bytes never enter the
+ * row or the record — only this request-time read, workspace-scoped by construction.
+ */
+export async function readAttachments(workspaceId: string, attachments: { id: string; name: string; mime: string; size: number }[] | null | undefined, visionOk: boolean): Promise<{ textSuffix: string; images: { mime: string; base64: string }[]; refused: string[] }> {
+  const out = { textSuffix: "", images: [] as { mime: string; base64: string }[], refused: [] as string[] };
+  if (!attachments?.length) return out;
+  const parts: string[] = [];
+  for (const a of attachments) {
+    try {
+      const bytes = await readFile(path.join(process.cwd(), ".data", "attachments", workspaceId, a.id));
+      if (a.mime.startsWith("image/")) {
+        if (!visionOk) { out.refused.push(`${a.name}: this model does not accept images`); continue; }
+        out.images.push({ mime: a.mime, base64: bytes.toString("base64") });
+      } else {
+        const text = bytes.toString("utf8").slice(0, 4000);
+        parts.push(`[Attached file: ${a.name}]\n${text}`);
+      }
+    } catch { out.refused.push(`${a.name}: the stored file could not be read`); }
+  }
+  if (parts.length) out.textSuffix = `\n\n${parts.join("\n\n")}`;
+  return out;
+}
+
 /** systemPrompt with the workspace's saved skills attached — the one call the reply paths use. */
 export async function systemPromptFor(workspaceId: string, agent: { id: string; teamId: string | null; name: string; role: string; instructions: string; capabilities: unknown }, peers: Peer[], channel?: string, toolLoop = false): Promise<string> {
   return systemPrompt(agent, peers, channel, toolLoop, await savedSkillsBlock(workspaceId, agent));
 }
 
-export function chatMessages(agent: AgentLike, history: Turn[], profile: ProviderProfile, peers: Peer[] = [], channel?: string, memory?: string, toolLoop = false, savedSkills = "") {
+export function chatMessages(agent: AgentLike, history: Turn[], profile: ProviderProfile, peers: Peer[] = [], channel?: string, memory?: string, toolLoop = false, savedSkills = "", finalImages: { mime: string; base64: string }[] = []) {
   const budgeted = trimToTokenBudget(history.filter(m => (m.role === "user" || m.role === "assistant") && m.kind !== "provider_error"), { profile, reserve: Math.max(DEFAULT_RESERVE_TOKENS, maxOutputTokens()) });
   return [
     { role: "system", content: systemPrompt(agent, peers, channel, toolLoop, savedSkills) },
     // Memory arrives as a labelled record the model must weigh, never as part of its own voice.
     ...(memory ? [{ role: "user", content: memory }] : []),
     ...budgeted.map(m => ({ role: m.role, content: m.content })),
-  ];
+  ].map((m, i, all) => {
+    // Spec 42 — the final user turn carries images as content parts (vision-capable models only;
+    // the caller gates that and says so in text when it is not).
+    if (finalImages.length && m.role === "user" && i === all.length - 1 && typeof m.content === "string") {
+      return { role: m.role, content: [{ type: "text" as const, text: m.content }, ...finalImages.map(img => ({ type: "image_url" as const, image_url: { url: `data:${img.mime};base64,${img.base64}` } }))] };
+    }
+    return m;
+  });
 }
 
 export async function peersOf(workspaceId: string, agent: { id: string; teamId: string | null }): Promise<Peer[]> {

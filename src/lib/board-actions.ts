@@ -1,4 +1,6 @@
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { z } from "zod";
 import type { NextRequest } from "next/server";
 import { db } from "@/db";
@@ -157,7 +159,15 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     const agent = await ownedAgent(workspaceId, body.agentId);
     if (agent.status === "PAUSED") throw new Error("Resume this agent before chatting.");
     const content = text.parse(body.content);
-    await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "user", content });
+    // Spec 42 — attachment refs from /api/upload: at most 4, validated to exist in THIS
+    // workspace's storage; the row stores refs, never bytes.
+    const refInput = z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(120), mime: z.string().min(3).max(80), size: z.number().int().min(0).max(10 * 1024 * 1024) })).max(4).default([]).parse(body.attachments ?? []);
+    const validated = [];
+    for (const ref of refInput) {
+      try { await readFile(path.join(process.cwd(), ".data", "attachments", workspaceId, ref.id)); } catch { throw new Error(`${ref.name}: the upload could not be found in this workspace's storage — upload it again.`); }
+      validated.push(ref);
+    }
+    await db.insert(messages).values({ workspaceId, agentId: agent.id, role: "user", content, ...(validated.length ? { attachments: validated } : {}) });
     await audit(workspaceId, agent.id, "chat.message", "Message exchanged");
     if (body.stream !== false) return { response: streamReply(workspaceId, agent, agent.id, request.signal) };
     const reply = await buildReply(workspaceId, agent, await recentTurns(workspaceId, agent.id));

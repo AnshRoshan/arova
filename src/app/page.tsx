@@ -20,7 +20,7 @@ import { searchRegistry, type RegistryRow } from "@/lib/registry";
 
 type Agent = { id: string; name: string; role: string; instructions: string; avatar: string; status: string; provider: string; teamId: string | null; managerId: string | null; capabilities: Capabilities };
 /** A row belongs to one seat's thread or to one organisation's channel — `teamId` set means channel. */
-type Message = { id: string; agentId: string | null; teamId: string | null; role: string; content: string; kind: string; metadata: Record<string, unknown>; createdAt: string };
+type Message = { id: string; agentId: string | null; teamId: string | null; role: string; content: string; kind: string; metadata: Record<string, unknown>; attachments?: { id: string; name: string; mime: string; size: number }[] | null; createdAt: string };
 type Routine = { id: string; agentId: string; name: string; description: string; schedule: string; timezone: string; enabled: boolean; lastRunAt: string | null; nextRunAt: string | null; lastStatus: string | null; failStreak: number };
 type Run = { id: string; agentId: string; routineId: string | null; agentVersionId: string | null; title: string; status: string; summary: string; initiator: string; startedAt: string; completedAt: string | null };
 type Step = { id: string; runId: string; title: string; detail: string; createdAt: string };
@@ -259,6 +259,16 @@ export default function Workbench() {
   const [registryQuery, setRegistryQuery] = useState("");
   const [activity, setActivity] = useState(false);
   const [draft, setDraft] = useState("");
+  const [pendingFiles, setPendingFiles] = useState<{ id: string; name: string; mime: string; size: number }[]>([]);
+  const pickFiles = async (list: FileList | null) => {
+    if (!list?.length) return;
+    const form = new FormData();
+    for (const f of Array.from(list).slice(0, 4)) form.append("files", f);
+    const r = await fetch("/api/upload", { method: "POST", body: form }).catch(() => null);
+    const j = r ? await r.json().catch(() => ({})) : {};
+    if (!r?.ok) { setToast(j.error ?? "The upload failed."); return; }
+    setPendingFiles(prev => [...prev, ...(j.attachments ?? [])].slice(0, 4));
+  };
   const [stream, setStream] = useState("");
   const [pending, setPending] = useState<string | null>(null);
   const [consulting, setConsulting] = useState<{ from: string; to: string; question: string } | null>(null);
@@ -412,7 +422,7 @@ export default function Workbench() {
     let streamed = "";
     setBusy(true); setPending(content); setStream(""); setToolState(null);
     try {
-      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sendMessage", agentId: agent.id, content, stream: true }), signal: controller.signal });
+      const r = await fetch("/api/board", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "sendMessage", agentId: agent.id, content, stream: true, ...(pendingFiles.length ? { attachments: pendingFiles } : {}) }), signal: controller.signal });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "Something went wrong");
       if (!(r.headers.get("content-type") || "").includes("text/event-stream")) { setData((await r.json()).board); return true; }
       const reader = r.body!.getReader();
@@ -722,6 +732,7 @@ export default function Workbench() {
     e.preventDefault();
     const content = draft.trim();
     if (!content || busy || agent?.status !== "ACTIVE") return;
+    setPendingFiles([]);
     setDraft("");
     if (!(await send(content))) setDraft(content);
   };
@@ -1745,13 +1756,18 @@ export default function Workbench() {
       {!pane && agent && <>
         {!atBottom && <button className="jump" type="button" onClick={() => { const b = bodyRef.current; if (b) b.scrollTop = b.scrollHeight; setAtBottom(true); }}><ArrowDown size={14} />{busy ? "Answering below" : "Latest reply"}</button>}
         <form className="composer" onSubmit={submit} style={hue}>
+          {pendingFiles.length > 0 && <div className="composer-files">{pendingFiles.map(f => <span className="chip waiting" key={f.id} style={{ marginRight: 6 }}><i />{f.name} · {Math.round(f.size / 1024)} KB</span>)}</div>}
           <div className="composer-box">
             <textarea value={draft} rows={1} placeholder={agent.status === "ACTIVE" ? `Message ${agent.name}` : `${agent.name} is paused`} disabled={agent.status !== "ACTIVE"} aria-label={`Message ${agent.name}`}
               onChange={e => { setDraft(e.target.value); e.target.style.height = "auto"; e.target.style.height = `${Math.min(e.target.scrollHeight, 168)}px`; }}
               onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} />
             {busy
               ? <button className="stop-btn" type="button" onClick={stop} title="Stop this reply; what has already arrived is kept"><Square size={11} fill="currentColor" />Stop</button>
-              : <button className="send" type="submit" disabled={!draft.trim() || agent.status !== "ACTIVE"} aria-label="Send message"><ArrowRight size={17} /></button>}
+              : <>
+                <button className="icon-btn" type="button" title="Attach files (images for a vision model, text for the prompt)" disabled={busy} onClick={() => document.getElementById("composer-files-input")?.click()}><Plus size={15} /></button>
+                <input id="composer-files-input" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/csv,application/xml" onChange={e => { void pickFiles(e.target.files); e.target.value = ""; }} />
+                <button className="send" type="submit" disabled={!draft.trim() || agent.status !== "ACTIVE"} aria-label="Send message"><ArrowRight size={17} /></button>
+              </>}
           </div>
           <div className="composer-bar">
             <span className="fact">{answering ? <><b>{answering.label}</b><s>{answering.model}</s></> : <>no model key · local replies</>}</span>

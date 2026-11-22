@@ -16,7 +16,7 @@ import { mcpCallTool, mcpDiscoverTools, mcpEndpointFromConfig, redactArguments, 
 import { argumentsHash, decideToolCall, parseAllowlist, approvalExpiry } from "@/lib/policy";
 import { workerEnabled, schedulerIntervalSeconds } from "@/lib/worker-config";
 import { board } from "@/lib/board-payload";
-import { chatMessages, failureReply, maxDelegations, MEMORY_SYSTEM, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, vaultAuthorization, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
+import { chatMessages, failureReply, maxDelegations, MEMORY_SYSTEM, notifyChannels, peersOf, quotaReply, readAttachments, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, vaultAuthorization, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
 
 const ROUTINE_INTENT = /every day|every morning|every week|weekday|daily|weekly|each morning|every monday|every friday|schedule|remind me/;
 
@@ -145,7 +145,15 @@ export async function planReply(workspaceId: string, agent: ChatAgent, history: 
   };
   // What the org already recorded about this, scoped to the actor's own team.
   const memory = await recallMemories(workspaceId, agent.teamId, prompt);
-  const chat = chatMessages(agent, history, profile, consultPeers, undefined, memory.block || undefined, caps.toolLoop, await savedSkillsBlock(workspaceId, agent));
+  // Spec 42 — the newest user turn's attachments: text files ride inline; images become content
+  // parts only when the operator declared the model vision-capable, otherwise the refusal is said
+  // in text the model can repeat to the person.
+  const lastUser = [...history].reverse().find(m => m.role === "user");
+  const att = lastUser ? await readAttachments(workspaceId, (lastUser as { attachments?: { id: string; name: string; mime: string; size: number }[] | null }).attachments ?? null, profile.vision === true) : { textSuffix: "", images: [], refused: [] };
+  const attachmentNote = att.refused.length ? `\n\n(Some attachments were not used: ${att.refused.join("; ")}.)` : "";
+  const askedNow = history[history.length - 1]?.content ?? "";
+  const askedWithFiles = askedNow + att.textSuffix + attachmentNote;
+  const chat = chatMessages(agent, history.map((m, i) => i === history.length - 1 && m.role === "user" ? { ...m, content: askedWithFiles } : m), profile, consultPeers, undefined, memory.block || undefined, caps.toolLoop, await savedSkillsBlock(workspaceId, agent), att.images);
   // The tool loop is opt-in and read-only. Search is offered only when the operator configured a
   // provider and this seat already holds web_fetch; the model never gets a shell from this path.
   const searchProfile = loadSearchProfile();
@@ -241,7 +249,7 @@ export async function consultPeer(
 }
 
 /** The peer's answer arrives as context the asking agent must weigh, not text to copy. */
-export function integrateMessages(chat: { role: string; content: string }[], peer: Peer, question: string, answer: string) {
+export function integrateMessages(chat: ModelMessage[], peer: Peer, question: string, answer: string) {
   const NL = String.fromCharCode(10);
   return [
     ...chat,
@@ -440,7 +448,7 @@ export async function buildReply(workspaceId: string, agent: ChatAgent, history:
       return approvalReply(workspaceId, agent, decision.title ?? "Action needs your approval", decision.detail ?? `${agent.name} did not describe what it wanted to do.`);
     }
     const peer = decision.action === "consult" ? resolvePeer(decision.agent ?? "", plan.consultPeers, agent.id) : null;
-    let chat = plan.chat;
+    let chat: ModelMessage[] = plan.chat;
     let hop: { peer: Peer; question: string; answer: string } | null = null;
     if (peer && decision.action === "consult" && decision.question) {
       hop = { peer, question: decision.question, answer: await consultPeer(workspaceId, agent, peer, decision.question, { depth: 1, visited: [agent.id, peer.id], send: () => {} }) };

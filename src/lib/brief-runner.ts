@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import { delegations, runs, runSteps, teams } from "@/db/schema";
-import { estimateTokens, loadProfiles, readSseText, requestCompletion, resolveForAgent } from "@/lib/model-gateway";
+import { estimateTokens, loadProfiles, readSseText, requestCompletion, resolveForAgent, type ModelMessage } from "@/lib/model-gateway";
 import { allowsAction, normaliseCapabilities, resolveTools, tokenBudgetFor } from "@/lib/tools";
 import { mentionConsult, parseTurn, resolvePeer } from "@/lib/orchestration";
 import { budgetStopRow, noReportStopRow, summarisePost, summonCeiling } from "@/lib/channel";
@@ -177,7 +177,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     }
 
     if (await overQuota(workspaceId, profile)) { await stopWithoutReport(); return outcome; }
-    let messages = chat;
+    let messages: ModelMessage[] = chat;
     for (const s of summons) messages = integrateMessages(messages, s.peer, s.question, s.answer);
     if (stopped()) { await stopBrief(); return outcome; }
 

@@ -17,14 +17,17 @@ export type ProviderProfile = {
   builtIn: boolean;
   /** True when the model came from env. A pinned model is never swapped out behind the owner's back. */
   modelPinned?: boolean;
+  /** Spec 42 — the operator declares the served model accepts images (<NAME>_VISION=1). Never guessed. */
+  vision: boolean;
 };
 
 export type ToolDefinition = { type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } };
 export type ToolCall = { id: string; type: "function"; function: { name: string; arguments: string } };
-export type ModelMessage = { role: string; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string };
+export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+export type ModelMessage = { role: string; content: string | null | ContentPart[]; tool_calls?: ToolCall[]; tool_call_id?: string };
 
 /** Sentinel for workspaces with no model key: honest local replies, never a fabricated completion. */
-export const LOCAL_PROFILE: ProviderProfile = { name: "local", label: "Local", base: "", model: "", maxContextTokens: 0, configured: false, builtIn: true };
+export const LOCAL_PROFILE: ProviderProfile = { name: "local", label: "Local", base: "", model: "", maxContextTokens: 0, configured: false, builtIn: true, vision: false };
 
 const BUILT_INS = [
   { name: "xai", label: "Grok · xAI", prefix: "XAI", defaultBase: "https://api.x.ai/v1", defaultModel: "grok-4" },
@@ -47,8 +50,8 @@ export function apiKeyFor(name: string, env: Env = process.env): string | undefi
   return env[`${builtIn ? builtIn.prefix : envPrefix(name)}_API_KEY`] || undefined;
 }
 
-function describe(name: string, label: string, base: string, model: string, maxContextTokens: number, configured: boolean, builtIn: boolean, modelPinned = false): ProviderProfile {
-  return { name, label, base, model, maxContextTokens, configured, builtIn, modelPinned };
+function describe(name: string, label: string, base: string, model: string, maxContextTokens: number, configured: boolean, builtIn: boolean, modelPinned = false, vision = false): ProviderProfile {
+  return { name, label, base, model, maxContextTokens, configured, builtIn, modelPinned, vision };
 }
 
 function titleCase(name: string) {
@@ -65,7 +68,7 @@ export function loadProfiles(env: Env = process.env): ProviderProfile[] {
     const pinned = env[`${b.prefix}_MODEL`] || (b.name === "openai" ? env.FAST_MODEL : undefined);
     const base = env[`${b.prefix}_BASE_URL`] || b.defaultBase;
     const model = pinned || b.defaultModel;
-    return describe(b.name, b.label, base, model, Number(env[`${b.prefix}_MAX_CONTEXT`]) || 128000, Boolean(apiKeyFor(b.name, env)), true, Boolean(pinned));
+    return describe(b.name, b.label, base, model, Number(env[`${b.prefix}_MAX_CONTEXT`]) || 128000, Boolean(apiKeyFor(b.name, env)), true, Boolean(pinned), env[`${b.prefix}_VISION`] === "1");
   });
 
   const custom = (env.PROVIDERS || "")
@@ -78,7 +81,7 @@ export function loadProfiles(env: Env = process.env): ProviderProfile[] {
       const base = env[`${prefix}_BASE_URL`] || "";
       const model = env[`${prefix}_MODEL`] || "";
       const configured = Boolean(base) && Boolean(model) && Boolean(apiKeyFor(name, env));
-      return describe(name, titleCase(name), base, model, Number(env[`${prefix}_MAX_CONTEXT`]) || 8192, configured, false, Boolean(model));
+      return describe(name, titleCase(name), base, model, Number(env[`${prefix}_MAX_CONTEXT`]) || 8192, configured, false, Boolean(model), env[`${prefix}_VISION`] === "1");
     });
 
   return [...builtIns, ...custom];
