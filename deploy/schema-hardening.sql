@@ -136,3 +136,12 @@ CREATE TABLE IF NOT EXISTS research_findings (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS research_findings_project_index ON research_findings (project_id, created_at);
+
+-- Spec 38 (2026-11-22 port): trigger tokens move from plaintext to sha-256 digests.
+-- Existing tokens stay valid after this runs once; a token that is already a 64-char
+-- hex digest is left alone so the migration is idempotent.
+UPDATE triggers
+SET token = encode(sha256(convert_to(token, 'UTF8')), 'hex')
+WHERE token !~ '^[0-9a-f]{64}$';
+
+ALTER TABLE triggers ADD COLUMN IF NOT EXISTS token_preview text NOT NULL DEFAULT '';

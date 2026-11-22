@@ -7,7 +7,13 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "node --test \"src/lib/*.test.ts\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "worker": "node --import ./scripts/worker-hooks.mjs src/worker/index.ts",
+    "db:check": "node scripts/db-check.ts",
+    "db:start": "node scripts/db-start.cjs",
+    "mock-model": "node scripts/mock-model.cjs",
+    "mock-mcp": "node scripts/mock-mcp.cjs",
+    "mock-slack": "node scripts/mock-slack.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sandbox-runtime": "^0.0.81",

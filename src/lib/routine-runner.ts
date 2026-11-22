@@ -1,7 +1,9 @@
 import { and, eq, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { messages, routines, runs, runSteps, schedulerHeartbeats, workspaces } from "@/db/schema";
+import { messages, routines, runs, runSteps, schedulerHeartbeats, watches, workspaces } from "@/db/schema";
 import { audit } from "@/lib/audit";
+import { enqueueJob, queueWorkerIsLive } from "@/lib/work-queue";
+import { occurrenceKey } from "@/lib/jobs";
 import { finishRun } from "@/lib/run-contract";
 import { drizzleRunStore } from "@/lib/run-contract-drizzle";
 import { missedIntervalMs, nextRunAt, parseSchedule } from "@/lib/scheduler";
@@ -25,8 +27,10 @@ export const liveRuns = new Set<string>();
 
 /**
  * The scheduler tick. The in-process worker calls this too. A board read still claims due work
- * so a workspace opened with the worker off does not silently skip. The UI names which clock
- * actually beat.
+ * so a workspace opened with the worker off does not silently skip. When a durable-queue worker
+ * is live (spec 30) the claimed occurrence becomes a job row and the queue worker executes it
+ * with leases and retries; when no worker is live, this process executes inline exactly as it
+ * always has, so the always-on guarantee never depends on an optional second process.
  */
 export async function tickSchedules(workspaceId: string): Promise<Promise<unknown>[]> {
   const now = new Date();
@@ -38,6 +42,7 @@ export async function tickSchedules(workspaceId: string): Promise<Promise<unknow
     const first = nextRunAt(row.schedule, row.timezone || ws?.timezone || "UTC", now);
     if (first) await db.update(routines).set({ nextRunAt: first }).where(eq(routines.id, row.id));
   }
+  const queueLive = await queueWorkerIsLive(now);
   const due = await db.select().from(routines)
     .where(and(eq(routines.workspaceId, workspaceId), eq(routines.enabled, true), lte(routines.nextRunAt, now), sql`${routines.nextRunAt} IS NOT NULL`))
     .orderBy(routines.nextRunAt).limit(20);
@@ -49,16 +54,41 @@ export async function tickSchedules(workspaceId: string): Promise<Promise<unknow
     // Claim by predicate, not by the value we read. Postgres re-checks the WHERE clause after the
     // row lock, so a second tab that races us finds it no longer due and skips. Comparing the
     // timestamp itself would never match: the column keeps microseconds, a JS Date keeps milliseconds.
+    const dueAt = routine.nextRunAt;
     const next = nextRunAt(routine.schedule, routine.timezone || ws?.timezone || "UTC", now);
     const schedule = parseSchedule(routine.schedule);
     const missed = schedule && routine.nextRunAt ? missedIntervalMs(schedule, routine.nextRunAt, now) : false;
     const [claimed] = await db.update(routines)
-      .set({ lastRunAt: now, nextRunAt: next, lastStatus: "RUNNING" })
+      .set({ lastRunAt: now, nextRunAt: next, lastStatus: queueLive ? "QUEUED" : "RUNNING" })
       .where(and(eq(routines.id, routine.id), lte(routines.nextRunAt, now)))
       .returning();
     if (!claimed) continue;
+    if (queueLive) {
+      // The occurrence instant is the idempotency key: however many ticks race, one job row exists
+      // for this exact scheduled slot. A RETRYING attempt is the queue's business, not the clock's.
+      const enqueued = await enqueueJob({ workspaceId, kind: "routine", subjectId: routine.id, payload: { routineId: routine.id }, idempotencyKey: occurrenceKey("routine", routine.id, dueAt ?? now), createdBy: "tick" });
+      if (!enqueued.deduplicated) started.push(Promise.resolve(enqueued.id));
+      continue;
+    }
     inFlight.add(routine.id);
     started.push(executeRoutine(workspaceId, routine, now, claimed.nextRunAt, undefined, missed).catch(error => console.error("Routine failed", error instanceof Error ? error.message : "unknown error")).finally(() => inFlight.delete(routine.id)));
+  }
+  // Spec 36b — due watches enqueue the same way, but they never execute in the request path: an
+  // observation fetch can take seconds, and a board read must not wait on it. Without a live
+  // worker the claimed check waits as a QUEUED job and the board says so, instead of pretending.
+  const dueWatches = await db.select().from(watches)
+    .where(and(eq(watches.workspaceId, workspaceId), eq(watches.enabled, true), lte(watches.nextCheckAt, now), sql`${watches.nextCheckAt} IS NOT NULL`))
+    .orderBy(watches.nextCheckAt).limit(20);
+  for (const watch of dueWatches) {
+    const dueAt = watch.nextCheckAt;
+    const nextCheck = nextRunAt(watch.cadence, ws?.timezone || "UTC", now);
+    const [claimedWatch] = await db.update(watches)
+      .set({ lastCheckedAt: now, nextCheckAt: nextCheck })
+      .where(and(eq(watches.id, watch.id), lte(watches.nextCheckAt, now)))
+      .returning();
+    if (!claimedWatch) continue;
+    const enqueued = await enqueueJob({ workspaceId, kind: "watch_check", subjectId: watch.id, payload: { watchId: watch.id }, idempotencyKey: occurrenceKey("watch_check", watch.id, dueAt ?? now), createdBy: "tick" });
+    if (!enqueued.deduplicated) started.push(Promise.resolve(enqueued.id));
   }
   return started;
 }

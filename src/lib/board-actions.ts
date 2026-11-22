@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NextRequest } from "next/server";
 import { db } from "@/db";
-import { agents, approvals, channels, evalSuites, evalTasks, memories, messages, researchFindings, researchProjects, researchSources, routines, runs, runSteps, sandboxes, teams, triggers, workspaces } from "@/db/schema";
+import { agents, approvals, attentionItems, channels, credentials, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runs, runSteps, sandboxes, skillVersions, skills, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validateChannelTarget, type ChannelEvent } from "@/lib/channels";
 import { completionText, ensureServedModel, estimateTokens, loadProfiles, requestCompletion, resolveForAgent, usageFromJson } from "@/lib/model-gateway";
@@ -30,6 +30,24 @@ import { mayFoundOrg, mayStaffOrg, resolveLead } from "@/lib/channel";
 import { ownedAgent, postToChannel, ownMemory, quotaReply, recentTurns, streamTimeoutMs, systemPrompt, recordDelivery, MEMORY_SYSTEM } from "@/lib/board-core";
 import { buildReply, streamReply } from "@/lib/chat-runner";
 import { streamBrief } from "@/lib/brief-runner";
+import { assertFetchableUrl, argumentsHash, decideToolCall, hashToken, parseAllowlist, tokenPreview } from "@/lib/policy";
+import { decryptSecret, encryptSecret, hasCredentialKey } from "@/lib/credentials";
+import { mcpCallTool, mcpDiscoverTools, mcpEndpointFromConfig, redactArguments } from "@/lib/mcp";
+import { nextVersion, skillExport, skillImport, slugify } from "@/lib/saved-skills";
+import { enqueueJob, queueWorkerIsLive } from "@/lib/work-queue";
+
+/**
+ * Spec 31e — the vault is read server-side only: an adapter receives its bearer at call time and
+ * nothing derived from it is ever returned to a payload. A missing label means "no authorization",
+ * but a present label with a missing vault key refuses loudly — silence would look like an
+ * unauthenticated server.
+ */
+async function vaultAuthorization(workspaceId: string, label: string | undefined): Promise<string | undefined> {
+  if (!label) return undefined;
+  const [row] = await db.select().from(credentials).where(and(eq(credentials.workspaceId, workspaceId), eq(credentials.label, label))).limit(1);
+  if (!row) return undefined;
+  return `Bearer ${decryptSecret(row.envelope, process.env.CREDENTIAL_ENCRYPTION_KEY)}`;
+}
 
 const uuid = z.string().uuid();
 const text = z.string().trim().min(1).max(4000);
@@ -247,9 +265,11 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     // Wiring a webhook for someone else's org is the same leak as writing their memory.
     await mayRemember(input.teamId);
     const token = `arova-${crypto.randomUUID()}${crypto.randomUUID()}`.replace(/-/g, "");
-    const [row] = await db.insert(triggers).values({ workspaceId, teamId: t.id, token, label: input.label }).returning();
+    // Spec 38 — the token is stored as a digest and compared as a digest; the raw value is shown
+    // once here and never again. The board's payload carries only the preview.
+    const [row] = await db.insert(triggers).values({ workspaceId, teamId: t.id, token: hashToken(token), tokenPreview: tokenPreview(token), label: input.label }).returning();
     await audit(workspaceId, null, "trigger.created", `${t.name}: ${input.label}`);
-    result = { triggerId: row.id, token };
+    result = { triggerId: row.id, token, tokenPreview: tokenPreview(token) };
   } else if (action === "revokeTrigger") {
     const input = z.object({ triggerId: uuid }).parse(body);
     const [row] = await db.select().from(triggers).where(and(eq(triggers.id, input.triggerId), eq(triggers.workspaceId, workspaceId))).limit(1);
@@ -579,6 +599,18 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
       const key = request.headers.get("Idempotency-Key") || crypto.randomUUID();
       const [existing] = await db.select().from(runs).where(and(eq(runs.workspaceId, workspaceId), eq(runs.idempotencyKey, key))).limit(1);
       if (existing) result = { runId: existing.id };
+      else if (await queueWorkerIsLive()) {
+        // Spec 30: with a durable-queue worker live, Run now enqueues instead of executing inline.
+        // The job carries the request's idempotency key, so a retried request cannot buy two runs,
+        // and the worker's lease and retry policy owns everything after the click.
+        const [pendingJob] = await db.select({ id: jobs.id }).from(jobs)
+          .where(and(eq(jobs.workspaceId, workspaceId), inArray(jobs.kind, ["manual_run", "routine"]), eq(jobs.subjectId, routine.id), inArray(jobs.status, ["QUEUED", "RUNNING", "RETRYING"])))
+          .limit(1);
+        if (pendingJob) throw new Error(`${routine.name} already has a queued or running job. Wait for it to finish.`);
+        const enqueued = await enqueueJob({ workspaceId, kind: "manual_run", subjectId: routine.id, payload: { routineId: routine.id, key }, idempotencyKey: `manual:${key}`, createdBy: "person" });
+        await audit(workspaceId, routine.agentId, "routine.run.requested", `${routine.name} (queued for the worker)`);
+        result = { jobId: enqueued.id, queued: true, deduplicated: enqueued.deduplicated };
+      }
       else if (inFlight.has(routine.id)) throw new Error(`${routine.name} is already running. Wait for it to finish.`);
       else {
         // The scheduler claims by setting lastStatus; Run now takes the same claim so a click and a
@@ -692,14 +724,205 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     if (!spec) throw new Error(`"${input.toolId}" is not a tool this deployment can genuinely run.`);
     const caps = normaliseCapabilities(runner.capabilities);
     if (!resolveTools(caps, { hasTeam: true }).includes(spec.id)) throw new Error(`${runner.name} is not granted "${spec.label}". Turn it on in ${runner.name} › Capabilities.`);
+    // Spec 31b: the gateway decision is a row before execution — the rule quoted, the arguments
+    // redacted, the digest bound. The seat's own grant is the pre-approval for an internal write;
+    // web_fetch's READ path runs the allow-list and SSRF rules through the same matrix.
+    const risk = spec.id === "web_fetch" ? ("READ" as const) : ("WRITE" as const);
+    const decision = decideToolCall({ tool: spec.id, risk, granted: true, permissionMode: caps.permissionMode, unattended: false, allowedHosts: parseAllowlist(process.env.TOOL_ALLOWED_HOSTS), preApproved: risk === "WRITE" }, { target: spec.id === "web_fetch" ? input.toolInput : undefined });
+    const [callRow] = await db.insert(toolCalls).values({ workspaceId, agentId: runner.id, tool: spec.id, risk, decision: decision.decision, rule: decision.rule, argsDigest: argumentsHash(input.toolInput), args: redactArguments({ input: input.toolInput }) }).returning({ id: toolCalls.id });
+    if (decision.decision !== "allow") {
+      await db.update(toolCalls).set({ status: "REFUSED" }).where(eq(toolCalls.id, callRow.id));
+      throw new Error(`The policy gateway refused "${spec.label}": ${decision.rule}`);
+    }
     const [toolRun] = await db.insert(runs).values({ workspaceId, agentId: runner.id, agentVersionId: await ensureAgentVersion(runner), title: `Tool · ${spec.label}`, status: "RUNNING", summary: input.toolInput.slice(0, 240), initiator: "person", startedAt: new Date() }).returning();
+    const startedAt = Date.now();
     const executed = spec.id === "web_fetch" ? await webFetch(input.toolInput) : runLocalTool(spec.id, input.toolInput);
+    await db.update(toolCalls).set({ status: executed.ok ? "COMPLETED" : "FAILED", output: executed.ok ? String(executed.output ?? "").slice(0, 4000) : null, error: executed.ok ? null : (executed.error ?? "unknown").slice(0, 500), durationMs: Date.now() - startedAt }).where(eq(toolCalls.id, callRow.id));
     await db.insert(runSteps).values({ workspaceId, runId: toolRun.id, title: executed.ok ? `${spec.label} ran in this process` : `${spec.label} refused`, detail: (executed.ok ? executed.output ?? "" : executed.error ?? "").slice(0, 4000), status: executed.ok ? "COMPLETED" : "FAILED" });
     const toolSummary = executed.ok ? `Ran: ${input.toolInput.slice(0, 100)} → ${String(executed.output).slice(0, 100)}` : `Refused: ${executed.error ?? "unknown"}`;
     if (await finishRun(drizzleRunStore, toolRun.id, executed.ok ? "COMPLETED" : "FAILED", toolSummary.slice(0, 240)) === "updated") {
       await audit(workspaceId, runner.id, "tool.ran", `${spec.label} (${runner.name}): ${executed.ok ? "completed" : "refused"}`);
     }
-    result = { tool: { id: spec.id, ...executed }, runId: toolRun.id };
+    result = { tool: { id: spec.id, ...executed }, runId: toolRun.id, toolCall: callRow.id };
+  } else if (action === "pauseWork" || action === "resumeWork") {
+    // Spec 30d — pausing is a workspace-wide queue property, not per-routine bookkeeping: the
+    // worker's claim joins on `paused_at IS NULL`, so queued jobs simply wait, and resuming lets
+    // the next poll take them in their original order.
+    await db.update(workspaces).set({ pausedAt: action === "pauseWork" ? new Date() : null }).where(eq(workspaces.id, workspaceId));
+    await audit(workspaceId, null, action === "pauseWork" ? "queue.paused" : "queue.resumed", action === "pauseWork" ? "Queued jobs wait until the workspace resumes" : "Queued jobs resume on the worker's next poll");
+    result = { paused: action === "pauseWork" };
+  } else if (action === "checkMcp") {
+    // Spec 31c — discovery against the seat's own http servers. An unreachable server is reported
+    // as unreachable; nothing is invented on its behalf.
+    const agent = await ownedAgent(workspaceId, uuid.parse(body.agentId));
+    const caps = normaliseCapabilities(agent.capabilities);
+    const servers = caps.mcpServers.filter(s => s.transport === "http" && s.url).slice(0, 3);
+    result = { servers: await Promise.all(servers.map(async server => {
+      const endpoint = mcpEndpointFromConfig(server, server.credential ? { [server.name]: server.credential } : {});
+      if (!endpoint) return { name: server.name, reachable: false, tools: [], error: "no usable http endpoint" };
+      try {
+        const authorization = await vaultAuthorization(workspaceId, server.credential);
+        const tools = await mcpDiscoverTools(endpoint, authorization);
+        return { name: server.name, reachable: true, tools: tools.map(t => ({ name: `mcp:${server.name}:${t.name}`, description: t.description, risk: t.risk })), error: null };
+      } catch (error) {
+        return { name: server.name, reachable: false, tools: [], error: error instanceof Error ? error.message.slice(0, 200) : "unreachable" };
+      }
+    })) };
+  } else if (action === "runMcpTool") {
+    // A person-triggered MCP call through the same decision matrix the gateway uses. Model-driven
+    // MCP calls in the reply loop stay out of scope (spec 31c): the loop is the read-only loop,
+    // and an MCP write belongs to a person until an approval flow exists for it.
+    const input = z.object({ agentId: uuid, server: z.string().trim().min(1).max(80), tool: z.string().trim().min(1).max(120), args: z.record(z.string(), z.unknown()).default({}) }).parse(body);
+    const agent = await ownedAgent(workspaceId, input.agentId);
+    const caps = normaliseCapabilities(agent.capabilities);
+    const server = caps.mcpServers.find(s => s.name === input.server && s.transport === "http" && s.url);
+    if (!server) throw new Error(`MCP server "${input.server}" is not configured on this seat with an http endpoint.`);
+    const endpoint = mcpEndpointFromConfig(server, {});
+    if (!endpoint) throw new Error(`MCP server "${input.server}" has no usable http endpoint.`);
+    let authorization: string | undefined;
+    try { authorization = await vaultAuthorization(workspaceId, server.credential); } catch (error) {
+      throw new Error(`The credential could not be opened: ${error instanceof Error ? error.message : "unknown"}`);
+    }
+    const tools = await mcpDiscoverTools(endpoint, authorization);
+    const tool = tools.find(t => t.name === input.tool);
+    if (!tool) throw new Error(`"${input.server}" exposes no tool named "${input.tool}". Discovery refused to pretend otherwise.`);
+    const decision = decideToolCall({ tool: `mcp:${input.server}:${input.tool}`, risk: tool.risk, granted: true, permissionMode: caps.permissionMode, unattended: false, allowedHosts: parseAllowlist(process.env.TOOL_ALLOWED_HOSTS), preApproved: false }, {});
+    const [callRow] = await db.insert(toolCalls).values({ workspaceId, agentId: agent.id, tool: `mcp:${input.server}:${input.tool}`, risk: tool.risk, decision: decision.decision, rule: decision.rule, argsDigest: argumentsHash(input.args), args: redactArguments(input.args) }).returning({ id: toolCalls.id });
+    await audit(workspaceId, agent.id, "mcp.tool", `${input.server}/${input.tool}: ${decision.decision}`);
+    if (decision.decision !== "allow") {
+      await db.update(toolCalls).set({ status: decision.decision === "approval" ? "APPROVAL_REQUIRED" : "REFUSED" }).where(eq(toolCalls.id, callRow.id));
+      result = { toolCall: callRow.id, decision: decision.decision, rule: decision.rule };
+    } else {
+      const started = Date.now();
+      try {
+        const text = await mcpCallTool(endpoint, input.tool, input.args, authorization);
+        await db.update(toolCalls).set({ status: "COMPLETED", output: text.slice(0, 4000), durationMs: Date.now() - started }).where(eq(toolCalls.id, callRow.id));
+        result = { toolCall: callRow.id, decision: "allow", output: text.slice(0, 4000) };
+      } catch (error) {
+        const why = error instanceof Error ? error.message.slice(0, 500) : "unknown";
+        await db.update(toolCalls).set({ status: "FAILED", error: why, durationMs: Date.now() - started }).where(eq(toolCalls.id, callRow.id));
+        throw new Error(`The MCP tool call failed: ${why}`);
+      }
+    }
+  } else if (["createGoal", "toggleGoal", "deleteGoal"].includes(action)) {
+    // Spec 36a — a responsibility checked on a cadence. The cadence string is the same schedule
+    // vocabulary routines use, so one parser arms both.
+    if (action === "createGoal") {
+      const input = z.object({ title: z.string().trim().min(2).max(120), description: z.string().max(2000).default(""), successCriteria: z.string().max(2000).default(""), cadence: z.string().trim().min(3).max(120).default("Every day at 8:00 AM") }).parse(body);
+      const nextCheck = nextRunAt(input.cadence, workspace.timezone, new Date());
+      const [goal] = await db.insert(goals).values({ workspaceId, title: input.title, description: input.description, successCriteria: input.successCriteria, cadence: input.cadence, nextCheckAt: nextCheck, createdBy: actor?.name ?? "person" }).returning();
+      await audit(workspaceId, null, "goal.created", goal.title);
+      result = { goalId: goal.id };
+    } else {
+      const goalId = uuid.parse(body.goalId);
+      const [goal] = await db.select().from(goals).where(and(eq(goals.id, goalId), eq(goals.workspaceId, workspaceId))).limit(1);
+      if (!goal) throw new Error("Goal not found");
+      if (action === "toggleGoal") {
+        const resume = goal.status !== "active";
+        await db.update(goals).set({ status: resume ? "active" : "paused", nextCheckAt: resume ? nextRunAt(goal.cadence, workspace.timezone, new Date()) : null }).where(eq(goals.id, goal.id));
+        await audit(workspaceId, null, resume ? "goal.resumed" : "goal.paused", goal.title);
+      }
+      if (action === "deleteGoal") { await db.delete(goals).where(and(eq(goals.id, goal.id), eq(goals.workspaceId, workspaceId))); await audit(workspaceId, null, "goal.deleted", goal.title); }
+    }
+  } else if (["createWatch", "toggleWatch", "deleteWatch"].includes(action)) {
+    if (action === "createWatch") {
+      const input = z.object({ title: z.string().trim().min(2).max(120), url: z.string().trim().min(8).max(2000), condition: z.enum(["changed", "contains", "not_contains"]).default("changed"), comparator: z.string().max(400).default(""), cadence: z.string().trim().min(3).max(120).default("Every hour"), goalId: uuid.optional() }).parse(body);
+      // Fail closed at creation: a watch whose URL the policy would refuse every single check is
+      // refused once, here, with the rule named — not discovered three failures later.
+      assertFetchableUrl(input.url, parseAllowlist(process.env.TOOL_ALLOWED_HOSTS));
+      if (input.goalId) {
+        const [goal] = await db.select({ id: goals.id }).from(goals).where(and(eq(goals.id, input.goalId), eq(goals.workspaceId, workspaceId))).limit(1);
+        if (!goal) throw new Error("The goal this watch was for does not exist.");
+      }
+      const [watch] = await db.insert(watches).values({ workspaceId, goalId: input.goalId ?? null, title: input.title, url: input.url, condition: input.condition, comparator: input.comparator, cadence: input.cadence, nextCheckAt: nextRunAt(input.cadence, workspace.timezone, new Date()) }).returning();
+      await audit(workspaceId, null, "watch.created", `${watch.title} → ${watch.url.slice(0, 80)}`);
+      result = { watchId: watch.id };
+    } else {
+      const watchId = uuid.parse(body.watchId);
+      const [watch] = await db.select().from(watches).where(and(eq(watches.id, watchId), eq(watches.workspaceId, workspaceId))).limit(1);
+      if (!watch) throw new Error("Watch not found");
+      if (action === "toggleWatch") {
+        // Resuming recomputes the next check and clears the failure ladder — the person who switched
+        // it back on has just fixed something.
+        const resume = !watch.enabled;
+        await db.update(watches).set({ enabled: resume, failStreak: resume ? 0 : watch.failStreak, nextCheckAt: resume ? nextRunAt(watch.cadence, workspace.timezone, new Date()) : null, lastError: resume ? null : watch.lastError }).where(eq(watches.id, watch.id));
+        await audit(workspaceId, null, resume ? "watch.resumed" : "watch.paused", watch.title);
+      }
+      if (action === "deleteWatch") { await db.delete(watches).where(and(eq(watches.id, watch.id), eq(watches.workspaceId, workspaceId))); await audit(workspaceId, null, "watch.deleted", watch.title); }
+    }
+  } else if (action === "updateAttention") {
+    // Spec 36c — the inbox is state, not a feed: seen, snoozed, dismissed, resolved are all human
+    // decisions, and `resolvedAt` is written only when a human says it is resolved.
+    const input = z.object({ attentionId: uuid, status: z.enum(["open", "seen", "snoozed", "dismissed", "resolved"]) }).parse(body);
+    const [item] = await db.select().from(attentionItems).where(and(eq(attentionItems.id, input.attentionId), eq(attentionItems.workspaceId, workspaceId))).limit(1);
+    if (!item) throw new Error("Attention item not found");
+    await db.update(attentionItems).set({ status: input.status, lastSeenAt: new Date(), resolvedAt: input.status === "resolved" ? new Date() : item.resolvedAt }).where(eq(attentionItems.id, item.id));
+  } else if (["saveCredential", "deleteCredential"].includes(action)) {
+    if (action === "saveCredential") {
+      const input = z.object({ label: z.string().trim().min(1).max(80), kind: z.enum(["api", "bearer", "basic"]).default("api"), secret: z.string().trim().min(1).max(4000) }).parse(body);
+      if (!hasCredentialKey(process.env.CREDENTIAL_ENCRYPTION_KEY)) {
+        throw new Error("Set CREDENTIAL_ENCRYPTION_KEY (32 bytes, hex) on this server before storing credentials — refusing to write plaintext secrets.");
+      }
+      // Upsert by label: re-saving a label is the rotation story, and the envelope is replaced,
+      // never appended to.
+      await db.insert(credentials).values({ workspaceId, label: input.label, kind: input.kind, envelope: encryptSecret(input.secret, process.env.CREDENTIAL_ENCRYPTION_KEY), createdBy: actor?.name ?? "person" })
+        .onConflictDoUpdate({ target: [credentials.workspaceId, credentials.label], set: { kind: input.kind, envelope: encryptSecret(input.secret, process.env.CREDENTIAL_ENCRYPTION_KEY), createdBy: actor?.name ?? "person" } });
+      await audit(workspaceId, null, "credential.saved", input.label);
+      result = { saved: input.label };
+    } else {
+      const label = z.string().trim().min(1).max(80).parse(body.label);
+      await db.delete(credentials).where(and(eq(credentials.workspaceId, workspaceId), eq(credentials.label, label)));
+      await audit(workspaceId, null, "credential.deleted", label);
+      result = { deleted: label };
+    }
+  } else if (["saveSkill", "updateSkill", "rollbackSkill", "deleteSkill", "importSkill", "exportSkill"].includes(action)) {
+    // Spec 37 — saved, versioned workflows. Instructions and grants are data; grants are
+    // intersected with the seat's own at use, so a skill can never widen what its user holds.
+    if (action === "saveSkill") {
+      const input = z.object({ name: z.string().trim().min(2).max(120), description: z.string().max(300).default(""), scope: z.enum(["org", "team", "seat"]).default("org"), teamId: uuid.optional(), agentId: uuid.optional(), instructions: z.string().trim().min(1).max(4000), toolGrants: z.array(z.string().trim().min(1).max(40)).max(20).default([]) }).parse(body);
+      const slug = slugify(input.name);
+      const [clash] = await db.select({ id: skills.id }).from(skills).where(and(eq(skills.workspaceId, workspaceId), eq(skills.slug, slug))).limit(1);
+      if (clash) throw new Error(`A skill called "${input.name}" already exists here. Rename it or edit the existing one.`);
+      const [skill] = await db.insert(skills).values({ workspaceId, name: input.name, slug, description: input.description, scope: input.scope, teamId: input.teamId ?? null, agentId: input.agentId ?? null, instructions: input.instructions, toolGrants: input.toolGrants, status: "active", createdBy: actor?.name ?? "person" }).returning();
+      await db.insert(skillVersions).values({ skillId: skill.id, version: 1, instructions: input.instructions, toolGrants: input.toolGrants, notes: "created" });
+      await audit(workspaceId, null, "skill.created", skill.name);
+      result = { skillId: skill.id, version: 1 };
+    } else if (action === "importSkill") {
+      const imported = skillImport(z.string().min(10).max(8000).parse(body.markdown));
+      if (!imported) throw new Error("That is not a skill file: the frontmatter needs at least a name and a body.");
+      const slug = slugify(imported.name);
+      const [clash] = await db.select({ id: skills.id }).from(skills).where(and(eq(skills.workspaceId, workspaceId), eq(skills.slug, slug))).limit(1);
+      if (clash) throw new Error(`A skill called "${imported.name}" already exists here.`);
+      const [skill] = await db.insert(skills).values({ workspaceId, name: imported.name, slug, description: imported.description, scope: imported.scope, instructions: imported.instructions, toolGrants: imported.toolGrants, status: "active", createdBy: actor?.name ?? "person" }).returning();
+      await db.insert(skillVersions).values({ skillId: skill.id, version: 1, instructions: imported.instructions, toolGrants: imported.toolGrants, notes: "imported" });
+      result = { skillId: skill.id, version: 1 };
+    } else {
+      const skillId = uuid.parse(body.skillId);
+      const [skill] = await db.select().from(skills).where(and(eq(skills.id, skillId), eq(skills.workspaceId, workspaceId))).limit(1);
+      if (!skill) throw new Error("Skill not found");
+      if (action === "updateSkill") {
+        const input = z.object({ instructions: z.string().trim().min(1).max(4000), toolGrants: z.array(z.string().trim().min(1).max(40)).max(20).default([]), notes: z.string().max(300).default("") }).parse(body);
+        const [{ count: storedCount }] = await db.select({ count: sql<number>`count(*)::int` }).from(skillVersions).where(eq(skillVersions.skillId, skill.id));
+        const version = nextVersion(skill.currentVersion, Number(storedCount));
+        await db.insert(skillVersions).values({ skillId: skill.id, version, instructions: input.instructions, toolGrants: input.toolGrants, notes: input.notes });
+        await db.update(skills).set({ instructions: input.instructions, toolGrants: input.toolGrants, currentVersion: version, updatedAt: new Date() }).where(eq(skills.id, skill.id));
+        await audit(workspaceId, null, "skill.updated", `${skill.name} → v${version}`);
+        result = { version };
+      } else if (action === "rollbackSkill") {
+        const version = z.number().int().min(1).parse(body.version);
+        const [target] = await db.select().from(skillVersions).where(and(eq(skillVersions.skillId, skill.id), eq(skillVersions.version, version))).limit(1);
+        if (!target) throw new Error(`Version ${version} does not exist for this skill.`);
+        // Rollback repoints without rewriting history: an immutable row becomes current again.
+        await db.update(skills).set({ instructions: target.instructions, toolGrants: target.toolGrants, currentVersion: version, updatedAt: new Date() }).where(eq(skills.id, skill.id));
+        await audit(workspaceId, null, "skill.rolled_back", `${skill.name} → v${version}`);
+        result = { version };
+      } else if (action === "exportSkill") {
+        result = { markdown: skillExport({ name: skill.name, description: skill.description, scope: skill.scope, instructions: skill.instructions, toolGrants: skill.toolGrants, version: skill.currentVersion }) };
+      } else if (action === "deleteSkill") {
+        await db.delete(skills).where(and(eq(skills.id, skill.id), eq(skills.workspaceId, workspaceId)));
+        await audit(workspaceId, null, "skill.deleted", skill.name);
+      }
+    }
   } else {
     throw new Error("Unknown action");
   }

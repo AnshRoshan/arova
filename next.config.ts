@@ -8,6 +8,21 @@ const nextConfig: NextConfig = {
   turbopack: { root: path.resolve(__dirname) },
   // The badge sits on top of the index footer where it reads as a broken control.
   devIndicators: { position: "bottom-right" },
+  // Spec 38 — browser-facing defence in depth: no sniffing, no framing, a strict referrer and a
+  // minimal permissions policy. The API already refuses cross-origin writes at the handler.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), clipboard-read=(), clipboard-write=()" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

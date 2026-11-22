@@ -454,3 +454,37 @@ dispatcher through ~40 actions live, which is the behavioural coverage the old r
 **Structural item closed.** Spec 26's extraction is complete: tick/claim (routine-runner), the run
 contract (run-contract), the sandbox console (sandbox-run), chat (chat-runner), briefs
 (brief-runner), the payload (board-payload) and the dispatcher (board-actions).
+
+## 2026-11-22 — the parallel line came home (spec 30–41 port)
+
+This machine had carried an uncommitted feature line (specs 16–27) diverging from c7db7f5. It was
+snapshotted to `backup/local-wip-2026-11-22` (a397d5c), main was fast-forwarded to origin
+09a365e, and **every feature unique to that line was then ported onto the new baseline**:
+
+- **Spec 30 durable work engine**: `jobs` + `worker_heartbeats` tables, `src/lib/jobs.ts` (pure,
+  tested), `src/lib/work-queue.ts` (enqueue + worker liveness), `src/worker/index.ts` (claim via
+  `FOR UPDATE SKIP LOCKED` + lease + lease renewal + retry/backoff/dead-letter + retention sweep),
+  `npm run worker`. Tick enqueues when a worker is live, executes inline when not (origin's
+  always-on behaviour is preserved); Run Now enqueues when live; watches are queue-only.
+- **Spec 31 tool execution plane**: `tool_calls` table + `runTool` wired through `decideToolCall`
+  (redacted args, digest, decision row before execution); MCP client `src/lib/mcp.ts` +
+  `checkMcp`/`runMcpTool` actions + per-seat `mcpServers` url/credential pass-through; credentials
+  vault (AES-256-GCM, `src/lib/credentials.ts`) + vault table; `src/lib/policy.ts` + `limits.ts`.
+  Boundary: MCP calls are person-initiated; the reply loop stays the read-only loop.
+- **Spec 34 org memory v2**: `valid_from`/`valid_to` + pg_trgm similarity, merged with main's
+  NaN-guard and anti-forgery flatten; both test sets kept (temporal validity, trigram boost).
+- **Spec 36 goals/watches/attention**: tables, actions, tick enqueue, worker watch_check with
+  failure ladder; Automations › Goals tab with attention inbox.
+- **Spec 37 skills**: `skills`/`skill_versions`, save/update/rollback/import/export actions +
+  Skills tab; grant intersection is the seat's own.
+- **Spec 40 trust controls**: trigger tokens sha-256 digested + preview (idempotent migration in
+  `deploy/schema-hardening.sql`), security headers in `next.config.ts`.
+- **Spec 39 bootstrap**: `db:check`/`db:start` scripts, `npm run worker`, mock harnesses.
+- UI: queue strip + pause/resume in Automations, Goals tab (goals/watches/attention), Credential
+  vault tab, Skills tab, real MCP discovery UI, trigger token shown once at creation.
+- Docs: specs renumbered 16–27 → 30–41 (mapping header in each), AGENTS.md merged, env template
+  extended, decisions continued from D-46.
+
+Verified: `npm test` **348/348** (284 main + 64 ported), `tsc --noEmit` ✓. Not yet verified at
+record time: production build, live app drive, `drizzle-kit push` against a real database, and a
+real worker run — the honest boundary until executed.

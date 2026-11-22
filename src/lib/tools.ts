@@ -67,7 +67,7 @@ const DELEGATION_IDS = ["consult_teammate", "handoff"];
 export type PermissionMode = "default" | "plan" | "auto";
 export type Effort = "low" | "medium" | "high";
 export type McpTransport = "stdio" | "http";
-export type McpServer = { name: string; transport: McpTransport };
+export type McpServer = { name: string; transport: McpTransport; /** Streamable-HTTP endpoint (spec 31c); stdio servers have none in this process. */ url?: string; /** The credential LABEL in the vault; the secret itself is resolved at call time and never stored here. */ credential?: string };
 export type McpInheritance = "all" | "none" | { named: string[] } | { except: string[] };
 
 export type Capabilities = {
@@ -134,9 +134,9 @@ export function normaliseCapabilities(raw: unknown): Capabilities {
   const temperature = Number.isFinite(Number(params.temperature)) ? Math.max(0, Math.min(2, Number(params.temperature))) : undefined;
   const maxTokens = Number.isFinite(Number(params.maxTokens)) ? Math.max(64, Math.min(4000, Math.trunc(Number(params.maxTokens)))) : undefined;
   const servers: McpServer[] = (Array.isArray(o.mcpServers) ? o.mcpServers : [])
-    .map(s => ({ name: str((s as Record<string, unknown>)?.name).slice(0, 40), transport: str((s as Record<string, unknown>)?.transport) as McpTransport }))
+    .map(s => ({ name: str((s as Record<string, unknown>)?.name).slice(0, 40), transport: str((s as Record<string, unknown>)?.transport) as McpTransport, url: str((s as Record<string, unknown>)?.url).slice(0, 300) || undefined, credential: str((s as Record<string, unknown>)?.credential).slice(0, 80) || undefined }))
     .filter(s => s.name)
-    .map(s => ({ name: s.name, transport: s.transport === "http" ? "http" as const : "stdio" as const }));
+    .map(s => ({ name: s.name, transport: s.transport === "http" ? "http" as const : "stdio" as const, ...(s.url ? { url: s.url } : {}), ...(s.credential ? { credential: s.credential } : {}) }));
   const rawInheritance = o.mcpInheritance;
   const objectForm = rawInheritance && typeof rawInheritance === "object" ? rawInheritance as Record<string, unknown> : null;
   const inheritance: McpInheritance = rawInheritance === "all" || rawInheritance === "none" ? rawInheritance

@@ -21,6 +21,11 @@ export type MemoryRow = {
   supersedes: string | null;
   pinned: boolean;
   rank: number;
+  /** Spec 34 (org memory v2): trigram similarity from the hybrid query, when pg_trgm is live. */
+  similarity?: number;
+  /** Temporal validity — a note that stopped being true, or has not started, is not a candidate. */
+  validFrom?: string | null;
+  validTo?: string | null;
   createdAt: string;
   lastUsedAt: string | null;
   hits: number;
@@ -32,13 +37,22 @@ const PIN_BONUS = 10;
 /** A same-ranked note fades over a quarter; an old note still counts, it just loses to a fresh one. */
 const RECENCY_WINDOW_DAYS = 90;
 const RECENCY_WEIGHT = 0.25;
+/** Spec 34: fuzzy wording matches through trigram similarity, weighted below an exact keyword hit. */
+const SIMILARITY_WEIGHT = 1.5;
 
 export function memoryScore(row: MemoryRow, now: string): number {
   const from = Date.parse(row.createdAt), to = Date.parse(now);
   // An unparseable date would make the score NaN and scramble the sort — read it as fully faded.
   const ageDays = Number.isFinite(from) && Number.isFinite(to) ? Math.max(0, (to - from) / DAY) : RECENCY_WINDOW_DAYS;
   const freshness = Math.max(0, 1 - ageDays / RECENCY_WINDOW_DAYS);
-  return row.rank + (row.pinned ? PIN_BONUS : 0) + freshness * RECENCY_WEIGHT;
+  return row.rank + (row.similarity ?? 0) * SIMILARITY_WEIGHT + (row.pinned ? PIN_BONUS : 0) + freshness * RECENCY_WEIGHT;
+}
+
+/** A note whose validity window has lapsed — or has not opened — is not a candidate at all. */
+function isValidAt(row: MemoryRow, now: string): boolean {
+  if (row.validFrom && new Date(row.validFrom).getTime() > new Date(now).getTime()) return false;
+  if (row.validTo && new Date(row.validTo).getTime() <= new Date(now).getTime()) return false;
+  return true;
 }
 
 /**
@@ -48,7 +62,7 @@ export function memoryScore(row: MemoryRow, now: string): number {
  */
 export function selectMemories(rows: MemoryRow[], opts: { k: number; charBudget: number; now: string }): { chosen: MemoryRow[]; dropped: number; chars: number } {
   const superseded = new Set(rows.map(r => r.supersedes).filter((id): id is string => !!id));
-  const eligible = rows.filter(r => !superseded.has(r.id));
+  const eligible = rows.filter(r => !superseded.has(r.id) && isValidAt(r, opts.now));
   const ordered = [...eligible].sort((a, b) => memoryScore(b, opts.now) - memoryScore(a, opts.now) || (a.id < b.id ? -1 : 1));
   const chosen: MemoryRow[] = [];
   let chars = 0;

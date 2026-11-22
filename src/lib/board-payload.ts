@@ -1,8 +1,10 @@
 import { and, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { agents, approvals, channelDeliveries, channels, connections, delegations, evalResults, evalSuites, evalTasks, events, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, schedulerHeartbeats, teams, triggers, workspaces } from "@/db/schema";
+import { agents, approvals, attentionItems, channelDeliveries, channels, connections, credentials, delegations, evalResults, evalSuites, evalTasks, events, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, schedulerHeartbeats, skillVersions, skills, teams, triggers, watches, workerHeartbeats, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { redactTarget } from "@/lib/channels";
+import { WORKER_STALE_MS, workerIsStale } from "@/lib/jobs";
+import { parseAllowlist } from "@/lib/policy";
 import { buildRegistry, type RegistryStats } from "@/lib/registry";
 import { loadProfiles, modelSelections, type ProviderProfile } from "@/lib/model-gateway";
 import { normaliseCapabilities, unavailableReason } from "@/lib/tools";
@@ -26,7 +28,7 @@ export async function board(workspaceId: string) {
   // loadEarlier action. The completed-runs total is counted in SQL over ALL rows, so windowing the
   // payload never changes a number the board claims.
   const MESSAGE_WINDOW = 200, RUN_WINDOW = 60, STEP_WINDOW = 300, APPROVAL_WINDOW = 60;
-  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, suiteList, researchProjectList, researchSourceList, researchFindingList, runStats, pendingStats, routineStats, totalsRows] = await Promise.all([
+  const [agentList, messagePage, routineList, runList, stepList, approvalList, connectionList, sandboxList, eventList, usage, teamList, memoryList, triggerList, beats, channelList, deliveryList, evalTaskList, evalResultList, evalTotals, suiteList, researchProjectList, researchSourceList, researchFindingList, runStats, pendingStats, routineStats, totalsRows, goalList, watchList, attentionList, credentialList, skillList, versionCounts, jobList, queueBeats] = await Promise.all([
     db.select().from(agents).where(and(eq(agents.workspaceId, workspaceId), isNull(agents.deletedAt))).orderBy(agents.createdAt),
     db.select().from(messages).where(eq(messages.workspaceId, workspaceId)).orderBy(desc(messages.createdAt), desc(messages.id)).limit(MESSAGE_WINDOW + 1),
     db.select().from(routines).where(eq(routines.workspaceId, workspaceId)).orderBy(desc(routines.createdAt)),
@@ -73,6 +75,15 @@ export async function board(workspaceId: string) {
       today: sql<number>`(select count(*)::int from messages where workspace_id = ${workspaceId} and role = 'user' and created_at >= date_trunc('day', now() at time zone 'utc'))`,
       pending: sql<number>`(select count(*)::int from approvals where workspace_id = ${workspaceId} and status = 'PENDING' and detail not like 'Sample approval%')`,
     }).from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1),
+    db.select().from(goals).where(eq(goals.workspaceId, workspaceId)).orderBy(desc(goals.createdAt)),
+    db.select().from(watches).where(eq(watches.workspaceId, workspaceId)).orderBy(desc(watches.createdAt)),
+    db.select().from(attentionItems).where(eq(attentionItems.workspaceId, workspaceId)).orderBy(desc(attentionItems.createdAt)).limit(100),
+    db.select().from(credentials).where(eq(credentials.workspaceId, workspaceId)).orderBy(desc(credentials.createdAt)),
+    db.select().from(skills).where(eq(skills.workspaceId, workspaceId)).orderBy(desc(skills.createdAt)),
+    db.select({ skillId: skillVersions.skillId, count: sql<number>`count(*)::int` }).from(skillVersions)
+      .where(sql`${skillVersions.skillId} in (select id from skills where workspace_id = ${workspaceId})`).groupBy(skillVersions.skillId),
+    db.select().from(jobs).where(eq(jobs.workspaceId, workspaceId)).orderBy(desc(jobs.createdAt)).limit(30),
+    db.select().from(workerHeartbeats).orderBy(desc(workerHeartbeats.lastSeenAt)).limit(1),
   ]);
   const olderMessages = messagePage.length > MESSAGE_WINDOW;
   const messageList = (olderMessages ? messagePage.slice(0, MESSAGE_WINDOW) : messagePage).reverse();
@@ -102,7 +113,10 @@ export async function board(workspaceId: string) {
       pendingApprovals: pendingApprovalsCount,
       messagesToday: messagesTodayCount,
     },
-    agents: agentList.map(a => ({ ...a, capabilities: normaliseCapabilities(a.capabilities) })), messages: messageList, routines: routineList, runs: runList, steps: stepList, approvals: approvalList, connections: connectionList, sandboxes: sandboxList, events: eventList, memories: memoryList, triggers: triggerList,
+    agents: agentList.map(a => ({ ...a, capabilities: normaliseCapabilities(a.capabilities) })), messages: messageList, routines: routineList, runs: runList, steps: stepList, approvals: approvalList, connections: connectionList, sandboxes: sandboxList, events: eventList, memories: memoryList,
+    // `token` is a digest (spec 40): the payload exposes the preview a human can recognise and
+    // never the value a webhook replays.
+    triggers: triggerList.map(t => ({ ...t, tokenPreview: t.tokenPreview || null, token: undefined })),
     // The target is a credential, so the browser gets its host and never its path or query.
     channels: channelList.map(c => ({
       id: c.id, teamId: c.teamId, name: c.name, kind: c.kind, targetHost: redactTarget(c.target), token: c.token,
@@ -172,6 +186,31 @@ export async function board(workspaceId: string) {
     modelSelections: modelSelections(),
     teams: teamList,
     delegations: delegationList,
+    // Spec 36 — goals, the watches that observe for them, and the deduplicated inbox in between.
+    // Evidence rides with every item, so the inbox is a record, not a notification.
+    goals: goalList.map(g => ({ ...g, createdAt: g.createdAt.toISOString(), lastCheckedAt: g.lastCheckedAt?.toISOString() ?? null, nextCheckAt: g.nextCheckAt?.toISOString() ?? null })),
+    watches: watchList.map(w => ({ ...w, createdAt: w.createdAt.toISOString(), lastCheckedAt: w.lastCheckedAt?.toISOString() ?? null, nextCheckAt: w.nextCheckAt?.toISOString() ?? null })),
+    attention: attentionList.map(a => ({ ...a, createdAt: a.createdAt.toISOString(), lastSeenAt: a.lastSeenAt.toISOString(), resolvedAt: a.resolvedAt?.toISOString() ?? null })),
+    // The vault's rows are names only: an envelope never leaves the server, and the count of
+    // credentials is not a list of what they open.
+    credentials: credentialList.map(c => ({ id: c.id, label: c.label, kind: c.kind, createdBy: c.createdBy, lastUsedAt: c.lastUsedAt?.toISOString() ?? null, createdAt: c.createdAt.toISOString() })),
+    skills: skillList.map(s => ({ ...s, versions: Number(versionCounts.find(v => v.skillId === s.id)?.count ?? 0), createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString() })),
+    // Spec 30 — the durable queue as the browser sees it: the newest jobs, and whether a worker
+    // is actually alive right now (same staleness window the tick's fallback decision uses).
+    jobs: jobList.map(j => ({ id: j.id, kind: j.kind, subjectId: j.subjectId, status: j.status, attempts: j.attempts, maxAttempts: j.maxAttempts, runAt: j.runAt.toISOString(), lastError: j.lastError, idempotencyKey: j.idempotencyKey, createdAt: j.createdAt.toISOString(), updatedAt: j.updatedAt.toISOString() })),
+    queue: (() => {
+      const beat = queueBeats[0] ?? null;
+      const stale = workerIsStale(beat?.lastSeenAt ?? null, new Date());
+      return {
+        workerLive: !stale,
+        lastSeenAt: beat?.lastSeenAt?.toISOString() ?? null,
+        pid: beat?.pid ?? null,
+        staleWindowMs: WORKER_STALE_MS,
+        paused: Boolean(workspace.pausedAt),
+        pending: jobList.filter(j => j.status === "QUEUED" || j.status === "RETRYING").length,
+      };
+    })(),
+    toolPolicy: { allowedHosts: parseAllowlist(process.env.TOOL_ALLOWED_HOSTS).length, credentialKeyConfigured: Boolean(process.env.CREDENTIAL_ENCRYPTION_KEY) },
     limits: { dailyModelCalls: dailyCallLimit(), usage, maxDelegations: maxDelegations() },
     // Names only: what the sign-in screen would build itself from, and what a half-configured
     // provider is missing. A secret never appears here — this whole payload goes to the browser.

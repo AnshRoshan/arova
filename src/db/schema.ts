@@ -7,7 +7,10 @@ const created = () => timestamp("created_at", { withTimezone: true }).defaultNow
 export const workspaces = pgTable("workspaces", { id: id(), name: text("name").notNull().default("Personal workspace"), timezone: text("timezone").notNull().default("America/New_York"),
   /** The designated creator ("Godfather"). Null means no tier is in force and any seat may propose
    * an organisation for your confirmation, which is how the demo behaved before Feature 11. */
-  creatorAgentId: uuid("creator_agent_id"), createdAt: created() });
+  creatorAgentId: uuid("creator_agent_id"),
+  /** Spec 30 (durable work engine): set by pauseWork; the job claim joins on it being null, so a
+   * paused workspace's queued jobs wait without anyone having to poll for a flag in the request path. */
+  pausedAt: timestamp("paused_at", { withTimezone: true }), createdAt: created() });
 export const teams = pgTable("teams", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), name: text("name").notNull(), brief: text("brief").notNull().default(""),
   // Plain uuids, not FKs: agents already references teams, and a reference back would be a cycle the
   // push cannot create. Both are cleared in the same transaction that deletes the seat.
@@ -56,14 +59,18 @@ export const delegations = pgTable("delegations", { id: id(), workspaceId: uuid(
  * to the channel posts it stands on. Retrieval is Postgres' own full-text index — this server has no
  * pgvector, so the product says "keyword memory" rather than implying semantic recall.
  */
-export const memories = pgTable("memories", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }), agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }), kind: text("kind").notNull().default("note"), text: text("text").notNull(), sourceIds: jsonb("source_ids").$type<string[]>().notNull().default([]), supersedes: uuid("supersedes").references((): AnyPgColumn => memories.id, { onDelete: "set null" }), pinned: boolean("pinned").notNull().default(false), lastUsedAt: timestamp("last_used_at", { withTimezone: true }), hits: integer("hits").notNull().default(0), createdAt: created() }, t => [index("memories_team_index").on(t.teamId), index("memories_search_index").using("gin", sql`to_tsvector('english', text)`)]);
+export const memories = pgTable("memories", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }), agentId: uuid("agent_id").references(() => agents.id, { onDelete: "set null" }), kind: text("kind").notNull().default("note"), text: text("text").notNull(), sourceIds: jsonb("source_ids").$type<string[]>().notNull().default([]), supersedes: uuid("supersedes").references((): AnyPgColumn => memories.id, { onDelete: "set null" }), pinned: boolean("pinned").notNull().default(false),
+  /** Spec 34 (org memory v2): temporal validity. A note that has not started being true, or has
+   * stopped, is excluded from retrieval rather than outranked — a lapsed fact must not compete. */
+  validFrom: timestamp("valid_from", { withTimezone: true }), validTo: timestamp("valid_to", { withTimezone: true }), lastUsedAt: timestamp("last_used_at", { withTimezone: true }), hits: integer("hits").notNull().default(0), createdAt: created() }, t => [index("memories_team_index").on(t.teamId), index("memories_search_index").using("gin", sql`to_tsvector('english', text)`), index("memories_validity_index").on(t.workspaceId, t.validFrom, t.validTo)]);
 /**
  * A bearer token that lets something outside the app brief one organisation. The token is scoped
  * to a single org. Routines also have an in-process worker; this token is the door for an event
  * that is not a clock. `lastFiredAt` backs the short cooldown that stops one webhook loop spending
- * the whole day's model budget.
+ * the whole day's model budget. The token is stored as a sha-256 digest (spec 40): a leaked
+ * `triggers` row must not hand back a working credential, and `token_preview` is all the UI shows.
  */
-export const triggers = pgTable("triggers", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }), token: text("token").notNull(), label: text("label").notNull().default("trigger"), enabled: boolean("enabled").notNull().default(true), lastFiredAt: timestamp("last_fired_at", { withTimezone: true }), hits: integer("hits").notNull().default(0), createdAt: created() }, t => [uniqueIndex("triggers_token_unique").on(t.token), index("triggers_team_index").on(t.teamId)]);
+export const triggers = pgTable("triggers", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), teamId: uuid("team_id").notNull().references(() => teams.id, { onDelete: "cascade" }), token: text("token").notNull(), tokenPreview: text("token_preview").notNull().default(""), label: text("label").notNull().default("trigger"), enabled: boolean("enabled").notNull().default(true), lastFiredAt: timestamp("last_fired_at", { withTimezone: true }), hits: integer("hits").notNull().default(0), createdAt: created() }, t => [uniqueIndex("triggers_token_unique").on(t.token), index("triggers_team_index").on(t.teamId)]);
 
 /**
  * Proof of life for whatever drives the scheduler. One row per driver ("worker" = the in-process loop
@@ -246,3 +253,48 @@ export const researchFindings = pgTable("research_findings", {
   sourceIds: jsonb("source_ids").$type<string[]>().notNull().default([]),
   createdAt: created(),
 }, t => [index("research_findings_project_index").on(t.projectId, t.createdAt)]);
+
+/**
+ * Spec 30 — the durable work queue. The board tick and Run now only enqueue; a claimable row is
+ * the unit of work. Terminal states are immutable: a retry is a new attempt of the same row, and
+ * `idempotency_key` (unique per workspace) is how a repeated enqueue becomes a no-op instead of a
+ * second brief. Ported from the 2026-11-22 parallel line, where it was live-verified end-to-end.
+ */
+export const jobs = pgTable("jobs", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), kind: text("kind").notNull(), subjectId: uuid("subject_id"), payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}), status: text("status").notNull().default("QUEUED"), attempts: integer("attempts").notNull().default(0), maxAttempts: integer("max_attempts").notNull().default(3), runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(), leaseUntil: timestamp("lease_until", { withTimezone: true }), workerId: text("worker_id"), runId: uuid("run_id"), lastError: text("last_error"), idempotencyKey: text("idempotency_key"), createdBy: text("created_by"), createdAt: created(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow() }, t => [uniqueIndex("jobs_idempotency_unique").on(t.workspaceId, t.idempotencyKey), index("jobs_claim_index").on(t.status, t.runAt), index("jobs_workspace_created_index").on(t.workspaceId, t.createdAt)]);
+
+/** Spec 30b — worker liveness. One row per worker process; the board and health read the newest
+ * `last_seen_at` and call the queue worker stale when it is older than the heartbeat window. */
+export const workerHeartbeats = pgTable("worker_heartbeats", { id: text("id").primaryKey(), pid: integer("pid").notNull(), startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(), lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow() });
+
+/**
+ * Spec 31b — one row per gateway decision, before execution, and its outcome, after. `rule` quotes
+ * the reason; arguments are redacted (src/lib/mcp.ts redactArguments) before they land here, so a
+ * credential can never be quoted. Writes come from the runTool action; the tool loop's own audit
+ * stays on events (spec 21), because a loop step is not a person-initiated tool call.
+ */
+export const toolCalls = pgTable("tool_calls", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), agentId: uuid("agent_id"), tool: text("tool").notNull(), risk: text("risk").notNull(), decision: text("decision").notNull(), rule: text("rule").notNull().default(""), argsDigest: text("args_digest").notNull().default(""), args: jsonb("args").$type<Record<string, unknown>>(), status: text("status").notNull().default("DECIDED"), output: text("output"), error: text("error"), durationMs: integer("duration_ms"), runId: uuid("run_id"), createdAt: created() }, t => [index("tool_calls_workspace_index").on(t.workspaceId, t.createdAt)]);
+
+/**
+ * Spec 31e — sealed credentials. `envelope` is AES-256-GCM (src/lib/credentials.ts); there is no
+ * read endpoint and no route that returns it — adapters receive decrypted values server-side only.
+ */
+export const credentials = pgTable("credentials", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), kind: text("kind").notNull().default("api"), label: text("label").notNull(), envelope: text("envelope").notNull(), createdBy: text("created_by"), lastUsedAt: timestamp("last_used_at", { withTimezone: true }), createdAt: created() }, t => [uniqueIndex("credentials_workspace_label_unique").on(t.workspaceId, t.label)]);
+
+/** Spec 36a — a responsibility an agent checks on a cadence until a human says otherwise. */
+export const goals = pgTable("goals", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), title: text("title").notNull(), description: text("description").notNull().default(""), successCriteria: text("success_criteria").notNull().default(""), cadence: text("cadence").notNull().default("Every day at 8:00 AM"), status: text("status").notNull().default("active"), lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }), nextCheckAt: timestamp("next_check_at", { withTimezone: true }), createdBy: text("created_by").notNull().default("person"), createdAt: created() });
+
+/** Spec 36b — an observation on a source, through the fetch policy (allow-list, no private IPs). A watch never writes outward. */
+export const watches = pgTable("watches", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), goalId: uuid("goal_id").references(() => goals.id, { onDelete: "set null" }), title: text("title").notNull(), url: text("url").notNull(), condition: text("condition").notNull().default("changed"), comparator: text("comparator").notNull().default(""), cadence: text("cadence").notNull().default("Every hour"), lastHash: text("last_hash"), lastObservation: text("last_observation"), enabled: boolean("enabled").notNull().default(true), lastCheckedAt: timestamp("last_checked_at", { withTimezone: true }), nextCheckAt: timestamp("next_check_at", { withTimezone: true }), failStreak: integer("fail_streak").notNull().default(0), lastError: text("last_error"), createdAt: created() }, t => [index("watches_due_index").on(t.enabled, t.nextCheckAt)]);
+
+/** Spec 36c — one deduplicated item per observation, with evidence, never notification spam. */
+export const attentionItems = pgTable("attention_items", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), kind: text("kind").notNull(), severity: text("severity").notNull().default("attention"), title: text("title").notNull(), body: text("body").notNull().default(""), evidence: jsonb("evidence").$type<Record<string, unknown>>().notNull().default({}), dedupeKey: text("dedupe_key").notNull(), status: text("status").notNull().default("open"), lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(), createdAt: created(), resolvedAt: timestamp("resolved_at", { withTimezone: true }) }, t => [uniqueIndex("attention_dedupe_unique").on(t.workspaceId, t.kind, t.dedupeKey), index("attention_open_index").on(t.workspaceId, t.status)]);
+
+/**
+ * Spec 37a — a saved, versioned workflow. Versions are immutable rows; `current_version` points.
+ * Scope: org (everyone), team (one team), seat (one agent). Tools are grants, intersected with the
+ * seat's own at use — a skill can never widen access.
+ */
+export const skills = pgTable("skills", { id: id(), workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }), scope: text("scope").notNull().default("org"), teamId: uuid("team_id").references(() => teams.id, { onDelete: "cascade" }), agentId: uuid("agent_id").references(() => agents.id, { onDelete: "cascade" }), name: text("name").notNull(), slug: text("slug").notNull(), description: text("description").notNull().default(""), status: text("status").notNull().default("draft"), instructions: text("instructions").notNull(), toolGrants: jsonb("tool_grants").$type<string[]>().notNull().default([]), currentVersion: integer("current_version").notNull().default(1), sourceRunId: uuid("source_run_id"), createdBy: text("created_by").notNull().default("person"), createdAt: created(), updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow() }, t => [uniqueIndex("skills_workspace_slug_unique").on(t.workspaceId, t.slug), index("skills_scope_index").on(t.workspaceId, t.status)]);
+
+/** Spec 37a — immutable versions: editing creates N+1; rollback repoints without rewriting history. */
+export const skillVersions = pgTable("skill_versions", { id: id(), skillId: uuid("skill_id").notNull().references(() => skills.id, { onDelete: "cascade" }), version: integer("version").notNull(), instructions: text("instructions").notNull(), toolGrants: jsonb("tool_grants").$type<string[]>().notNull().default([]), notes: text("notes").notNull().default(""), createdAt: created() }, t => [uniqueIndex("skill_versions_unique").on(t.skillId, t.version)]);

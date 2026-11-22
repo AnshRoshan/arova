@@ -33,13 +33,21 @@ type Capabilities = {
   toolLoop: boolean;
   canConsult: string[]; canHandoffTo: string[]; effort: "low" | "medium" | "high";
   maxTurns: number | null; modelParams: { temperature?: number; maxTokens?: number };
-  mcpServers: { name: string; transport: string }[]; mcpInheritance: unknown; skills: string[];
+  mcpServers: { name: string; transport: string; url?: string; credential?: string }[]; mcpInheritance: unknown; skills: string[];
 };
 type Team = { id: string; name: string; brief: string; createdAt: string; leadAgentId: string | null; creatorAgentId: string | null };
 /** What an organisation recorded. Scoped to its team, authored by a seat or by the human. */
 type Memory = { id: string; workspaceId: string; teamId: string; agentId: string | null; kind: "note" | "decision" | "glossary"; text: string; sourceIds: string[]; supersedes: string | null; pinned: boolean; lastUsedAt: string | null; hits: number; createdAt: string };
-/** A bearer token that lets something outside the app brief one organisation. */
-type Trigger = { id: string; teamId: string; token: string; label: string; enabled: boolean; lastFiredAt: string | null; hits: number; createdAt: string };
+/** A bearer token that lets something outside the app brief one organisation. `token` is a digest — only the preview is recognisable. */
+type Trigger = { id: string; teamId: string; token?: string; tokenPreview?: string | null; label: string; enabled: boolean; lastFiredAt: string | null; hits: number; createdAt: string };
+/** Spec 36 — a responsibility checked on a cadence, the watches observing for it, and the deduplicated inbox. */
+type Goal = { id: string; title: string; description: string; successCriteria: string; cadence: string; status: string; lastCheckedAt: string | null; nextCheckAt: string | null; createdBy: string; createdAt: string };
+type Watch = { id: string; goalId: string | null; title: string; url: string; condition: string; comparator: string; cadence: string; lastHash: string | null; lastObservation: string | null; enabled: boolean; lastCheckedAt: string | null; nextCheckAt: string | null; failStreak: number; lastError: string | null; createdAt: string };
+type AttentionItem = { id: string; kind: string; severity: string; title: string; body: string; evidence: Record<string, unknown>; dedupeKey: string; status: string; lastSeenAt: string; createdAt: string; resolvedAt: string | null };
+/** The vault's row as the browser may see it: a label and metadata, never an envelope. */
+type VaultCredential = { id: string; label: string; kind: string; createdBy: string; lastUsedAt: string | null; createdAt: string };
+type Skill = { id: string; scope: string; teamId: string | null; agentId: string | null; name: string; slug: string; description: string; status: string; instructions: string; toolGrants: string[]; currentVersion: number; versions: number; createdBy: string; createdAt: string; updatedAt: string };
+type JobRow = { id: string; kind: string; subjectId: string | null; status: string; attempts: number; maxAttempts: number; runAt: string; lastError: string | null; createdAt: string };
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
 type BoardEvent = { id: string; agentId: string | null; type: string; detail: string; createdAt: string };
@@ -71,6 +79,10 @@ type Board = {
   registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
+  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[];
+  jobs: JobRow[];
+  queue: { workerLive: boolean; lastSeenAt: string | null; pid: number | null; staleWindowMs: number; paused: boolean; pending: number };
+  toolPolicy: { allowedHosts: number; credentialKeyConfigured: boolean };
 };
 type Pane = "overview" | "org" | "scheduler" | "tools" | "settings" | "channel" | "research";
 type Tone = "ran" | "waiting" | "fault" | "idle";
@@ -216,8 +228,8 @@ export default function Workbench() {
   const [agentTab, setAgentTab] = useState<"all" | "active" | "paused">("all");
   const [orgTab, setOrgTab] = useState<"teams" | "bench">("teams");
   const [orgSel, setOrgSel] = useState<string | null>(null);
-  const [autoTab, setAutoTab] = useState<"routines" | "runs" | "always-on" | "evals">("routines");
-  const [toolsTab, setToolsTab] = useState<"connectors" | "local" | "mcp" | "channels" | "sandbox">("connectors");
+  const [autoTab, setAutoTab] = useState<"routines" | "runs" | "always-on" | "evals" | "goals">("routines");
+  const [toolsTab, setToolsTab] = useState<"connectors" | "local" | "mcp" | "channels" | "sandbox" | "vault" | "skills">("connectors");
   const [sandboxAgent, setSandboxAgent] = useState("");
   const [sandboxCommand, setSandboxCommand] = useState("echo arova-sandbox-ok");
   const [sandboxResult, setSandboxResult] = useState<{ ok: boolean; output?: string; error?: string; provider?: string; runId?: string } | null>(null);
@@ -233,6 +245,14 @@ export default function Workbench() {
   const [suiteForm, setSuiteForm] = useState<{ name: string; agentId: string; callCeiling: number; taskIds: string[] }>({ name: "", agentId: "", callCeiling: 10, taskIds: [] });
   const [researchId, setResearchId] = useState<string | null>(null);
   const [researchForm, setResearchForm] = useState({ name: "", question: "", agentId: "", teamId: "" });
+  const [goalForm, setGoalForm] = useState({ title: "", description: "", successCriteria: "", cadence: "Every day at 8:00 AM" });
+  const [watchForm, setWatchForm] = useState({ title: "", url: "", condition: "changed", comparator: "", cadence: "Every hour", goalId: "" });
+  const [watchForGoal, setWatchForGoal] = useState<string | null>(null);
+  const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
+  const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
+  const [mcpCheck, setMcpCheck] = useState<Record<string, { name: string; reachable: boolean; tools: { name: string; description: string; risk: string }[]; error: string | null }[]>>({});
+  const [mcpAgent, setMcpAgent] = useState("");
+  const [mcpResult, setMcpResult] = useState<{ toolCall?: string; decision?: string; rule?: string; output?: string } | null>(null);
   const [registryQuery, setRegistryQuery] = useState("");
   const [activity, setActivity] = useState(false);
   const [draft, setDraft] = useState("");
@@ -250,6 +270,8 @@ export default function Workbench() {
   const [proposals, setProposals] = useState<{ kind: "note" | "decision" | "glossary"; text: string }[]>([]);
   const [triggerOpen, setTriggerOpen] = useState(false);
   const [triggerLabel, setTriggerLabel] = useState("");
+  /** The raw token exists exactly once — at creation (spec 40). Held here so the call line can show it until the panel closes. */
+  const [triggerCreated, setTriggerCreated] = useState<{ id: string; token: string } | null>(null);
   /** The origin is only known in the browser, so the copy line is filled after mount rather than rendered from a guess. */
   const [origin, setOrigin] = useState("");
   useEffect(() => { setOrigin(window.location.origin); }, []);
@@ -260,7 +282,7 @@ export default function Workbench() {
   }, []);
   const [atBottom, setAtBottom] = useState(true);
   const [dialog, setDialog] = useState<null | "agent" | "routine" | "team" | "research" | Run>(null);
-  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox" | "research"; id: string; name: string } | null>(null);
+  const [askDelete, setAskDelete] = useState<{ kind: "routine" | "agent" | "team" | "channel" | "eval" | "suite" | "sandbox" | "research" | "goal" | "watch" | "skill" | "credential"; id: string; name: string } | null>(null);
   const [settingsFor, setSettingsFor] = useState<string | null>(null);
   const [agentForm, setAgentForm] = useState({ name: "", role: "", instructions: "", provider: "auto" });
   const [routineForm, setRoutineForm] = useState({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: "" });
@@ -871,6 +893,8 @@ export default function Workbench() {
           { id: "channels", label: "Channels", note: "delivery + inbound", icon: Webhook, count: data.channels.length },
           { id: "sandbox", label: "Sandbox", note: data.sandbox.provider === "wsl" ? "WSL · no network" : data.sandbox.provider === "local-os" ? "host runtime" : "not configured", icon: Cpu, count: data.sandboxes.length },
           { id: "mcp", label: "MCP servers", note: "configured per seat", icon: Link2, count: mcpCount },
+          { id: "vault", label: "Credential vault", note: data.toolPolicy.credentialKeyConfigured ? "sealed at rest" : "no seal key", icon: ShieldCheck, count: data.credentials.length },
+          { id: "skills", label: "Skills", note: "versioned workflows", icon: BookOpen, count: data.skills.length },
         ] as const).map(item => <button key={item.id} className={`sp-item ${toolsTab === item.id ? "on" : ""}`} aria-current={toolsTab === item.id ? "page" : undefined} onClick={() => { setToolsTab(item.id); setPane("tools"); setRail(false); }}>
           <span className="sp-item-icon"><item.icon size={16} /></span>
           <span className="sp-item-main"><b>{item.label}</b><em>{item.note}</em></span>
@@ -1044,17 +1068,20 @@ export default function Workbench() {
             </div>)}
           </div>}
           {triggerOpen && <div className="memory-panel">
-            <p className="hint">Something outside this app can brief {channel.name} by posting to it. The work runs to completion inside the call and its report lands in this channel.</p>
-            <form className="memory-add" onSubmit={async e => { e.preventDefault(); const label = triggerLabel.trim(); if (label.length < 2 || busy) return; if (await act("createTrigger", { teamId: channel.id, label }, "Trigger created — copy the call line")) setTriggerLabel(""); }}>
+            <p className="hint">Something outside this app can brief {channel.name} by posting to it. The call enqueues a durable job and answers 202 (spec 30); the worker claims it and the report lands in this channel — a crashed server cannot lose the ask.</p>
+            <form className="memory-add" onSubmit={async e => { e.preventDefault(); const label = triggerLabel.trim(); if (label.length < 2 || busy) return; const r = await act("createTrigger", { teamId: channel.id, label }, "Trigger created — copy the call line now; the token is shown once"); if (r?.triggerId && r?.token) setTriggerCreated({ id: String(r.triggerId), token: String(r.token) }); setTriggerLabel(""); }}>
               <input aria-label="Trigger name" value={triggerLabel} maxLength={60} placeholder="Name it (e.g. nightly build report)" onChange={e => setTriggerLabel(e.target.value)} />
               <button className="primary" type="submit" disabled={busy || triggerLabel.trim().length < 2}><Plus size={13} />Create trigger</button>
             </form>
             {!orgTriggers.length && <p className="bench-none">No trigger is wired to this organisation.</p>}
             {orgTriggers.map(t => {
-              const line = `curl -X POST ${origin || "https://this-server"}/api/trigger -H "Authorization: Bearer ${t.token}" -H "content-type: application/json" -d '{"text":"what to work on"}'`;
+              // Spec 38 — the raw token exists only at creation; the board carries a digest and a preview.
+              const fresh = triggerCreated?.id === t.id;
+              const line = `curl -X POST ${origin || "https://this-server"}/api/trigger -H "Authorization: Bearer ${fresh ? triggerCreated!.token : "<token>"}" -H "content-type: application/json" -d '{"text":"what to work on"}'`;
               return <div className="memory-row" key={t.id}>
                 <span className="memory-kind">POST</span>
-                <span className="memory-main"><b className="call-line">{line}</b><em>{t.label} · fired {t.hits} {t.hits === 1 ? "time" : "times"}{t.lastFiredAt ? ` (${ago(t.lastFiredAt)})` : " · never"} · one organisation only · 60s cooldown · the token is the only credential</em></span>
+                <span className="memory-main"><b className="call-line">{line}</b><em>{t.label} · {t.tokenPreview ?? "token sealed"} · fired {t.hits} {t.hits === 1 ? "time" : "times"}{t.lastFiredAt ? ` (${ago(t.lastFiredAt)})` : " · never"} · one organisation only · 60s cooldown · enqueues a durable job, answers 202</em></span>
+                {fresh && <CopyBtn text={triggerCreated!.token} label="Copy token" />}
                 <CopyBtn text={line} label="Copy" />
                 <button className="icon-btn" type="button" title="Revoke this trigger" disabled={busy} onClick={() => void act("revokeTrigger", { triggerId: t.id }, "Trigger revoked")}><Trash2 size={14} /></button>
               </div>;
@@ -1235,7 +1262,68 @@ export default function Workbench() {
 
         {pane === "scheduler" && <div className="pane">
           <div className="pane-head"><div><p>{data.scheduler.headline === "always-on" ? "Your scheduler is live: due routines fire on time, even with nobody in the app." : "Routines fire only while something is watching the clock. Open the 24/7 tab to make it permanent."}</p></div><div className="push" /><button className="primary" onClick={() => { setRoutineForm({ name: "", description: "", schedule: "Every day at 8:00 AM", agentId: agent?.id ?? "" }); setDialog("routine"); }}><Plus size={15} />New routine</button></div>
-          <div className="pane-tabs"><Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "evals", label: "Evals", count: data.evals.tasks.length }, { id: "always-on", label: "24/7 control room" }]} /></div>
+          {/* Spec 30 — the durable queue's public state: what a worker is holding, what is waiting, and the pause switch. */}
+          <div className="block" style={{ marginBottom: 14 }}>
+            <div className="kv"><span>Queue worker</span><span className="push"><span className={`chip ${data.queue.workerLive ? "ran" : data.jobs.some(j => j.status === "QUEUED" || j.status === "RETRYING") ? "waiting" : "idle"}`}><i />{data.queue.workerLive ? "live" : data.queue.lastSeenAt ? "stale — jobs wait" : "not running"}</span>{data.queue.lastSeenAt && <time className="mono" style={{ marginLeft: 8 }}>pid {data.queue.pid ?? "—"} · seen {ago(data.queue.lastSeenAt)} ago</time>}</span></div>
+            <div className="kv"><span>Queued jobs waiting</span><span className="push mono">{data.queue.pending}</span></div>
+            <div className="kv"><span>Workspace queue</span><span className="push">{data.queue.paused
+              ? <button className="ghost" disabled={busy} onClick={() => act("resumeWork", {}, "Queue resumed — jobs continue where they waited")}><Play size={14} />Resume queue</button>
+              : <button className="ghost" disabled={busy} onClick={() => act("pauseWork", {}, "Queue paused — queued jobs wait, nothing new starts")}><Pause size={14} />Pause queue</button>}</span></div>
+            {data.jobs.length ? <details className="reasoning"><summary>recent queue activity · {data.jobs.length}</summary><div className="reasoning-body">{data.jobs.slice(0, 10).map(j => <p key={j.id} className="mono" style={{ margin: "0 0 4px" }}>{stamp(j.createdAt)} · {j.kind} · {j.status.toLowerCase()} · attempt {j.attempts}/{j.maxAttempts}{j.lastError ? ` · ${j.lastError.slice(0, 90)}` : ""}</p>)}</div></details> : null}
+          </div>
+          <div className="pane-tabs"><Tabs value={autoTab} onChange={setAutoTab} items={[{ id: "routines", label: "Routines", count: data.routines.length }, { id: "runs", label: "Runs", count: data.runs.length }, { id: "evals", label: "Evals", count: data.evals.tasks.length }, { id: "goals", label: "Goals", count: data.goals.length }, { id: "always-on", label: "24/7 control room" }]} /></div>
+          {autoTab === "goals" && <div>
+            <h2 className="pane-h2">Attention<span className="mono">{data.attention.filter(a => a.status === "open").length} open</span></h2>
+            <p className="hint">One deduplicated item per observation, with the evidence it stood on — never notification spam. Dismissed things may return as genuinely new events; resolved ones stay resolved.</p>
+            {data.attention.length ? <div className="rows">{data.attention.map(a => <div className="row" key={a.id}>
+              <span className="row-face">{a.severity === "urgent" ? <Zap size={15} /> : <ListChecks size={15} />}</span>
+              <span className="row-main"><strong>{a.title}</strong><span>{a.body}</span><span className="row-when">{a.kind} · seen {ago(a.lastSeenAt)} ago{a.resolvedAt ? ` · resolved ${ago(a.resolvedAt)} ago` : ""}</span></span>
+              <span className="row-side"><span className={`chip ${a.status === "open" ? "waiting" : a.status === "resolved" ? "ran" : "idle"}`}><i />{a.status}</span></span>
+              <span className="row-actions">{["open", "snoozed"].includes(a.status) && <>
+                <button className="ghost" disabled={busy} onClick={() => act("updateAttention", { attentionId: a.id, status: "seen" })}>Seen</button>
+                <button className="ghost" disabled={busy} onClick={() => act("updateAttention", { attentionId: a.id, status: "resolved" }, "Marked resolved")}>Resolve</button>
+                <button className="icon-btn" title="Dismiss" disabled={busy} onClick={() => act("updateAttention", { attentionId: a.id, status: "dismissed" })}><X size={15} /></button>
+              </>}</span>
+            </div>)}</div> : <div className="blank"><h3>Nothing needs you</h3><p>Watches that observe and goals that care will leave one item here each, with the evidence — never one per poll.</p></div>}
+
+            <h2 className="pane-h2">Goals<span className="mono">{data.goals.length}</span></h2>
+            <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="goal-title">Goal</label><input id="goal-title" maxLength={120} placeholder="Keep the release page accurate" value={goalForm.title} onChange={e => setGoalForm({ ...goalForm, title: e.target.value })} /></div>
+              <div className="field"><label htmlFor="goal-desc">What it means</label><textarea id="goal-desc" rows={2} maxLength={2000} value={goalForm.description} onChange={e => setGoalForm({ ...goalForm, description: e.target.value })} /></div>
+              <div className="field"><label htmlFor="goal-crit">How you would know it is being met</label><input id="goal-crit" maxLength={2000} placeholder="The changelog section matches the latest tag" value={goalForm.successCriteria} onChange={e => setGoalForm({ ...goalForm, successCriteria: e.target.value })} /></div>
+              <div className="field"><label htmlFor="goal-cadence">Cadence</label><input id="goal-cadence" maxLength={120} value={goalForm.cadence} onChange={e => setGoalForm({ ...goalForm, cadence: e.target.value })} /><span className="hint">Same schedule vocabulary as routines — “Every day at 8:00 AM”, “Every hour”, “Every week”.</span></div>
+              <button className="primary" disabled={busy || !goalForm.title.trim()} onClick={async () => { if (await act("createGoal", goalForm, "Goal created")) setGoalForm({ title: "", description: "", successCriteria: "", cadence: "Every day at 8:00 AM" }); }}>Save goal</button>
+            </div></div>
+            {data.goals.length ? <div className="rows">{data.goals.map(g => <div className="row" key={g.id}>
+              <span className="row-face"><Compass size={15} /></span>
+              <span className="row-main"><strong>{g.title}</strong><span>{g.description}{g.successCriteria ? ` · knows: ${g.successCriteria}` : ""} · {g.cadence}</span><span className="row-when">{g.status === "active" ? <>next check {g.nextCheckAt ? `${dayLabel(g.nextCheckAt)} ${clock(g.nextCheckAt)}` : "not scheduled"}</> : "paused"}{g.lastCheckedAt ? ` · checked ${ago(g.lastCheckedAt)} ago` : ""} · {data.watches.filter(w => w.goalId === g.id).length} watch(es)</span></span>
+              <span className="row-side"><span className={`chip ${g.status === "active" ? "ran" : "idle"}`}><i />{g.status}</span></span>
+              <span className="row-actions">
+                <button className="ghost" disabled={busy} onClick={() => { setWatchForGoal(g.id); setWatchForm(f => ({ ...f, goalId: g.id })); }}><Plus size={14} />Watch</button>
+                <button className="ghost" disabled={busy} onClick={() => act("toggleGoal", { goalId: g.id }, g.status === "active" ? "Goal paused" : "Goal resumed")}>{g.status === "active" ? <><Pause size={14} />Pause</> : <><Play size={14} />Resume</>}</button>
+                <button className="icon-btn" title="Delete goal" disabled={busy} onClick={() => setAskDelete({ kind: "goal", id: g.id, name: g.title })}><Trash2 size={15} /></button>
+              </span>
+            </div>)}</div> : <div className="blank"><h3>No goals</h3><p>A goal is a responsibility an agent checks on a cadence until you say otherwise. Attach watches to it and the observations land in Attention.</p></div>}
+
+            {(watchForGoal || data.watches.some(w => !w.goalId)) && <h2 className="pane-h2">Watches<span className="mono">{data.watches.length}</span></h2>}
+            {watchForGoal && <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="watch-title">What it watches</label><input id="watch-title" maxLength={120} placeholder="Release page" value={watchForm.title} onChange={e => setWatchForm({ ...watchForm, title: e.target.value })} /></div>
+              <div className="field"><label htmlFor="watch-url">URL</label><input id="watch-url" maxLength={2000} placeholder="https://example.com/releases" value={watchForm.url} onChange={e => setWatchForm({ ...watchForm, url: e.target.value })} /><span className="hint">The fetch policy refuses private and metadata addresses at creation — a watch that could never check is refused once, here.</span></div>
+              <div className="field"><label htmlFor="watch-cond">Condition</label><select id="watch-cond" value={watchForm.condition} onChange={e => setWatchForm({ ...watchForm, condition: e.target.value })}><option value="changed">the page changed</option><option value="contains">page contains…</option><option value="not_contains">page stops containing…</option></select></div>
+              {watchForm.condition !== "changed" && <div className="field"><label htmlFor="watch-comp">Comparator</label><input id="watch-comp" maxLength={400} value={watchForm.comparator} onChange={e => setWatchForm({ ...watchForm, comparator: e.target.value })} /></div>}
+              <div className="field"><label htmlFor="watch-cad">Cadence</label><input id="watch-cad" maxLength={120} value={watchForm.cadence} onChange={e => setWatchForm({ ...watchForm, cadence: e.target.value })} /></div>
+              <button className="primary" disabled={busy || !watchForm.title.trim() || !watchForm.url.trim()} onClick={async () => { if (await act("createWatch", watchForm, "Watch created — first check queued")) { setWatchForm({ title: "", url: "", condition: "changed", comparator: "", cadence: "Every hour", goalId: watchForGoal }); setWatchForGoal(null); } }}>Save watch</button>
+            </div></div>}
+            {data.watches.length ? <div className="rows">{data.watches.map(w => <div className="row" key={w.id}>
+              <span className="row-face"><Globe2 size={15} /></span>
+              <span className="row-main"><strong>{w.title}</strong><span>{w.url.slice(0, 80)} · {w.condition}{w.comparator ? ` “${w.comparator}”` : ""} · {w.cadence} · {data.goals.find(g => g.id === w.goalId)?.title ?? "no goal"}</span><span className="row-when">{w.enabled ? <>next {w.nextCheckAt ? `${dayLabel(w.nextCheckAt)} ${clock(w.nextCheckAt)}` : "not scheduled"}</> : w.failStreak >= 3 ? `paused after ${w.failStreak} failures` : "paused"}{w.lastCheckedAt ? ` · checked ${ago(w.lastCheckedAt)} ago` : ""}{w.lastError ? ` · last error: ${w.lastError.slice(0, 80)}` : ""}</span></span>
+              <span className="row-side"><span className={`chip ${!w.enabled ? "idle" : w.failStreak > 0 ? "fault" : "ran"}`}><i />{!w.enabled ? "paused" : w.failStreak > 0 ? `${w.failStreak} failing` : "watching"}</span></span>
+              <span className="row-actions">
+                <button className="ghost" disabled={busy} onClick={() => act("toggleWatch", { watchId: w.id }, w.enabled ? "Watch paused" : "Watch resumed — failure ladder reset")}>{w.enabled ? <><Pause size={14} />Pause</> : <><Play size={14} />Resume</>}</button>
+                <button className="icon-btn" title="Delete watch" disabled={busy} onClick={() => setAskDelete({ kind: "watch", id: w.id, name: w.title })}><Trash2 size={15} /></button>
+              </span>
+            </div>)}</div> : null}
+          </div>}
           {autoTab === "always-on" && <AlwaysOn info={data.scheduler} origin={origin} routineCount={data.routines.length} enabledCount={data.routines.filter(r => r.enabled).length} onRefresh={() => { void load(); }}
             onPreset={schedule => { setRoutineForm({ name: "", description: "", schedule, agentId: agent?.id ?? data.agents[0]?.id ?? "" }); setDialog("routine"); }} />}
           {autoTab === "evals" && <div>
@@ -1296,7 +1384,7 @@ export default function Workbench() {
             <span className="row-main"><strong>{r.name}</strong><span>{r.description} · {byId(r.agentId)?.name}</span><span className="row-when">{r.enabled ? <>next {r.nextRunAt ? `${dayLabel(r.nextRunAt)} ${clock(r.nextRunAt)}` : "not scheduled"} · {describeSchedule(r.schedule, r.timezone)}{r.failStreak > 0 ? ` · ${r.failStreak} failed in a row` : ""}</> : <>{r.failStreak >= 10 ? `switched off after ${r.failStreak} failures` : "paused"} · {r.schedule}</>}</span></span>
             <span className="row-actions">
               <span className="row-side">{r.lastStatus ? <State status={r.lastStatus} /> : null}</span>
-              <button className="ghost" disabled={busy} onClick={() => act("runRoutine", { routineId: r.id }, "Run finished — see Runs for the result")}><Play size={14} />Run now</button>
+              <button className="ghost" disabled={busy} onClick={async () => { const res = await act("runRoutine", { routineId: r.id }, "Run finished — see Runs for the result"); if (res?.queued) setToast(`Queued as job ${(res.jobId as string).slice(0, 8)} — the worker claims it next; see the queue strip.`); }}><Play size={14} />Run now</button>
               <button className="icon-btn" title={r.enabled ? "Pause" : "Resume"} disabled={busy} onClick={() => act("toggleRoutine", { routineId: r.id })}>{r.enabled ? <Pause size={15} /> : <Play size={15} />}</button>
               <button className="icon-btn" title="Delete" disabled={busy} onClick={() => setAskDelete({ kind: "routine", id: r.id, name: r.name })}><Trash2 size={15} /></button>
             </span>
@@ -1316,8 +1404,8 @@ export default function Workbench() {
 
         {pane === "tools" && <div className="pane">
           <div className="pane-head"><div>
-            <h1>{toolsTab === "connectors" ? "Connectors" : toolsTab === "local" ? "Local tools" : toolsTab === "channels" ? "Channels" : toolsTab === "sandbox" ? (data.sandbox.provider === "wsl" ? "WSL sandbox" : "Local OS sandbox") : "MCP servers"}</h1>
-            <p>{toolsTab === "connectors" ? "OAuth apps an agent could use. Nothing is authorised on this server, so every card says so." : toolsTab === "local" ? "Tools that run in this process right now — no credential and no sandbox." : toolsTab === "channels" ? "Where a finished run or a pending approval is posted, and how outside work comes in." : toolsTab === "sandbox" ? "An opt-in shell with a filesystem allowlist and no network by default." : "MCP servers are stored per seat. No transport is wired, so none can connect."}</p>
+            <h1>{toolsTab === "connectors" ? "Connectors" : toolsTab === "local" ? "Local tools" : toolsTab === "channels" ? "Channels" : toolsTab === "sandbox" ? (data.sandbox.provider === "wsl" ? "WSL sandbox" : "Local OS sandbox") : toolsTab === "vault" ? "Credential vault" : toolsTab === "skills" ? "Skills" : "MCP servers"}</h1>
+            <p>{toolsTab === "connectors" ? "OAuth apps an agent could use. Nothing is authorised on this server, so every card says so." : toolsTab === "local" ? "Tools that run in this process right now — no credential and no sandbox." : toolsTab === "channels" ? "Where a finished run or a pending approval is posted, and how outside work comes in." : toolsTab === "sandbox" ? "An opt-in shell with a filesystem allowlist and no network by default." : toolsTab === "vault" ? "Secrets sealed with AES-256-GCM before they touch PostgreSQL. A row is a label; the value inside never comes back out." : toolsTab === "skills" ? "Saved, versioned workflows. A skill's tool grants are intersected with the seat's own at use — a skill can never widen access." : "MCP servers are configured per seat. Discovery classifies every tool the server exposes; an unannotated tool counts as a write."}</p>
           </div></div>
           {toolsTab === "connectors" && <p className="pane-note">None of these can connect: this server has no OAuth client. Each card states the operation it would perform.</p>}
           <div className={`connector-grid ${toolsTab !== "connectors" ? "is-hidden" : ""}`}>{toolCatalog.map(t => <article className="connector-card" key={t.slug}>
@@ -1411,11 +1499,61 @@ export default function Workbench() {
             </div>)}</div> : <div className="blank"><h3>No deliveries recorded</h3><p>Test a channel or finish a run; each attempt becomes a row here.</p></div>}
           </div>
           <div className={toolsTab === "mcp" ? "tool-surface" : "is-hidden"}>
-          {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
-            <span className="row-face"><Settings2 size={15} /></span>
-            <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}</span></span>
-            <span className="row-side"><span className="chip idle"><i />no transport</span></span>
-          </div>))}</div> : <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities. It is stored and shown, and nothing connects until a transport exists.</p></div>}</div>
+            {data.agents.length ? <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="mcp-agent">Seat</label><select id="mcp-agent" value={mcpAgent || data.agents[0]?.id || ""} onChange={e => { setMcpAgent(e.target.value); setMcpCheck({}); setMcpResult(null); }}>{data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}</select></div>
+              <p className="hint">Discovery runs against every http server configured on this seat (Agent › Capabilities › MCP servers) and reports what it actually exposes, with the risk class each server declared.</p>
+              <button className="primary" disabled={busy || !data.agents.some(a => a.capabilities.mcpServers?.length)} onClick={async () => { const r = await act("checkMcp", { agentId: mcpAgent || data.agents[0]?.id }); if (r) setMcpCheck(r.servers ?? {}); }}>Discover tools</button>
+            </div></div> : null}
+            {(() => { const checks = mcpCheck.servers ?? []; return checks.length ? <div className="rows">{checks.map(c => <div className="row" key={c.name}>
+              <span className="row-face"><Link2 size={15} /></span>
+              <span className="row-main"><strong>{c.name}</strong><span>{c.tools.length} tool(s) exposed</span><span className="row-when">{c.tools.map(t => `${t.name.replace(/^mcp:[^:]+:/, "")} (${t.risk.toLowerCase()})`).join(" · ")}</span></span>
+              <span className="row-side"><span className={`chip ${c.reachable ? "ran" : "fault"}`}><i />{c.reachable ? "reachable" : "unreachable"}</span></span>
+            </div>)}{!checks.some(c => c.reachable) && <div className="blank"><h3>None reachable</h3><p>{checks.map(c => c.error ?? "unreachable").join(" · ") || "No http server is configured on this seat."}</p></div>}</div> : null; })()}
+            {mcpCount ? <div className="rows">{data.agents.flatMap(a => (a.capabilities.mcpServers ?? []).map((srv, i) => <div className="row" key={`${a.id}-${i}`}>
+              <span className="row-face"><Settings2 size={15} /></span>
+              <span className="row-main"><strong>{srv.name || "unnamed"}</strong><span>{a.name} · {srv.transport}{srv.url ? ` · ${srv.url}` : ""}{srv.credential ? ` · vault: ${srv.credential}` : ""}</span></span>
+              <span className="row-side"><span className={`chip ${srv.transport === "http" ? "waiting" : "idle"}`}><i />{srv.transport === "http" ? "http · callable" : "no transport"}</span></span>
+            </div>))}</div> : !mcpCheck.servers && <div className="blank"><h3>No server configured</h3><p>Add one in Agent › Capabilities with a streamable-http URL. Discovery classifies each tool the server exposes; an unannotated tool counts as a write and asks first.</p></div>}
+            {mcpResult && <div className="code"><div className="code-bar"><span className="code-lang">tool result · {mcpResult.decision ?? "—"}</span></div><pre><code>{mcpResult.output ?? mcpResult.rule ?? ""}</code></pre></div>}
+          </div>
+
+          <div className={toolsTab === "vault" ? "tool-surface" : "is-hidden"}>
+            {!data.toolPolicy.credentialKeyConfigured && <p className="pane-note">CREDENTIAL_ENCRYPTION_KEY is not set on this server, so nothing can be stored yet — the vault refuses to write plaintext secrets. Generate one with <code>openssl rand -hex 32</code>.</p>}
+            <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="cred-label">Label</label><input id="cred-label" maxLength={80} placeholder="github-pat · slack-bot · openrouter" value={credForm.label} onChange={e => setCredForm({ ...credForm, label: e.target.value })} /><span className="hint">Re-saving a label rotates the secret in place; MCP servers point at this label, never at the value.</span></div>
+              <div className="field"><label htmlFor="cred-kind">Kind</label><select id="cred-kind" value={credForm.kind} onChange={e => setCredForm({ ...credForm, kind: e.target.value })}><option value="api">api</option><option value="bearer">bearer</option><option value="basic">basic</option></select></div>
+              <div className="field"><label htmlFor="cred-secret">Secret</label><input id="cred-secret" type="password" maxLength={4000} value={credForm.secret} onChange={e => setCredForm({ ...credForm, secret: e.target.value })} /><span className="hint">Sealed with AES-256-GCM before it is stored. There is no read endpoint — a saved value never comes back out.</span></div>
+              <button className="primary" disabled={busy || !credForm.label.trim() || !credForm.secret.trim()} onClick={async () => { if (await act("saveCredential", credForm, `Credential “${credForm.label}” sealed`)) setCredForm({ label: "", kind: "api", secret: "" }); }}>Seal credential</button>
+            </div></div>
+            <h2 className="pane-h2">Stored<span className="mono">{data.credentials.length}</span></h2>
+            {data.credentials.length ? <div className="rows">{data.credentials.map(c => <div className="row" key={c.id}>
+              <span className="row-face"><ShieldCheck size={15} /></span>
+              <span className="row-main"><strong>{c.label}</strong><span>{c.kind} · saved by {c.createdBy}{c.lastUsedAt ? ` · last used ${ago(c.lastUsedAt)} ago` : " · never used"}</span></span>
+              <span className="row-side"><span className="chip ran"><i />sealed</span></span>
+              <span className="row-actions"><button className="icon-btn" title="Delete credential" disabled={busy} onClick={() => setAskDelete({ kind: "credential", id: c.label, name: c.label })}><Trash2 size={15} /></button></span>
+            </div>)}</div> : <div className="blank"><h3>The vault is empty</h3><p>Save a secret above and point an MCP server's credential field at its label. The value is resolved at call time, server-side only.</p></div>}
+          </div>
+
+          <div className={toolsTab === "skills" ? "tool-surface" : "is-hidden"}>
+            <div className="stack"><div className="block">
+              <div className="field"><label htmlFor="skill-name">Name</label><input id="skill-name" maxLength={120} placeholder="Weekly release note" value={skillForm.name} onChange={e => setSkillForm({ ...skillForm, name: e.target.value })} /></div>
+              <div className="field"><label htmlFor="skill-desc">Description</label><input id="skill-desc" maxLength={300} placeholder="How this org writes its release notes" value={skillForm.description} onChange={e => setSkillForm({ ...skillForm, description: e.target.value })} /></div>
+              <div className="field"><label htmlFor="skill-instr">Instructions</label><textarea id="skill-instr" rows={5} maxLength={4000} placeholder="A record of how to work — data the seat weighs, never authority beyond its own grants." value={skillForm.instructions} onChange={e => setSkillForm({ ...skillForm, instructions: e.target.value })} /></div>
+              <div className="field"><label htmlFor="skill-tools">Tool grants<span className="mono">comma-separated</span></label><input id="skill-tools" maxLength={400} placeholder="web_fetch, calc" value={skillForm.toolGrants} onChange={e => setSkillForm({ ...skillForm, toolGrants: e.target.value })} /><span className="hint">Effective grants are skill ∩ seat — a tool the seat does not hold stays unusable.</span></div>
+              <button className="primary" disabled={busy || !skillForm.name.trim() || !skillForm.instructions.trim()} onClick={async () => { if (await act("saveSkill", { ...skillForm, toolGrants: skillForm.toolGrants.split(",").map(t => t.trim()).filter(Boolean) }, "Skill saved as v1")) setSkillForm({ name: "", description: "", instructions: "", toolGrants: "" }); }}>Save skill</button>
+            </div></div>
+            <h2 className="pane-h2">Saved skills<span className="mono">{data.skills.length}</span></h2>
+            {data.skills.length ? <div className="rows">{data.skills.map(s => <div className="row" key={s.id}>
+              <span className="row-face"><BookOpen size={15} /></span>
+              <span className="row-main"><strong>{s.name}</strong><span>{s.scope} · v{s.currentVersion} · {s.versions} version(s) · grants: {s.toolGrants.join(", ") || "none"}</span><span className="row-when">{s.description || s.instructions.slice(0, 120)}</span></span>
+              <span className="row-side"><span className={`chip ${s.status === "active" ? "ran" : "idle"}`}><i />{s.status}</span></span>
+              <span className="row-actions">
+                <button className="ghost" disabled={busy} onClick={async () => { const r = await act("updateSkill", { skillId: s.id, instructions: s.instructions, toolGrants: s.toolGrants, notes: "edited from the board" }, `Skill re-versioned`); const v = r?.version as number | undefined; if (v) setToast(`Skill is now v${v}; history is immutable.`); }}><Pencil size={14} />Edit</button>
+                <button className="ghost" disabled={busy} onClick={async () => { const r = await act("exportSkill", { skillId: s.id }); if (r?.markdown) { try { await navigator.clipboard.writeText(String(r.markdown)); setToast("Markdown + frontmatter copied"); } catch { setToast("Copy failed"); } } }}><Copy size={14} />Export</button>
+                <button className="icon-btn" title="Delete skill" disabled={busy} onClick={() => setAskDelete({ kind: "skill", id: s.id, name: s.name })}><Trash2 size={15} /></button>
+              </span>
+            </div>)}</div> : <div className="blank"><h3>No skills yet</h3><p>A skill is a portable record: instructions plus tool grants, versioned on every edit, importable from Markdown with frontmatter.</p></div>}
+          </div>
         </div>}
 
         {pane === "research" && <ResearchPane
@@ -1660,7 +1798,7 @@ export default function Workbench() {
         <p className="dialog-summary" style={{ marginBottom: 0 }}>{askDelete.kind === 'team' ? 'The organisation and its reporting lines are removed, and every post in its channel goes with it — that record cannot be recovered. The seats stay, moved to the bench with their own threads intact.' : askDelete.kind === 'routine' ? 'The schedule and its recorded runs stay in the audit; the routine stops firing.' : askDelete.kind === 'channel' ? 'The channel and its delivery history are removed. Outbound posts stop and the inbound token stops working.' : askDelete.kind === 'eval' ? 'The task and its measured results are removed. The runs it created stay in the audit.' : askDelete.kind === 'suite' ? 'The suite and its stored counts are removed. The eval results it already measured stay.' : askDelete.kind === 'research' ? 'The project, every source and every finding in it are removed. Nothing outside this workspace is touched.' : askDelete.kind === 'sandbox' ? 'The per-agent sandbox workspace is deleted; its runs and audit rows stay. The next command starts from an empty workspace.' : 'The seat, their thread, and their stored instructions are removed from the board.'}</p>
         <div className="dialog-actions">
           <button className="ghost" onClick={() => setAskDelete(null)}>Keep it</button>
-          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'research') await act('deleteResearchProject', { projectId: target.id }, 'Project deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
+          <button className="primary solid-fault" disabled={busy} onClick={async () => { const target = askDelete; setAskDelete(null); if (target.kind === 'team') await act('deleteTeam', { teamId: target.id }, 'Team deleted'); else if (target.kind === 'routine') await act('deleteRoutine', { routineId: target.id }, 'Routine deleted'); else if (target.kind === 'channel') await act('deleteChannel', { channelId: target.id }, 'Channel deleted'); else if (target.kind === 'eval') await act('deleteEvalTask', { taskId: target.id }, 'Eval task deleted'); else if (target.kind === 'suite') await act('deleteSuite', { suiteId: target.id }, 'Suite deleted'); else if (target.kind === 'research') await act('deleteResearchProject', { projectId: target.id }, 'Project deleted'); else if (target.kind === 'sandbox') await act('resetSandbox', { agentId: target.id }, 'Sandbox workspace reset'); else if (target.kind === 'goal') await act('deleteGoal', { goalId: target.id }, 'Goal deleted'); else if (target.kind === 'watch') await act('deleteWatch', { watchId: target.id }, 'Watch deleted'); else if (target.kind === 'skill') await act('deleteSkill', { skillId: target.id }, 'Skill deleted'); else if (target.kind === 'credential') await act('deleteCredential', { label: target.id }, 'Credential deleted'); else { if (await act('deleteAgent', { agentId: target.id }, 'Agent deleted')) { setSettingsFor(null); if (agentId === target.id) setAgentId(null); } } }}>Delete</button>
         </div>
       </div>
     </div>}

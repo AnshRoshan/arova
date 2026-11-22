@@ -520,3 +520,25 @@ identity/state hues because a rail mark is never a status dot. No stored-row sem
 (`.impeccable/shots/redesign-after-*.png`) show the hairline connector list, single-row tabs, neutral
 rail, distinct seat tiles and the composer-anchored thread. DESIGN.md frontmatter and layout prose
 re-synced to the built values in the same pass.
+
+## 2026-11-22 — reconciliation decisions (continuing the parallel line's log)
+
+- **D-46 — Two lines, one repo.** The machine-local line (specs 16–27) and main's line (specs
+  16–29) were parallel products of the same base, not drafts of each other. Local work was
+  snapshotted to `backup/local-wip-2026-11-22` and main fast-forwarded; nothing was discarded.
+- **D-47 — Spec numbers 30–41.** The ported line renumbers 16–27 → 30–41 to continue main's
+  numbering. Same numbers as main's 16–29 must never be merged by number again.
+- **D-48 — Queue as the execution plane, tick as the fallback.** When a durable-queue worker is
+  live, claimed occurrences enqueue (occurrence-keyed) and the worker owns leases/retry. When no
+  worker is live, the tick executes inline exactly as before, so origin's always-on guarantee
+  never depends on the optional second process. Watches are queue-only and wait honestly.
+- **D-49 — History rewritten to one identity.** All 46 commits now carry
+  ❖Mʀ᭄Anshᴿᵒˢʰᵃⁿ࿐ <ianshroshan@gmail.com> (author + committer) and a valid GPG signature from
+  09E4C18BD838D4A2; trees and author dates are unchanged (final tree hash 678b8b2…, verified).
+  The pre-rewrite chain is kept at `pre-rewrite-20261122`. Pushing requires a force-update and
+  remains a separate, explicit decision.
+- **D-50 — MCP is person-initiated.** Discovery and calls run through board actions and the
+  policy gateway with audit rows; the reply loop stays the read-only loop until an approval flow
+  exists for model-driven MCP writes.
+- **D-51 — Trigger tokens are digests.** Stored and compared as sha-256; raw value shown once at
+  creation; idempotent SQL migration for existing rows in `deploy/schema-hardening.sql`.
