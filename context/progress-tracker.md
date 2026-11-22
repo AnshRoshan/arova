@@ -558,3 +558,8 @@ Also verified live this pass: `draftSkillFromRun` on a real run (draft v1, sourc
 in a prompt) → `activateSkill`; expired-approval refusal (`decideApproval` → "This approval
 expired — stale requests do not decide"). `npm test` **351/351** (MCP executor tests added),
 `tsc --noEmit` ✓, production build ✓.
+
+
+### 2026-11-23 — market research + gap audit (specs 42–52 proposed)
+
+Personal pass (no subagents): restored the seven market deep-dive docs from the backup branch to main; fresh research (Nov-2026 agent landscape, reliability ops, memory platforms, observability, self-host platforms); audited the tree line-by-line for each suspected gap (multimodal, files, fake connectors tab, digest, eval trends/CI, cost, governance roles, memory capture, edit/branch, adapters, import, voice, traces). Produced `context/market-gaps-2026-11-23.md`: 14 code-verified gaps → 11 new specs (42–52) with problem/scope/acceptance, priority order, deliberate non-goals re-confirmed. Restored docs were committed with the audit.

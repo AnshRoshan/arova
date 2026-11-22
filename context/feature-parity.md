@@ -272,6 +272,8 @@ infrastructure decision the owner has not made.** This is not a wish list.
 
 ### 8.2 Next, in order
 
+> **Superseded 2026-11-23** by the fresh audit: `context/market-gaps-2026-11-23.md` — its items 1 (native adapters → Slack shipped), 3 (search shipped), and 4 (suites shipped) are closed; the re-ranked backlog lives there as specs 42–52.
+
 1. **Native channel adapters**: Slack Events API / Teams / Telegram / email, with per-adapter
    verification and a delivery retry policy. The generic webhook is the contract; adapters are
    formatting and auth.
