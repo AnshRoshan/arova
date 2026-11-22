@@ -9,6 +9,7 @@
     "test": "node --test \"src/lib/*.test.ts\"",
     "typecheck": "tsc --noEmit",
     "worker": "node --import ./scripts/worker-hooks.mjs src/worker/index.ts",
+    "evals": "node --import ./scripts/worker-hooks.mjs scripts/eval-gate.ts",
     "db:check": "node scripts/db-check.ts",
     "db:start": "node scripts/db-start.cjs",
     "mock-model": "node scripts/mock-model.cjs",

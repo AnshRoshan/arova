@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { NextRequest } from "next/server";
 import { db } from "@/db";
-import { agents, approvals, attentionItems, channelConnections, channels, credentials, digests, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, skillVersions, skills, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
+import { agents, approvals, attentionItems, channelConnections, channels, credentials, digests, evalSuites, evalTasks, goals, jobs, memories, messages, researchFindings, researchProjects, researchSources, routines, runSteps, runs, sandboxes, skillVersions, skills, suiteRuns, teams, toolCalls, triggers, watches, workspaces } from "@/db/schema";
 import { sandboxProvider } from "@/lib/sandbox";
 import { deliverToChannel, isChannelKind, newChannelToken, redactTarget, validateChannelTarget, type ChannelEvent } from "@/lib/channels";
 import { completionText, ensureServedModel, estimateTokens, loadProfiles, requestCompletion, resolveForAgent, usageFromJson } from "@/lib/model-gateway";
@@ -354,6 +354,9 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
       status = outcome.status;
     }
     const [updated] = await db.update(evalSuites).set({ ...counts, status, startedAt, finishedAt: new Date() }).where(eq(evalSuites.id, suite.id)).returning();
+    // Spec 45 — every suite run is a history row: the trend, the revision rate and the CI gate read
+    // this sequence, not the suite's latest-counts row.
+    await db.insert(suiteRuns).values({ workspaceId, suiteId: suite.id, status, ...counts, startedAt, finishedAt: new Date(), trigger: "person" });
     await audit(workspaceId, agent.id, "suite.ran", `${suite.name}: ${status}, ${counts.modelCalls} call(s)`);
     result = {
       suite: {
@@ -981,6 +984,22 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
       await audit(workspaceId, run.agentId, "skill.drafted", `${skill.name} (draft, under review)`);
       result = { skillId: skill.id, version: 1, draft: true };
     }
+  } else if (action === "promoteRunToEval") {
+    // Spec 45 — promote an incident into the suite: the failed run's own prompt becomes an eval
+    // task; the person supplies the expected fragment (what a correct answer must contain), so the
+    // suite tests the failure honestly instead of encoding a guess.
+    const input = z.object({ runId: uuid, expected: z.string().trim().min(2).max(500) }).parse(body);
+    const [run] = await db.select().from(runs).where(and(eq(runs.id, input.runId), eq(runs.workspaceId, workspaceId))).limit(1);
+    if (!run) throw new Error("Run not found");
+    const [origin] = await db.select({ content: messages.content }).from(messages)
+      .where(and(eq(messages.workspaceId, workspaceId), sql`${messages.metadata}->>'runId' = ${run.id}`, eq(messages.role, "user")))
+      .orderBy(desc(messages.createdAt)).limit(1);
+    const prompt = (origin?.content ?? run.summary).slice(0, 4000);
+    if (!prompt.trim()) throw new Error("This run recorded no prompt to replay, and its summary is empty.");
+    const name = `Regression · ${run.title}`.slice(0, 80);
+    const [task] = await db.insert(evalTasks).values({ workspaceId, agentId: run.agentId, name, prompt, expected: input.expected }).returning();
+    await audit(workspaceId, run.agentId, "eval.promoted", `${name} from a failed run`);
+    result = { taskId: task.id };
   } else if (action === "activateSkill" || action === "pauseSkill") {
     // Spec 41 — the human confirmation step: a draft never reaches a prompt until a person says so.
     const skillId = uuid.parse(body.skillId);

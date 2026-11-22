@@ -50,6 +50,7 @@ type Skill = { id: string; scope: string; teamId: string | null; agentId: string
 type SlackConnection = { id: string; kind: string; name: string; externalId: string; allowedSenders: string[]; teamId: string | null; enabled: boolean; lastEventAt: string | null; createdAt: string };
 type JobRow = { id: string; kind: string; subjectId: string | null; status: string; attempts: number; maxAttempts: number; runAt: string; lastError: string | null; createdAt: string };
 type DigestRow = { id: string; cadence: string; channelId: string | null; enabled: boolean; lastSentAt: string | null; nextSendAt: string | null };
+type SuiteRun = { id: string; suiteId: string; status: string; passed: number; failed: number; skipped: number; errored: number; modelCalls: number; trigger: string; startedAt: string; finishedAt: string | null };
 type Seat = { name: string; role: string; instructions: string; reportsTo: string | null };
 type Delegation = { id: string; messageId: string | null; fromAgentId: string; toAgentId: string; question: string; answer: string; model: string; inputTokens: number; outputTokens: number; createdAt: string };
 type BoardEvent = { id: string; agentId: string | null; type: string; detail: string; createdAt: string };
@@ -81,7 +82,7 @@ type Board = {
   registry: RegistryRow[];
   limits: { dailyModelCalls: number; usage: Usage[]; maxDelegations: number };
   scheduler: SchedulerInfo;
-  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[]; slackConnections: SlackConnection[]; digest: DigestRow[];
+  goals: Goal[]; watches: Watch[]; attention: AttentionItem[]; credentials: VaultCredential[]; skills: Skill[]; slackConnections: SlackConnection[]; digest: DigestRow[]; suiteRuns: SuiteRun[];
   jobs: JobRow[];
   queue: { workerLive: boolean; lastSeenAt: string | null; pid: number | null; staleWindowMs: number; paused: boolean; pending: number };
   toolPolicy: { allowedHosts: number; credentialKeyConfigured: boolean };
@@ -244,6 +245,7 @@ export default function Workbench() {
   const [watchForm, setWatchForm] = useState({ title: "", url: "", condition: "changed", comparator: "", cadence: "Every hour", goalId: "" });
   const [watchForGoal, setWatchForGoal] = useState<string | null>(null);
   const [digestForm, setDigestForm] = useState({ cadence: "Every weekday at 8:00 AM", channelId: "" });
+  const [promoteExpected, setPromoteExpected] = useState("");
   const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
   const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
   const [mcpCheck, setMcpCheck] = useState<Record<string, { name: string; reachable: boolean; tools: { name: string; description: string; risk: string }[]; error: string | null }[]>>({});
@@ -1364,6 +1366,19 @@ export default function Workbench() {
                 <button className="icon-btn" title="Delete suite" disabled={busy} onClick={() => setAskDelete({ kind: "suite", id: s.id, name: s.name })}><Trash2 size={15} /></button>
               </span>
             </div>)}</div> : <div className="blank"><h3>No suites yet</h3><p>Name a set of tasks and a call ceiling. Running it stores its own counts; no percentage appears until a task is scored.</p></div>}
+            <h2 className="pane-h2">History &amp; trend<span className="mono">spec 45 · {data.suiteRuns.length} run(s)</span></h2>
+            {data.suiteRuns.length ? <div className="rows">{data.evals.suites.map(s => {
+              const runs = data.suiteRuns.filter(h => h.suiteId === s.id).slice(0, 8);
+              const scored = runs.map(h => (h.passed + h.failed) ? h.passed / (h.passed + h.failed) : null).filter(p => p !== null);
+              const revisions = runs.slice(0, -1).filter((h, i) => (h.passed + h.failed) && h.passed / (h.passed + h.failed) < 1).length;
+              if (!runs.length) return null;
+              return <div className="row" key={s.id}>
+                <span className="row-face"><Gauge size={15} /></span>
+                <span className="row-main"><strong>{s.name}</strong><span>{runs.map(h => <span key={h.id} className={`chip ${(h.passed + h.failed) ? (h.passed / (h.passed + h.failed) >= 0.9 ? "ran" : "fault") : "idle"}`} style={{ marginRight: 4 }}><i />{h.passed}/{h.passed + h.failed}</span>)}<span className="mono">{runs[0].trigger}</span></span><span className="row-when">{scored.length ? `latest scored pass rate ${Math.round(scored[0] * 100)}% · ${revisions} re-run(s) after a failure` : "no scored runs yet"}</span></span>
+                <span className="row-side"><span className="mono">{stamp(runs[0].startedAt)}</span></span>
+              </div>;
+            })}</div> : <div className="blank"><h3>No suite history yet</h3><p>Run a suite; every run is a stored point, and `npm run evals` gates CI on the same sequence.</p></div>}
+            <p className="hint">The regression gate: <span className="mono">npm run evals -- --suite "Name"</span> exits non-zero below EVAL_GATE_MIN_PASS (default 90%) and records its own history row, so CI reads the same sequence the board shows.</p>
             <h2 className="pane-h2">New task<span className="mono">agent + prompt + expected fragment</span></h2>
             <div className="stack"><div className="block">
               <div className="field"><label htmlFor="ev-name">Task name</label><input id="ev-name" maxLength={80} placeholder="Reports the current time for Berlin" value={evalForm.name} onChange={e => setEvalForm({ ...evalForm, name: e.target.value })} /></div>
@@ -1849,6 +1864,10 @@ export default function Workbench() {
         <p className="dialog-summary">{dialog.summary}</p>
         <div className="rows">{data.steps.filter(s => s.runId === dialog.id).map(s => <div className="row" key={s.id}><span className="row-face"><Check size={14} /></span><span className="row-main"><strong>{s.title}</strong><span>{s.detail}</span></span><span className="row-side"><time className="mono">{clock(s.createdAt)}</time></span></div>)}{!data.steps.some(s => s.runId === dialog.id) && <div className="row"><span className="row-main"><span>No steps recorded.</span></span></div>}</div>
         {data.steps.some(s => s.runId === dialog.id) && <div className="dialog-actions"><button className="ghost" disabled={busy} onClick={async () => { if (await act("draftSkillFromRun", { runId: dialog.id }, "Skill drafted from this run — review it in Integrations › Skills")) setDialog(null); }}><BookOpen size={14} />Draft skill from this run</button></div>}
+        {["FAILED", "TIMED_OUT"].includes(dialog.status) && <div className="dialog-actions" style={{ width: "100%", flexDirection: "column", alignItems: "stretch" }}>
+          <div className="field"><label htmlFor="promote-expected">Promote this failure into the suite — the answer must never contain</label><input id="promote-expected" maxLength={500} placeholder="the fragment that would prove this was wrong" value={promoteExpected} onChange={e => setPromoteExpected(e.target.value)} /></div>
+          <button className="ghost" disabled={busy || promoteExpected.trim().length < 2} onClick={async () => { if (await act("promoteRunToEval", { runId: dialog.id, expected: promoteExpected.trim() }, "Promoted — it is in this seat's eval tasks now")) { setPromoteExpected(""); setDialog(null); setPane("scheduler"); setAutoTab("evals"); } }}><Gauge size={14} />Promote to eval task</button>
+        </div>}
         {!["COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"].includes(dialog.status) && <div className="dialog-actions"><button className="ghost" disabled={busy} onClick={async () => { if (await act("cancelRun", { runId: dialog.id }, "Run cancelled")) setDialog(null); }}>Cancel run</button></div>}
       </div>}
     </div>}

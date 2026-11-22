@@ -200,6 +200,26 @@ export const evalSuites = pgTable("eval_suites", {
   createdAt: created(),
 }, t => [uniqueIndex("eval_suites_workspace_name_unique").on(t.workspaceId, t.name), index("eval_suites_workspace_index").on(t.workspaceId, t.createdAt)]);
 
+/**
+ * Spec 45 — a suite's run history. The suite row holds only the latest counts; every run is also a
+ * row here, so pass rate becomes a trend, a re-run after a failure becomes a revision, and a CI
+ * gate can read the sequence instead of guessing from one row.
+ */
+export const suiteRuns = pgTable("suite_runs", {
+  id: id(),
+  workspaceId: uuid("workspace_id").notNull().references(() => workspaces.id, { onDelete: "cascade" }),
+  suiteId: uuid("suite_id").notNull().references(() => evalSuites.id, { onDelete: "cascade" }),
+  status: text("status").notNull(),
+  passed: integer("passed").notNull().default(0),
+  failed: integer("failed").notNull().default(0),
+  skipped: integer("skipped").notNull().default(0),
+  errored: integer("errored").notNull().default(0),
+  modelCalls: integer("model_calls").notNull().default(0),
+  trigger: text("trigger").notNull().default("person"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+}, t => [index("suite_runs_suite_index").on(t.suiteId, t.startedAt)]);
+
 /** One measured attempt. `detail` holds the answer excerpt and the scorer's sentence. */
 export const evalResults = pgTable("eval_results", {
   id: id(),

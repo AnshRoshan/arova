@@ -9,14 +9,14 @@ import { AROVA_TABLES, classifyTables, missingArovaTables } from "./db-check.ts"
  * decision, and this file is where its meaning is pinned.
  */
 
-test("the expected table list is exactly the 41 tables the union schema creates (main 01–29 + ported 30–41)", () => {
+test("the expected table list is exactly the 42 tables the union schema creates (main 01–29 + ported 30–41)", () => {
   assert.deepEqual([...AROVA_TABLES].sort(), [
     "agent_versions", "agents", "approvals", "attention_items", "channel_connections", "channel_deliveries", "channel_events",
     "channels", "connections", "credentials", "delegations", "digests", "eval_results", "eval_suites",
     "eval_tasks", "events", "external_effects", "goals", "jobs", "memberships", "memories",
     "messages", "model_usage", "research_findings", "research_projects", "research_sources",
     "routines", "run_steps", "runs", "sandboxes", "scheduler_heartbeats", "sessions",
-    "skill_versions", "skills", "teams", "tool_calls", "triggers", "users", "watches",
+    "skill_versions", "skills", "suite_runs", "teams", "tool_calls", "triggers", "users", "watches",
     "worker_heartbeats", "workspaces",
   ]);
 });
