@@ -1,6 +1,8 @@
 # 18 — Auth, sessions, membership and roles
 
-**Status: PROPOSED — not approved, not implemented.** Feature 15's diagnostics already exist; this is the vertical slice that turns them into real sign-in. Part of the 2026-10-20 market roadmap.
+**Status: SUPERSEDED by Feature 15 (real sign-in, shipped and verified 2026-10-06).** Feature 15 delivered this slice's substance — users, memberships with roles, sessions — so the vertical slice below was folded there rather than built twice. Original text kept for the record.
+
+> Was: PROPOSED — not approved, not implemented. Feature 15's diagnostics already exist; this is the vertical slice that turns them into real sign-in. Part of the 2026-10-20 market roadmap.
 
 ## Goal
 

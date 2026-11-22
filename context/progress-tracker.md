@@ -488,3 +488,31 @@ snapshotted to `backup/local-wip-2026-11-22` (a397d5c), main was fast-forwarded 
 Verified: `npm test` **348/348** (284 main + 64 ported), `tsc --noEmit` ✓. Not yet verified at
 record time: production build, live app drive, `drizzle-kit push` against a real database, and a
 real worker run — the honest boundary until executed.
+
+### 2026-11-22 — spec audit + live verification (same session, continued)
+
+Audit read every spec's own status line. Findings and closures:
+- **Spec 37 (skills)**: was PROPOSED but the substrate was ported; the missing wiring is now done —
+  `savedSkillsBlock` (board-core) renders saved skills with grant intersection into **every** reply
+  path (chat, handoff, brief, routine, evals) via `systemPromptFor`/`chatMessages`.
+- **Spec 34 (org memory v2)**: retrieval is now the shipped hybrid — `recallMemories` blends
+  ts_rank + pg_trgm similarity (process-cached extension probe, honest keyword-only degradation),
+  validity windows are enforced in SQL and in the pure selector, and `saveMemory` accepts
+  `validFrom`/`validTo`. Trigram index ships in `deploy/schema-hardening.sql`.
+- **Specs 32/35/38/41**: statuses corrected to SUPERSEDED (by Feature 15, spec 16 + vault, spec 19)
+  or PARTIALLY SHIPPED (41's core = spec 37) — no longer claiming false gaps.
+- `db:check`'s ownership list now covers the full union schema (38 tables); two leftover old-line
+  experiment tables (`channel_connections`, `channel_events`) were dropped from the dedicated DB.
+- Worker bootstrapping fixed for plain-Node reality: env now loads in `scripts/worker-hooks.mjs`
+  (ESM import hoisting defeated the module-body load), and `QuotaExceeded` no longer uses a TS
+  parameter property (unsupported in strip-only mode).
+
+**Live drive (dedicated Postgres on 5544, dev server :3100, real worker):** health 200; board GET
+creates the workspace and reports the queue strip; createAgent/createTeam/createGoal/createWatch/
+saveSkill/saveCredential/saveMemory(validity)/pauseWork/resumeWork all 200; trigger token shown
+once with preview `arova843…e294`; `POST /api/trigger` → **202 + queued job**; digest lookup via
+`GET /api/trigger` works; the worker claimed `trigger_brief 7a6c6407`, ran the real brief path,
+failed honestly (no model key on this host), retried with backoff and dead-lettered at 3 attempts;
+two `watch_check` jobs **SUCCEEDED** through the fetch policy; heartbeat recorded. `npm run db:check`
+passes; `drizzle-kit push` replaced by generated SQL applied idempotently (kit's interactive prompt
+hangs on this host — recorded as a trap).

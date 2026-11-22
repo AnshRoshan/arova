@@ -1,6 +1,8 @@
 # 27 — Reviewable self-modification and feedback loops
 
-**Status: PROPOSED — not approved, not implemented.** Created from the 2026-10-25 market refresh (`context/market-deep-dives/07-october-refresh-2026-10-25.md`).
+**Status: PARTIALLY SHIPPED — core substrate in place via spec 37 (ported 2026-11-22).** Versioned skills with immutable history and rollback are the self-modification core and are live; the full feedback loop (run transcripts proposing skill drafts, human confirmation, telemetry-driven revision) is NOT implemented and remains roadmap.
+
+> Was: PROPOSED — not approved, not implemented. Created from the 2026-10-25 market refresh (`context/market-deep-dives/07-october-refresh-2026-10-25.md`).
 
 ## Goal
 

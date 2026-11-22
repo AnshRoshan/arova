@@ -13,7 +13,7 @@ import { audit } from "@/lib/audit";
 import { overQuota, recordUsage } from "@/lib/budget";
 import { workerEnabled, schedulerIntervalSeconds } from "@/lib/worker-config";
 import { board } from "@/lib/board-payload";
-import { chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
+import { chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, quotaReply, recentTurns, recallMemories, requestTimeoutMs, requireBudget, savedSkillsBlock, QuotaExceeded, streamTimeoutMs, type ChatAgent, type Peer, type Reply, type Turn } from "@/lib/board-core";
 
 const ROUTINE_INTENT = /every day|every morning|every week|weekday|daily|weekly|each morning|every monday|every friday|schedule|remind me/;
 
@@ -142,7 +142,7 @@ export async function planReply(workspaceId: string, agent: ChatAgent, history: 
   };
   // What the org already recorded about this, scoped to the actor's own team.
   const memory = await recallMemories(workspaceId, agent.teamId, prompt);
-  const chat = chatMessages(agent, history, profile, consultPeers, undefined, memory.block || undefined, caps.toolLoop);
+  const chat = chatMessages(agent, history, profile, consultPeers, undefined, memory.block || undefined, caps.toolLoop, await savedSkillsBlock(workspaceId, agent));
   // The tool loop is opt-in and read-only. Search is offered only when the operator configured a
   // provider and this seat already holds web_fetch; the model never gets a shell from this path.
   const searchProfile = loadSearchProfile();
@@ -435,7 +435,7 @@ export function streamReply(workspaceId: string, agent: ChatAgent, agentId: stri
               const targetProfile = resolveForAgent(target.provider, loadProfiles());
               const handoffChat = [
                 { role: "system", content: `${agent.name} handed this turn to you. Their reason: ${reason}` },
-                ...chatMessages(target, history, targetProfile, []),
+                ...chatMessages(target, history, targetProfile, [], undefined, undefined, false, await savedSkillsBlock(workspaceId, target)),
               ];
               if (targetProfile.configured) {
                 if (await overQuota(workspaceId, targetProfile)) {

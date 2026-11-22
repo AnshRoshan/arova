@@ -9,11 +9,15 @@ import { AROVA_TABLES, classifyTables, missingArovaTables } from "./db-check.ts"
  * decision, and this file is where its meaning is pinned.
  */
 
-test("the expected table list is exactly the 19 tables specs 01–17 create", () => {
+test("the expected table list is exactly the 38 tables the union schema creates (main 01–29 + ported 30–41)", () => {
   assert.deepEqual([...AROVA_TABLES].sort(), [
-    "agents", "approvals", "connections", "credentials", "delegations", "events", "jobs",
-    "memories", "messages", "model_usage", "routines", "run_steps", "runs", "sandboxes",
-    "teams", "tool_calls", "triggers", "worker_heartbeats", "workspaces",
+    "agent_versions", "agents", "approvals", "attention_items", "channel_deliveries",
+    "channels", "connections", "credentials", "delegations", "eval_results", "eval_suites",
+    "eval_tasks", "events", "external_effects", "goals", "jobs", "memberships", "memories",
+    "messages", "model_usage", "research_findings", "research_projects", "research_sources",
+    "routines", "run_steps", "runs", "sandboxes", "scheduler_heartbeats", "sessions",
+    "skill_versions", "skills", "teams", "tool_calls", "triggers", "users", "watches",
+    "worker_heartbeats", "workspaces",
   ]);
 });
 
@@ -39,11 +43,7 @@ test("the check is exact: a lookalike name is foreign, not a fuzzy match", () =>
 
 test("missingArovaTables names what a partial push has not created yet", () => {
   assert.deepEqual(missingArovaTables([]), [...AROVA_TABLES]);
-  assert.deepEqual(missingArovaTables(["workspaces", "agents", "messages"]), [
-    "teams", "routines", "runs", "run_steps", "approvals", "connections",
-    "sandboxes", "events", "model_usage", "delegations", "memories", "triggers",
-    "jobs", "worker_heartbeats", "tool_calls", "credentials",
-  ]);
+  assert.deepEqual(missingArovaTables(["workspaces", "agents", "messages"]), [...AROVA_TABLES].filter(t => !["workspaces", "agents", "messages"].includes(t)));
   assert.deepEqual(missingArovaTables([...AROVA_TABLES]), []);
 });
 

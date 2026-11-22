@@ -145,3 +145,8 @@ SET token = encode(sha256(convert_to(token, 'UTF8')), 'hex')
 WHERE token !~ '^[0-9a-f]{64}$';
 
 ALTER TABLE triggers ADD COLUMN IF NOT EXISTS token_preview text NOT NULL DEFAULT '';
+
+-- Spec 34 (2026-11-22): the hybrid retrieval's trigram index. Safe to run only on a database
+-- this project owns (npm run db:check first); retrieval degrades to keyword-only without it.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS memories_trgm_index ON memories USING gin (text gin_trgm_ops);

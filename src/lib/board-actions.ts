@@ -27,7 +27,7 @@ import { executeRoutine, inFlight } from "@/lib/routine-runner";
 import { ensureAgentVersion } from "@/lib/versions-drizzle";
 import { overQuota, recordUsage } from "@/lib/budget";
 import { mayFoundOrg, mayStaffOrg, resolveLead } from "@/lib/channel";
-import { ownedAgent, postToChannel, ownMemory, quotaReply, recentTurns, streamTimeoutMs, systemPrompt, recordDelivery, MEMORY_SYSTEM } from "@/lib/board-core";
+import { ownedAgent, postToChannel, ownMemory, quotaReply, recentTurns, streamTimeoutMs, systemPromptFor, recordDelivery, MEMORY_SYSTEM } from "@/lib/board-core";
 import { buildReply, streamReply } from "@/lib/chat-runner";
 import { streamBrief } from "@/lib/brief-runner";
 import { assertFetchableUrl, argumentsHash, decideToolCall, hashToken, parseAllowlist, tokenPreview } from "@/lib/policy";
@@ -199,7 +199,10 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     await audit(workspaceId, input.agentId, "workspace.creator", input.agentId ? "designated the creator seat" : "cleared the creator designation");
     result = { creatorAgentId: input.agentId };
   } else if (action === "saveMemory") {
-    const input = z.object({ teamId: uuid, text: z.string().trim().min(3).max(1200), kind: z.enum(["note", "decision", "glossary"]).default("note"), sourceIds: z.array(uuid).default([]), supersedes: uuid.nullable().default(null), pinned: z.boolean().default(false) }).parse(body);
+    const input = z.object({ teamId: uuid, text: z.string().trim().min(3).max(1200), kind: z.enum(["note", "decision", "glossary"]).default("note"), sourceIds: z.array(uuid).default([]), supersedes: uuid.nullable().default(null), pinned: z.boolean().default(false),
+      /** Spec 34 — optional temporal validity: a note that has not started being true, or has lapsed, is excluded from retrieval rather than outranked. */
+      validFrom: z.string().datetime({ offset: true }).nullable().default(null), validTo: z.string().datetime({ offset: true }).nullable().default(null) }).parse(body);
+    if (input.validFrom && input.validTo && new Date(input.validFrom) >= new Date(input.validTo)) throw new Error("The validity window is empty: validFrom must come before validTo.");
     const writer = await mayRemember(input.teamId);
     if (writer) {
       // A seat recording memory is a write, so it is gated like one: the grant, then plan mode.
@@ -208,7 +211,7 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
       if (planBlocks("save_note", wcaps.permissionMode)) throw new Error(`${writer.name} is in plan mode: it can advise and propose, but not record memory. Switch its permission mode to act.`);
     }
     if (input.supersedes) await ownMemory(workspaceId, input.supersedes, input.teamId);
-    const [row] = await db.insert(memories).values({ workspaceId, teamId: input.teamId, agentId: writer?.id ?? null, kind: input.kind, text: input.text, sourceIds: input.sourceIds, supersedes: input.supersedes, pinned: input.pinned }).returning();
+    const [row] = await db.insert(memories).values({ workspaceId, teamId: input.teamId, agentId: writer?.id ?? null, kind: input.kind, text: input.text, sourceIds: input.sourceIds, supersedes: input.supersedes, pinned: input.pinned, validFrom: input.validFrom ? new Date(input.validFrom) : null, validTo: input.validTo ? new Date(input.validTo) : null }).returning();
     if (writer) {
       const [t] = await db.select().from(teams).where(and(eq(teams.id, input.teamId), eq(teams.workspaceId, workspaceId))).limit(1);
       if (t) await postToChannel(workspaceId, t.id, "assistant", { content: `${writer.name} recorded a ${row.kind} for ${t.name}: “${row.text}”${row.supersedes ? " — it replaces an earlier note" : ""}. It is in this organisation's memory only: no seat outside ${t.name} will be shown it.`, kind: "channel_memory", metadata: { memoryId: row.id } }, { id: writer.id, name: writer.name });
@@ -329,7 +332,7 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
     if (!task) throw new Error("Eval task not found");
     const agent = await ownedAgent(workspaceId, task.agentId);
     const profile = resolveForAgent(agent.provider, loadProfiles());
-    const attempt = await executeEvalTask({ workspaceId, task, agent, profile, system: systemPrompt(agent, []) });
+    const attempt = await executeEvalTask({ workspaceId, task, agent, profile, system: await systemPromptFor(workspaceId, agent, []) });
     result = { result: attempt };
   } else if (action === "createSuite") {
     const input = z.object({ name: z.string().trim().min(1).max(80), agentId: uuid, taskIds: z.array(uuid).min(1).max(50), callCeiling: z.number().int().min(1).max(50).default(10) }).parse(body);
@@ -358,7 +361,7 @@ export async function dispatchAction({ workspace, actor, body, request }: Action
       status = "SKIPPED";
       counts = { ...counts, skipped: tasks.length };
     } else {
-      const system = systemPrompt(agent, []);
+      const system = await systemPromptFor(workspaceId, agent, []);
       const outcome = await runSuiteTasks(tasks, suite.callCeiling, task => executeEvalTask({ workspaceId, task, agent, profile, system }).then(a => a.outcome));
       counts = outcome.counts;
       status = outcome.status;

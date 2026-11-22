@@ -1,6 +1,8 @@
 # 21 — Channel gateway: Slack and email
 
-**Status: APPROVED (D-22 sequence) — Slack-first slice shipped and live-verified 2026-11-03 (D-30): the connections model with sealed credentials, the signed webhook with event-id idempotency and an allow-list identity boundary (all six rules proven live via `scripts/slack-gateway-smoke.mjs`), the worker's speak-once thread report (live-verified), and the Integrations Channels tab. Deferred (D-30): the email adapter (21c — needs a provider decision), approval buttons in Slack (need 26g tokens against real tools), member identity mapping (lands with 18).** Part of the 2026-10-20 market roadmap.
+**Status: SUPERSEDED by main's spec 16 (channels, shipped and live-verified 2026-10-28) + the credential vault (spec 31e).** Main's channels cover the outbound webhook, inbound token and delivery ledger this slice described; the sealed-credential connections model lives in the vault. The Slack-API design below is preserved on the record — the alternative implementation stays on `backup/local-wip-2026-11-22`.
+
+> Was: APPROVED (D-22 sequence) — Slack-first slice shipped and live-verified 2026-11-03 (D-30): the connections model with sealed credentials, the signed webhook with event-id idempotency and an allow-list identity boundary (all six rules proven live via `scripts/slack-gateway-smoke.mjs`), the worker's speak-once thread report (live-verified), and the Integrations Channels tab. Deferred (D-30): the email adapter (21c — needs a provider decision), approval buttons in Slack (need 26g tokens against real tools), member identity mapping (lands with 18).** Part of the 2026-10-20 market roadmap.
 
 ## Goal
 

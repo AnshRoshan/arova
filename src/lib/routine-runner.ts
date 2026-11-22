@@ -12,7 +12,7 @@ import { completionText, estimateTokens, loadProfiles, requestCompletion, resolv
 import { overQuota, recordUsage } from "@/lib/budget";
 import { normaliseCapabilities, tokenBudgetFor } from "@/lib/tools";
 import { splitReasoning } from "@/lib/markdown";
-import { notifyChannels, ownedAgent, peersOf, recentTurns, systemPrompt } from "@/lib/board-core";
+import { notifyChannels, ownedAgent, peersOf, recentTurns, systemPromptFor } from "@/lib/board-core";
 import { num } from "@/lib/budget";
 import { ensureAgentVersion } from "@/lib/versions-drizzle";
 
@@ -212,7 +212,8 @@ export async function executeRoutine(workspaceId: string, routine: typeof routin
 
 (This is a scheduled run of "${routine.name}", not a message from the user. Answer it directly; state anything you could not verify.)`;
     await step("Calling the model", profile.label);
-    const response = await requestCompletion({ profile, messages: [{ role: "system", content: systemPrompt(agent, await peersOf(workspaceId, agent)) }, ...history.filter(m => m.role === "user" || m.role === "assistant").slice(-8).map(m => ({ role: m.role, content: m.content })), { role: "user", content: task }], maxTokens: tokenBudgetFor(caps), stream: false, timeoutMs: requestTimeoutMs() });
+    const peers = await peersOf(workspaceId, agent);
+    const response = await requestCompletion({ profile, messages: [{ role: "system", content: await systemPromptFor(workspaceId, agent, peers) }, ...history.filter(m => m.role === "user" || m.role === "assistant").slice(-8).map(m => ({ role: m.role, content: m.content })), { role: "user", content: task }], maxTokens: tokenBudgetFor(caps), stream: false, timeoutMs: requestTimeoutMs() });
     const body = await response.json();
     const answer = completionText(body).trim();
     if (!answer) return finish("FAILED", "The model returned no text.");

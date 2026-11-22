@@ -13,7 +13,7 @@ import { dailyCallLimit, overQuota, recordUsage } from "@/lib/budget";
 import { ensureAgentVersion } from "@/lib/versions-drizzle";
 import { liveRuns } from "@/lib/routine-runner";
 import { board } from "@/lib/board-payload";
-import { callsToday, channelTurns, chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, postToChannel, quotaReply, recallMemories, streamTimeoutMs, type ChatAgent, type Peer, type Reply } from "@/lib/board-core";
+import { callsToday, channelTurns, chatMessages, failureReply, maxDelegations, notifyChannels, peersOf, postToChannel, quotaReply, recallMemories, savedSkillsBlock, streamTimeoutMs, type ChatAgent, type Peer, type Reply } from "@/lib/board-core";
 import { consultPeer, integrateMessages, routeDecision } from "@/lib/chat-runner";
 
 /** A summons answers the question it was asked and does not run a chain of its own. */
@@ -111,7 +111,7 @@ export async function runBrief(workspaceId: string, team: TeamRow, lead: ChatAge
     // The channel's own history, so a second brief inherits the first one's posts, plus what
     // this org recorded: the record and the memory are different things and both are shown.
     const memory = await recallMemories(workspaceId, team.id, asked);
-    const chat = chatMessages(lead, await channelTurns(workspaceId, team.id), profile, consultPeers, team.name, memory.block || undefined);
+    const chat = chatMessages(lead, await channelTurns(workspaceId, team.id), profile, consultPeers, team.name, memory.block || undefined, false, await savedSkillsBlock(workspaceId, lead));
     const ceiling = summonCeiling({ envMax: maxDelegations(), seatMaxTurns: caps.maxTurns });
     let remaining = consultPeers;
 
