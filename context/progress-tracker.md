@@ -563,3 +563,32 @@ expired — stale requests do not decide"). `npm test` **351/351** (MCP executor
 ### 2026-11-23 — market research + gap audit (specs 42–52 proposed)
 
 Personal pass (no subagents): restored the seven market deep-dive docs from the backup branch to main; fresh research (Nov-2026 agent landscape, reliability ops, memory platforms, observability, self-host platforms); audited the tree line-by-line for each suspected gap (multimodal, files, fake connectors tab, digest, eval trends/CI, cost, governance roles, memory capture, edit/branch, adapters, import, voice, traces). Produced `context/market-gaps-2026-11-23.md`: 14 code-verified gaps → 11 new specs (42–52) with problem/scope/acceptance, priority order, deliberate non-goals re-confirmed. Restored docs were committed with the audit.
+
+### 2026-11-23 — specs 42–52 implemented end to end (the market-gap list)
+
+Each spec: own commit, own spec doc with status + honest boundary, schema migrations applied
+idempotently (drizzle/0000–0007; db:check schema complete), verified by the gate.
+
+| Spec | Commit | Verified |
+|---|---|---|
+| 43 connectors registry (fake catalogue deleted) | 10df026 | payload rows render; zero decorative cards |
+| 44 proactive digest (model-free) | 3918cc0 | 5 pure tests; createDigest 200 live; worker path ships |
+| 45 reliability ops loop | df79552 | suite history + trend; `npm run evals` honest skip verified live |
+| 46 cost attribution | 1b28103 | 5 pure tests; unpriced ≠ $0 verified live in payload |
+| 47 governance pack | f52eac3 | viewer gate (route predicate), owner verbs, retention UI, REQUIRE_SIGNIN |
+| 48 memory capture | df96676 | capability off-by-default; proposal path wired to the proven distiller |
+| 42 multimodal + files | 4ba9b99 | upload door refusals verified live; vision content parts typed end to end |
+| 49 Teams/Telegram/retry | b845056 | Teams channel created live; telegram ingress route; channel_retry job |
+| 50 editing & branching | bfd1d0c | resend refuses unknown/foreign turns; original never rewritten |
+| 51 import/restore | 1df2714 | preflight refusals verified live (owner gate + audit-only refusal); export full marker |
+| 52 voice input | 7fefd62 | no-provider refusal names the exact env vars, verified live |
+
+**Final gate: 361/361 tests, tsc clean, production build green.** Live drive on a fresh workspace:
+board 200 with the new payload keys; Teams channel + digest created; import preflight owner-gated;
+transcribe refusal names TRANSCRIBE_BASE_URL/API_KEY; upload door refuses non-multipart; export
+`?mode=full` carries the kind/version/mode markers.
+
+Honest boundaries: model-facing paths (digest polish, capture proposals, eval scoring, vision
+round-trip, transcription) still need real provider env to run live — mechanics wired and typed;
+email adapter deferred with its bar recorded; graphical desktop control remains the single
+unimplemented substrate item.

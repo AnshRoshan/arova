@@ -82,3 +82,15 @@ then exit). The single remaining substrate item is full graphical desktop contro
 slice) — the sandbox-runtime exposes no display API, so it stays refused honestly until a real
 provider exists. Remaining env-side inputs: model key, real search endpoints, live OIDC issuer,
 CRON_SECRET. Tests 351/351; tsc and build clean.
+
+
+## Reconciliation (2026-11-23) — the market-gap list is built
+
+Specs 42–52 (11 specs from context/market-gaps-2026-11-23.md) implemented in one pass, one commit
+each, final gate 361/361 + tsc + build. The 2026-11-23 audit's 14 gaps are closed except: email
+adapter (needs a mail dependency; bar recorded), graphical desktop control (no display API in any
+dependency), and the env-side inputs (model key, search endpoints, OIDC issuer, CRON_SECRET,
+transcription endpoint). Traps: Postgres on 5544 dies when its process tree is killed — restart
+with npm run db:start (now exits cleanly) and RE-APPLY drizzle migrations idempotently (a hard
+kill can lose committed WAL); kill stale dev servers on :3100 by netstat PID, never trust a
+surviving old build.
