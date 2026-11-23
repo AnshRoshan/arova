@@ -1705,6 +1705,18 @@ export default function Workbench() {
                 <input aria-label="Usage retention days" type="number" min={0} max={3650} placeholder="usage" value={retentionForm.usage} onChange={e => setRetentionForm({ events: retentionForm.events, usage: e.target.value })} />
                 <span className="hint">The worker's sweep reads these first; env is only the fallback. Deletion is irreversible — events and usage only, never messages, runs or memories.</span></div>
               <button className="ghost" type="button" disabled={busy} onClick={() => act("updateRetention", { eventsDays: retentionForm.events ? Number(retentionForm.events) : null, usageDays: retentionForm.usage ? Number(retentionForm.usage) : null }, "Retention saved")}>Save retention</button>
+              <div className="field"><label>Restore from a full export (spec 51)</label>
+                <input type="file" accept="application/json" aria-label="Import file" onChange={e => { const f = e.target.files?.[0]; e.target.value = ""; if (!f) return; void (async () => {
+                  try {
+                    const data = JSON.parse(await f.text());
+                    const r = await fetch("/api/import", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+                    const j = await r.json().catch(() => ({}));
+                    if (!r.ok) throw new Error(j.error ?? "The import failed.");
+                    setToast(j.note ?? "Imported as a new workspace.");
+                    await load();
+                  } catch (err) { setToast(err instanceof Error ? err.message : "The import failed."); }
+                })(); }} />
+                <span className="hint">An owner-only restore: the file lands as a NEW workspace (the cookie switches to it). Secrets never travel in an export — channels, triggers, the vault and sessions are not imported. An audit-only file is refused with the reason.</span></div>
               <div className="field"><label htmlFor="creator">Creator seat</label><select id="creator" value={data.workspace.creatorAgentId ?? ""} disabled={busy} onChange={e => act("assignCreator", { agentId: e.target.value || null }, e.target.value ? `${byId(e.target.value)?.name} may now found organisations` : "Creator designation cleared")}>
                 <option value="">None designated · any seat may propose an organisation</option>
                 {data.agents.map(a => <option key={a.id} value={a.id}>{a.name} — {a.role}</option>)}
