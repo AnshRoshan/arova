@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import {
   Activity, ArrowDown, ArrowLeft, ArrowRight, ArrowUpRight, Bot, CalendarDays, Check, CircleHelp, Compass, Copy,
   Globe2, LayoutDashboard, Menu, Network, Pause, Play, Plus, RotateCcw, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, Square, Sun,
-  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, Pencil, BookOpen, ExternalLink, type LucideIcon,
+  Trash2, User, Users, WandSparkles, X, Zap, ListChecks, Building2, Cpu, Gauge, Link2, PanelLeftClose, PanelLeftOpen, MessageSquare, ArrowDownLeft, Brain, Pin, PinOff, Webhook, Pencil, BookOpen, ExternalLink, Mic, type LucideIcon,
 } from "lucide-react";
 import { TOOL_REGISTRY, mcpSummary, resolveTools, tokenBudgetFor, type Capabilities as ToolCaps } from "@/lib/tools";
 import { SKILL_REGISTRY, resolveSkills } from "@/lib/skills";
@@ -248,6 +248,36 @@ export default function Workbench() {
   const [promoteExpected, setPromoteExpected] = useState("");
   const [retentionForm, setRetentionForm] = useState<{ events: string; usage: string }>({ events: "", usage: "" });
   const [branching, setBranching] = useState<{ id: string; content: string } | null>(null);
+  const [dictating, setDictating] = useState(false);
+  const dictationRef = useRef<MediaRecorder | null>(null);
+  /** Spec 52 — the microphone transcribes into the draft box; a person reviews before sending, always. */
+  const toggleDictation = async () => {
+    if (dictating) { dictationRef.current?.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setDictating(false);
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        const form = new FormData();
+        form.append("audio", blob, "dictation.webm");
+        setToast("Transcribing…");
+        const r = await fetch("/api/transcribe", { method: "POST", body: form }).catch(() => null);
+        const j = r ? await r.json().catch(() => ({})) : {};
+        if (!r?.ok) { setToast(j.error ?? "The transcription failed."); return; }
+        setDraft(d => (d ? d + " " : "") + String(j.text ?? "").trim());
+        setToast("Transcribed into the draft — review it, then send.");
+      };
+      dictationRef.current = recorder;
+      recorder.start();
+      setDictating(true);
+    } catch {
+      setToast("The microphone is not available in this browser or was refused.");
+    }
+  };
   useEffect(() => { if (data) setRetentionForm({ events: data.workspace.retentionEventsDays ? String(data.workspace.retentionEventsDays) : "", usage: data.workspace.retentionUsageDays ? String(data.workspace.retentionUsageDays) : "" }); }, [data?.workspace.id]);
   const [credForm, setCredForm] = useState({ label: "", kind: "api", secret: "" });
   const [skillForm, setSkillForm] = useState({ name: "", description: "", instructions: "", toolGrants: "" });
@@ -1786,6 +1816,7 @@ export default function Workbench() {
               ? <button className="stop-btn" type="button" onClick={stop} title="Stop this reply; what has already arrived is kept"><Square size={11} fill="currentColor" />Stop</button>
               : <>
                 <button className="icon-btn" type="button" title="Attach files (images for a vision model, text for the prompt)" disabled={busy} onClick={() => document.getElementById("composer-files-input")?.click()}><Plus size={15} /></button>
+                <button className="icon-btn" type="button" title="Dictate — the transcript lands in the draft box for review" disabled={busy} onClick={() => void toggleDictation()}>{dictating ? <Square size={15} fill="currentColor" /> : <Mic size={15} />}</button>
                 <input id="composer-files-input" type="file" multiple hidden accept="image/png,image/jpeg,image/webp,image/gif,text/*,application/json,application/csv,application/xml" onChange={e => { void pickFiles(e.target.files); e.target.value = ""; }} />
                 <button className="send" type="submit" disabled={!draft.trim() || agent.status !== "ACTIVE"} aria-label="Send message"><ArrowRight size={17} /></button>
               </>}
